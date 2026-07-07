@@ -8,7 +8,7 @@ The Agentic Wiki Builder is designed around a **filesystem-driven, evidence-base
 Agents operate as functional layers of the evidence-to-action pipeline:
 
 *   **Researcher**: Discovers peer-reviewed literature and stages raw sources.
-*   **Synthesizer**: Ingests raw sources and compiles objective knowledge into the Wiki.
+*   **Synthesizer**: Ingests raw sources, proactively designs the taxonomy, deconstructs dense materials into modular pages, and compiles objective knowledge into the Wiki while actively linking theoretical concepts to the group's ongoing projects.
 *   **Protocol Architect**: Translates Wiki findings and user profile constraints into step-by-step, personalized protocols (e.g., using menumaker tools to compute optimal nutritional meal plans).
 *   **Auditor**: Runs automated validation, audits citation integrity, and checks link structures.
 
@@ -52,6 +52,8 @@ The coordination is asynchronous, mediated by the file structure:
 ---
 
 ## 4. Behavioral Principles
+
+*   **Proactive Knowledge Architecture (Librarian Role)**: Do not just dump text. You are the architect of the wiki. Proactively create new taxonomy categories when existing ones are too narrow. Break down dense, large sources (like textbooks) into focused, modular, and highly readable interconnected pages. Always attempt to explicitly link abstract theoretical concepts to the group's active repositories, prototypes, and past publications (e.g., via a "Relevancy to HPDSA" section).
 
 *   **Verify Before Synthesis**: Confirm source extraction is successful and contains content before citing. State assumptions explicitly.
 *   **Simplicity and Conciseness**: Synthesize the minimum required text. Protocols must contain only the necessary actionable steps. Avoid speculative padding.
