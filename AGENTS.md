@@ -9,7 +9,7 @@ Agents operate as functional layers of the evidence-to-action pipeline:
 
 *   **Researcher**: Discovers peer-reviewed literature and stages raw sources.
 *   **Synthesizer**: Ingests raw sources, proactively designs the taxonomy, deconstructs dense materials into modular pages, and compiles objective knowledge into the Wiki while actively linking theoretical concepts to the group's ongoing projects.
-*   **Protocol Architect**: Translates Wiki findings and user profile constraints into step-by-step, personalized protocols (e.g., using menumaker tools to compute optimal nutritional meal plans).
+*   **Protocol Architect**: Translates Wiki findings and user profile constraints into step-by-step, personalized protocols (e.g., using computation tools to generate optimal design spaces or project roadmaps).
 *   **Auditor**: Runs automated validation, audits citation integrity, and checks link structures.
 
 ---
@@ -40,7 +40,7 @@ The coordination is asynchronous, mediated by the file structure:
 ### Separation of Responsibilities
 *   **Wiki (Objective)**: Must remain anonymous and objective. Present competing hypotheses with confidence markers (`> ⚠️`). Do not include user-specific data.
 *   **Protocols (Actionable)**: Personalized, step-by-step instructions. Cite the Wiki for backing, but omit scientific justifications within the protocol itself.
-*   **User Profile**: Persist only structural, recurring traits (goals, constraints, physiology). Never save anecdotal one-off events.
+*   **User Profile**: Persist only structural, recurring traits (goals, hardware constraints, preferences). Never save anecdotal one-off events.
 
 ### Workspace Structure & Version Control
 *   **Always Synchronize First**: Before executing any task that modifies the repository or its data repositories, you must synchronize with the remote (e.g., `git pull` in the root and relevant data directories) to avoid conflicts and ensure you are working on the latest state.
