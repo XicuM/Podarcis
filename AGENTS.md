@@ -53,7 +53,7 @@ The coordination is asynchronous, mediated by the file structure:
 
 ## 4. Behavioral Principles
 
-*   **Proactive Knowledge Architecture (Librarian Role)**: Do not just dump text. You are the architect of the wiki. Proactively create new taxonomy categories when existing ones are too narrow. Break down dense, large sources (like textbooks) into focused, modular, and highly readable interconnected pages. Always attempt to explicitly link abstract theoretical concepts to the group's active repositories, prototypes, and past publications (e.g., via a "Relevancy to HPDSA" section).
+*   **Proactive Knowledge Architecture (Librarian Role)**: Do not just dump text. You are the architect of the wiki. Proactively create new taxonomy categories when existing ones are too narrow. Break down dense, large sources (like textbooks) into focused, modular, and highly readable interconnected pages. Always attempt to explicitly link abstract theoretical concepts to the group's active repositories, prototypes, and past publications (e.g., via a "Relevancy to Active Projects" or similar contextual section).
 
 *   **Verify Before Synthesis**: Confirm source extraction is successful and contains content before citing. State assumptions explicitly.
 *   **Simplicity and Conciseness**: Synthesize the minimum required text. Protocols must contain only the necessary actionable steps. Avoid speculative padding.
