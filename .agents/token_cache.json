@@ -1,52 +1,52 @@
 {
   "mcp:finance": {
-    "mtime": 1784927329.8581827,
-    "tokens": 2377
+    "mtime": 1784930120.6319036,
+    "tokens": 1840
   },
   "mcp:research": {
-    "mtime": 1784927060.8946054,
-    "tokens": 1977
+    "mtime": 1784930120.6384103,
+    "tokens": 1455
   },
   "mcp:wiki": {
-    "mtime": 1783331317.677509,
-    "tokens": 1731
+    "mtime": 1784930120.6394103,
+    "tokens": 1467
   },
   "mcp:gdrive": {
-    "mtime": 1784907036.519033,
-    "tokens": 1614
+    "mtime": 1784930120.6319036,
+    "tokens": 803
   },
   "mcp:menumaker": {
-    "mtime": 1783331317.677509,
-    "tokens": 109
+    "mtime": 1784930011.299853,
+    "tokens": 84
   },
   "skill:build-protocol": {
-    "mtime": 1784927318.4058173,
-    "tokens": 599,
-    "decl_tokens": 56
+    "mtime": 1784930120.6394103,
+    "tokens": 523,
+    "decl_tokens": 44
   },
   "skill:fact-check": {
-    "mtime": 1784917358.340357,
-    "tokens": 267,
-    "decl_tokens": 46
+    "mtime": 1784930120.6394103,
+    "tokens": 214,
+    "decl_tokens": 37
   },
   "skill:harness": {
-    "mtime": 1784917358.3405924,
-    "tokens": 437,
-    "decl_tokens": 43
+    "mtime": 1784930120.6394103,
+    "tokens": 403,
+    "decl_tokens": 33
   },
   "skill:ingest": {
-    "mtime": 1784917358.3408635,
-    "tokens": 922,
-    "decl_tokens": 43
+    "mtime": 1784930120.6394103,
+    "tokens": 776,
+    "decl_tokens": 35
   },
   "skill:menumaker": {
-    "mtime": 1784927321.1159036,
-    "tokens": 871,
-    "decl_tokens": 65
+    "mtime": 1784930120.6394103,
+    "tokens": 844,
+    "decl_tokens": 62
   },
   "skill:python-skill": {
-    "mtime": 1784917358.3413215,
-    "tokens": 846,
-    "decl_tokens": 47
+    "mtime": 1784930120.640889,
+    "tokens": 824,
+    "decl_tokens": 37
   }
 }

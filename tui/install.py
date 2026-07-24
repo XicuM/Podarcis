@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''Automated bootstrap, Git configuration, dependency setup, and Google Drive integration.'''
+'''Automated bootstrap, MCP/skill config, and credential setup.'''
 
 import os
 import shutil
@@ -11,173 +11,291 @@ root = Path(__file__).resolve().parent.parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
 
-from tui.common import run_command
+from tui.banner import display_project_banner
+from tui.common import load_podarcis_config, load_yaml, run_command, save_yaml
 from tui.console import HAS_RICH, console
 from tui.gdrive import setup_google_drive
-from tui.repos import load_repos_config, set_repo_protocol, sync_repos
 
 if HAS_RICH:
     from rich.panel import Panel
-    from rich.prompt import Confirm, Prompt
 
+def _say(*args: str) -> None:
+    console.print(''.join(args))
+
+def _select(prompt: str, choices: list[str], default: str | None = None) -> str:
+    '''Arrow-key select prompt.'''
+    import questionary
+    return questionary.select(
+        prompt, choices=choices, default=default,
+        style=questionary.Style(_QSTYLE),
+    ).ask()
+
+# ── venv bootstrap ─────────────────────────────────────────────────────────
+
+def _bootstrap_venv() -> None:
+    venv_dir = root / '.venv'
+    exe_suffix = 'Scripts' if sys.platform == 'win32' else 'bin'
+    python = venv_dir / exe_suffix / 'python'
+    pip = venv_dir / exe_suffix / ('pip.exe' if sys.platform == 'win32' else 'pip')
+
+    if sys.executable == str(python):
+        return  # already inside venv
+
+    if not venv_dir.exists():
+        _say('[green]✓ Creating Python virtual environment (.venv)...[/green]')
+        run_command([sys.executable, '-m', 'venv', str(venv_dir)])
+
+    rich_ok = (
+        python.exists()
+        and subprocess.run(
+            [str(python), '-c', 'import rich'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0
+    )
+
+    if not rich_ok:
+        _say('[green]✓ Installing dependencies from requirements.txt...[/green]')
+        pip_bin = (
+            str(pip) if pip.exists()
+            else [sys.executable, '-m', 'pip'])
+        run_command(
+            [pip_bin, 'install', '--upgrade', 'pip']
+            if isinstance(pip_bin, str)
+            else pip_bin + ['install', '--upgrade', 'pip'])
+        run_command(
+            [pip_bin, 'install', '-r', 'requirements.txt']
+            if isinstance(pip_bin, str)
+            else pip_bin + ['install', '-r', 'requirements.txt'])
+
+    if python.exists():
+        _say('[#29b8db]Re-launching setup inside virtual environment...[/#29b8db]')
+        os.execv(str(python), [str(python)] + sys.argv)
+
+# ── podarcis.yaml ──────────────────────────────────────────────────────────
+
+def _create_podarcis_yaml() -> None:
+    yaml_path = root / 'podarcis.yaml'
+    if yaml_path.exists():
+        _say('[green]✓ podarcis.yaml already exists.[/green]')
+        return
+
+    from tui.repos import DEFAULT_REPOS
+    save_yaml(yaml_path, {
+        'apis': {},
+        'repositories': {
+            'wiki': DEFAULT_REPOS['wiki'],
+            'workspace': DEFAULT_REPOS['workspace'],
+        },
+        'engines': {'qmd': False},
+    })
+    _say('[green]✓ Created podarcis.yaml with default repos.[/green]\n')
+
+# ── QMD engine ─────────────────────────────────────────────────────────────
+
+def _configure_qmd(enabled_servers: set[str]) -> None:
+    if not (enabled_servers & {'wiki-mcp', 'wiki'}):
+        return
+
+    from tui.common import set_engine_status
+
+    pod_cfg = load_podarcis_config(root)
+    current = bool(pod_cfg.get('engines', {}).get('qmd', False))
+
+    qmd_bin = shutil.which('qmd')
+    _say(f'[bold #29b8db]QMD Vector DB Search Engine[/bold #29b8db]')
+    _say(f'   Binary: {"Available" if qmd_bin else "Missing"}'
+         f'{" (" + qmd_bin + ")" if qmd_bin else ""}\n')
+
+    choice = _select(
+        'Enable QMD?', ['no', 'yes'],
+        default='yes' if current else 'no')
+    enable = choice == 'yes'
+    set_engine_status(root, 'qmd', enable)
+
+    if not enable:
+        _say('[yellow]✓ QMD disabled — native keyword search.[/yellow]\n')
+        return
+
+    if qmd_bin:
+        _say('[green]✓ QMD CLI found and enabled.[/green]\n')
+        return
+
+    _say('[bold yellow]⚠️ QMD CLI not found in PATH.[/bold yellow]')
+    if not shutil.which('npm'):
+        _say('[bold red]⚠️ npm missing. Install Node.js + @tobilu/qmd manually.[/bold red]\n')
+        return
+
+    if _select('Install @tobilu/qmd globally via npm?', ['no', 'yes'], default='yes') == 'yes':
+        _say('[#29b8db]Installing @tobilu/qmd globally...[/#29b8db]')
+        run_command(['npm', 'install', '-g', '@tobilu/qmd'], check=False)
+        if shutil.which('qmd'):
+            _say('[green]✓ QMD CLI installed.[/green]')
+        else:
+            _say('[bold yellow]⚠️ QMD install failed. wiki-mcp falls back to native search.[/bold yellow]')
+    _say()
+
+# ── API keys ───────────────────────────────────────────────────────────────
+
+def _configure_api_keys(enabled_servers: set[str]) -> None:
+    if not (enabled_servers & {'research-mcp', 'research'}):
+        return
+
+    import questionary
+
+    _say('[bold #29b8db]API Credentials[/bold #29b8db]')
+    key = questionary.text(
+        'Semantic Scholar API key',
+        style=questionary.Style(_QSTYLE),
+    ).ask() or ''
+
+    yaml_path = root / 'podarcis.yaml'
+    data = load_yaml(yaml_path) if yaml_path.exists() else {}
+    data.setdefault('apis', {})['semantic_scholar_api_key'] = key
+    save_yaml(yaml_path, data)
+    _say()
+
+# ── questionary helpers ───────────────────────────────────────────────────
+
+def _ensure_questionary() -> bool:
+    try:
+        import questionary  # noqa: F401
+        return True
+    except ImportError:
+        pass
+
+    from tui.components import install_deps
+    _say('[#29b8db]Installing questionary for interactive menus...[/#29b8db]')
+    install_deps(root, 'questionary', False, 'Installing questionary')
+    try:
+        import questionary  # noqa: F401
+        return True
+    except ImportError:
+        _say('[red]Could not install questionary. Skipping interactive setup.[/red]')
+        return False
+
+_QSTYLE = [
+    ('qmark',           'fg:#29b8db bold'),
+    ('question',        'bold white'),
+    ('answer',          'fg:#29b8db bold'),
+    ('pointer',         'fg:#29b8db bold'),
+    ('highlighted',     'noinherit fg:white'),
+    ('selected',        'noinherit fg:white'),
+    ('checkbox-checked',   'fg:#29b8db bold'),
+    ('checkbox-unchecked', 'fg:#888888'),
+    ('checkbox-selected',  'fg:#29b8db bold'),
+]
+
+# ── MCP servers ────────────────────────────────────────────────────────────
+
+def _configure_mcp_servers() -> set[str]:
+    import questionary
+    from tui.components import (
+        SERVER_NAME_MAP, discover_components,
+        get_enabled_mcp_servers, set_mcp_server_status,
+    )
+
+    servers, _ = discover_components(root)
+    if not servers:
+        _say('[dim]No MCP servers discovered.[/dim]')
+        return set()
+
+    enabled = get_enabled_mcp_servers(root)
+    style = questionary.Style(_QSTYLE)
+    choices = [
+        questionary.Choice(
+            title=k,
+            checked=(k in enabled or SERVER_NAME_MAP.get(k) in enabled),
+        )
+        for k in sorted(servers)
+    ]
+    selected = (
+        questionary.checkbox(
+            'Select MCP servers to activate:',
+            choices=choices, style=style)
+        .ask()
+    )
+    if selected is None:
+        return set()
+
+    s = set(selected)
+    for k, info in servers.items():
+        set_mcp_server_status(root, k, k in s, info)
+    _say('[bold green]✓ MCP server configurations updated.[/bold green]\n')
+    return s
+
+# ── skills ─────────────────────────────────────────────────────────────────
+
+def _configure_skills() -> None:
+    import questionary
+    from tui.components import discover_components, set_skill_status
+
+    _, skills = discover_components(root)
+    if not skills:
+        _say('[dim]No skills discovered.[/dim]')
+        return
+
+    style = questionary.Style(_QSTYLE)
+    choices = [
+        questionary.Choice(title=k, checked=skills[k]['enabled'])
+        for k in sorted(skills)
+    ]
+    selected = (
+        questionary.checkbox(
+            'Select skills to enable:', choices=choices, style=style)
+        .ask()
+    )
+    if selected is None:
+        return
+
+    s = set(selected)
+    for k, info in skills.items():
+        set_skill_status(root, k, k in s, info)
+    _say('[bold green]✓ Skill configurations updated.[/bold green]\n')
+
+# ── main ───────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    '''Bootstrap project dependencies, git options, submodules, and credentials.'''
-    venv_dir = root / '.venv'
-    venv_python = venv_dir / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
-    venv_pip = venv_dir / ('Scripts/pip.exe' if sys.platform == 'win32' else 'bin/pip')
+    _bootstrap_venv()
 
-    if sys.executable != str(venv_python):
-        if not venv_dir.exists():
-            console.print('[green]✓ Creating Python virtual environment (.venv)...[/green]')
-            run_command([sys.executable, '-m', 'venv', str(venv_dir)])
+    console.clear()
+    display_project_banner(root)
 
-        has_rich = False
-        if venv_python.exists():
+    _create_podarcis_yaml()
+
+    if not _ensure_questionary():
+        _say('[yellow]Skipping interactive setup. Run [bold]make config[/bold] later.[/yellow]\n')
+    else:
+        enabled = _configure_mcp_servers()
+        _configure_api_keys(enabled)
+        _configure_qmd(enabled)
+        _configure_skills()
+
+        if enabled & {'gdrive', 'google-drive-mcp'}:
             try:
-                subprocess.run([str(venv_python), '-c', 'import rich'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                has_rich = True
-            except subprocess.CalledProcessError:
-                has_rich = False
+                setup_google_drive(root)
+            except Exception as e:
+                _say(f'[bold yellow]⚠️ Google Drive setup failed: {e}[/bold yellow]')
+            _say()
 
-        if not has_rich:
-            console.print('[green]✓ Installing dependencies from requirements.txt...[/green]')
-            pip_bin = str(venv_pip) if venv_pip.exists() else [sys.executable, '-m', 'pip']
-            run_command([pip_bin, 'install', '--upgrade', 'pip'] if isinstance(pip_bin, str) else pip_bin + ['install', '--upgrade', 'pip'])
-            run_command([pip_bin, 'install', '-r', 'requirements.txt'] if isinstance(pip_bin, str) else pip_bin + ['install', '-r', 'requirements.txt'])
-
-        if venv_python.exists():
-            console.print('[#29b8db]Re-launching setup inside virtual environment...[/#29b8db]')
-            os.execv(str(venv_python), [str(venv_python)] + sys.argv)
-
-    if HAS_RICH:
-        console.print(Panel(
-            '[bold green]Agentic Wiki Builder[/bold green]\n[dim]Complete Bootstrap, Setup, and Google Drive Integration[/dim]',
-            border_style='green', expand=False
-        ))
-    else:
-        console.rule('Agentic Wiki Builder — Complete Setup & Bootstrap')
-
-    # 1. Git LFS Initialization
-    if not shutil.which('git-lfs'):
-        console.print('[bold yellow]⚠️  WARNING: "git-lfs" command not found.[/bold yellow]')
-        console.print('   Please install Git LFS (https://git-lfs.com/) for tracking large raw sources.')
-    else:
-        console.print('[green]✓ Git LFS found. Registering settings...[/green]')
-        run_command(['git', 'lfs', 'install'])
-    console.print()
-
-    # 2. Environment & Configuration Setup (podarcis.yaml)
-    yaml_file, example_yaml = root / 'podarcis.yaml', root / 'podarcis.example.yaml'
-    if not yaml_file.exists():
-        if example_yaml.exists():
-            console.print('[green]✓ Creating podarcis.yaml from podarcis.example.yaml...[/green]')
-            shutil.copy(example_yaml, yaml_file)
-            console.print('👉 Created podarcis.yaml. Update API credentials & repo URLs if necessary.')
-        else:
-            console.print('[bold yellow]⚠️ Could not find podarcis.example.yaml to generate podarcis.yaml.[/bold yellow]')
-    else:
-        console.print('[green]✓ podarcis.yaml configuration file found.[/green]')
-    console.print()
-
-    # 3. Optional Tool Engine Setup (QMD Vector DB)
-    from tui.common import load_podarcis_config, set_engine_status
-    pod_cfg = load_podarcis_config(root)
-    current_qmd_enabled = bool(pod_cfg.get('engines', {}).get('qmd', False))
-
-    console.print('[bold #29b8db]Optional Tool Engines Configuration:[/bold #29b8db]')
-    console.print('   QMD Vector DB Engine provides semantic embedding search across the wiki.')
-    console.print('   Native keyword search works cleanly without QMD.\n')
-
-    if HAS_RICH:
-        enable_qmd = Confirm.ask('Enable QMD Vector DB Search Engine in podarcis.yaml?', default=current_qmd_enabled)
-    else:
-        ans = input(f'Enable QMD Vector DB Search Engine in podarcis.yaml? (y/n) [{"y" if current_qmd_enabled else "n"}]: ').strip().lower()
-        enable_qmd = ans == 'y' if ans else current_qmd_enabled
-
-    set_engine_status(root, 'qmd', enable_qmd)
-
-    if enable_qmd:
-        if not shutil.which('qmd'):
-            console.print('[bold yellow]⚠️ QMD CLI binary ("qmd") not found in PATH.[/bold yellow]')
-            if shutil.which('npm'):
-                if HAS_RICH:
-                    install_now = Confirm.ask('Attempt installing @tobilu/qmd globally via npm now?', default=True)
-                else:
-                    install_now = input('Attempt installing @tobilu/qmd globally via npm now? (y/n): ').strip().lower() == 'y'
-                if install_now:
-                    console.print('[#29b8db]Installing @tobilu/qmd globally...[/#29b8db]')
-                    run_command(['npm', 'install', '-g', '@tobilu/qmd'], check=False)
-                    if shutil.which('qmd'):
-                        console.print('[green]✓ QMD CLI installed successfully.[/green]')
-                    else:
-                        console.print('[bold yellow]⚠️ QMD CLI could not be automatically installed. wiki-mcp will warn and fall back to native search.[/bold yellow]')
-            else:
-                console.print('[bold red]⚠️ npm not found. Please install Node.js/npm and install @tobilu/qmd manually if desired.[/bold red]')
-        else:
-            console.print('[green]✓ QMD CLI found and enabled.[/green]')
-    else:
-        console.print('[yellow]✓ QMD Vector DB Engine disabled. wiki-mcp will use Native Keyword Search mode.[/yellow]')
-    console.print()
-
-    # 4. Workspace Repositories Check & Clone Protocol Setup
-    console.print('[green]✓ Configuring workspace repository Git clone protocol...[/green]')
-    repos_cfg = load_repos_config(root)
-    current_proto = repos_cfg.get('protocol', 'ssh')
-
-    if HAS_RICH:
-        chosen_proto = Prompt.ask(
-            '  Select Git clone protocol for workspace repositories',
-            choices=['ssh', 'https'],
-            default=current_proto
-        )
-    else:
-        ans = input(f'  Select Git clone protocol for workspace repositories (ssh/https) [{current_proto}]: ').strip().lower()
-        chosen_proto = ans if ans in ['ssh', 'https'] else current_proto
-
-    set_repo_protocol(root, chosen_proto, update_existing_remotes=True)
-    console.print(f'[green]✓ Git clone protocol set to: [bold]{chosen_proto.upper()}[/bold][/green]')
-
-    console.print('[#29b8db]Synchronizing workspace repositories (wiki, workspace)...[/#29b8db]')
+    from tui.repos import sync_repos
+    _say('[#29b8db]Syncing workspace repos (wiki, workspace)...[/#29b8db]')
     sync_repos(root, clone_missing=True, update_remotes=True)
-    console.print()
-
-    # 5. Submodule Initialization
-    console.print('[green]✓ Initializing and updating git submodules...[/green]')
-    run_command(['git', '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'], check=False)
-    console.print()
-
-    # 6. Configure Git settings
-    console.print('[green]✓ Configuring local Git settings for team collaboration...[/green]')
-    run_command(['git', 'config', 'submodule.recurse', 'true'])
-    run_command(['git', 'config', 'push.recurseSubmodules', 'on-demand'])
-    console.print()
-
-
-    # 7. Google Drive Credentials Setup
-    try:
-        setup_google_drive(root)
-    except Exception as e:
-        console.print(f'[bold yellow]⚠️ Google Drive credentials setup encountered an issue: {e}[/bold yellow]')
-    console.print()
+    _say()
 
     if HAS_RICH:
-        console.print(Panel(
+        _say(Panel(
             '[bold green]✓ Bootstrap & Setup Complete![/bold green]\n\n'
-            '- Submodules will now automatically pull updates during a standard "git pull".\n'
-            '- Virtual environment configured and dependencies installed in .venv/\n'
-            '- Configuration & secrets (podarcis.yaml) prepared.\n\n'
+            '- Virtual environment configured, deps in .venv/\n'
+            '- Configuration (podarcis.yaml) prepared.\n\n'
             '[bold #29b8db]Quick Commands:[/bold #29b8db]\n'
-            '  • Manage servers/skills: [bold]make config[/bold]\n'
-            '  • Run tests:             [bold]make test[/bold]\n'
-            '  • Sync workspace:        [bold]make sync[/bold]\n'
-            '  • Lint links:            [bold]make lint[/bold]',
-            border_style='green', expand=False
+            '  • Reconﬁgure: [bold]make config[/bold]\n'
+            '  • Re-sync:    [bold]make sync[/bold]\n'
+            '  • Test:       [bold]make test[/bold]\n'
+            '  • Lint:       [bold]make lint[/bold]',
+            border_style='green', expand=False,
         ))
     else:
         console.rule('Setup Complete!')
-        print('Run "make test" or "pytest" to verify installation.')
-
 
 if __name__ == '__main__':
     main()
