@@ -7,6 +7,7 @@ Exposes tools:
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import tempfile
@@ -56,16 +57,29 @@ def get_credentials():
             service_account_path, scopes=SCOPES
         )
 
-    credentials_path = os.environ.get("GDRIVE_CREDENTIALS_PATH") or str(
-        ROOT / ".agents" / "mcp" / "gdrive" / "credentials.json"
-    )
     token_path = os.environ.get("GDRIVE_TOKEN_PATH") or str(
         ROOT / ".agents" / "mcp" / "gdrive" / "token.json"
     )
 
     from google.oauth2.credentials import Credentials
     creds = None
-    if os.path.exists(token_path):
+
+    # Try podarcis.yaml first
+    try:
+        import yaml
+        podarcis_path = ROOT / "podarcis.yaml"
+        if podarcis_path.exists():
+            with open(podarcis_path) as f:
+                pod_data = yaml.safe_load(f) or {}
+            token_json = pod_data.get("gdrive", {}).get("token")
+            if token_json:
+                creds = Credentials.from_authorized_user_info(
+                    json.loads(token_json), SCOPES)
+    except Exception:
+        pass
+
+    # Fallback to token.json
+    if not creds and os.path.exists(token_path):
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
 
     if not creds or not creds.valid:

@@ -1,6 +1,7 @@
 '''Google Drive OAuth and Service Account authentication helper.'''
 
 from pathlib import Path
+from tui.common import load_yaml, save_yaml
 from tui.console import HAS_RICH, console
 
 if HAS_RICH:
@@ -129,10 +130,15 @@ def setup_google_drive(root: Path) -> bool:
         creds = flow.run_local_server(port=0)
 
         gdrive_dir.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(creds.to_json(), encoding='utf-8')
+        token_data = creds.to_json()
+        token_path.write_text(token_data, encoding='utf-8')
 
-        console.print('[bold green]✓ Token generated and saved.[/bold green]')
-        console.print('[bold green]✓ Google Drive MCP ready.[/bold green]')
+        yaml_path = root / 'podarcis.yaml'
+        data = load_yaml(yaml_path) if yaml_path.exists() else {}
+        data.setdefault('gdrive', {})['token'] = token_data
+        save_yaml(yaml_path, data)
+
+        console.print('[bold green]✓ Token saved to podarcis.yaml.[/bold green]')
         return True
     except Exception as e:
         console.print(f'[bold red]OAuth flow failed: {e}[/bold red]')
