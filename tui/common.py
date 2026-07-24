@@ -1,8 +1,6 @@
 '''Shared system, process, and file utilities for TUI operations.'''
 
-import json
-import subprocess
-import sys
+import json, subprocess, sys
 from pathlib import Path
 from tui.console import console
 
@@ -14,30 +12,25 @@ def get_root_dir() -> Path:
 
 def get_venv_pip(root: Path) -> list[str]:
     '''Find virtualenv pip executable or fall back to system python module.'''
-    venv_pip = root / '.venv' / ('Scripts/pip.exe' if sys.platform == 'win32' else 'bin/pip')
+    venv_pip = root/'.venv'/('Scripts/pip.exe' if sys.platform == 'win32' else 'bin/pip')
     return [str(venv_pip)] if venv_pip.exists() else [sys.executable, '-m', 'pip']
 
 
 def run_command(cmd: list[str], check: bool = True, cwd: Path | None = None) -> None:
     '''Execute shell command with status logging.'''
     console.print(f'[dim]Running command: {" ".join(cmd)}[/dim]')
-    try:
-        subprocess.run(cmd, check=check, cwd=cwd)
+    try: subprocess.run(cmd, check=check, cwd=cwd)
     except subprocess.CalledProcessError as e:
         console.print(f'[bold red]Error running command: {e}[/bold red]')
-        if check:
-            sys.exit(1)
+        if check: sys.exit(1)
 
 
 def load_json(path: Path) -> dict:
     '''Safely read JSON file contents.'''
-    if not path.exists():
-        return {}
+    if not path.exists(): return {}
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return {}
+        with open(path, 'r', encoding='utf-8') as f: return json.load(f)
+    except Exception: return {}
 
 
 def save_json(path: Path, data: dict) -> None:
@@ -49,15 +42,13 @@ def save_json(path: Path, data: dict) -> None:
 
 def load_yaml(path: Path) -> dict:
     '''Safely read YAML file contents.'''
-    if not path.exists():
-        return {}
+    if not path.exists(): return {}
     try:
         import yaml
         with open(path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
             return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    except Exception: return {}
 
 
 def save_yaml(path: Path, data: dict) -> None:
@@ -66,33 +57,15 @@ def save_yaml(path: Path, data: dict) -> None:
         import yaml
         with open(path, 'w', encoding='utf-8') as f:
             yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
-    except Exception:
-        pass
-
-
-def load_podarcis_config(root_dir: Path) -> dict:
-    '''Load podarcis.yaml configuration with fallback to podarcis.example.yaml.'''
-    yaml_path = root_dir / 'podarcis.yaml'
-    if yaml_path.exists():
-        return load_yaml(yaml_path)
-    example_path = root_dir / 'podarcis.example.yaml'
-    if example_path.exists():
-        return load_yaml(example_path)
-    return {}
+    except Exception: pass
 
 
 def set_engine_status(root_dir: Path, engine_name: str, enabled: bool) -> None:
     '''Update engine status in podarcis.yaml.'''
-    yaml_path = root_dir / 'podarcis.yaml'
-    if not yaml_path.exists():
-        example_path = root_dir / 'podarcis.example.yaml'
-        if example_path.exists():
-            import shutil
-            shutil.copy(example_path, yaml_path)
-    data = load_podarcis_config(root_dir)
+    data = load_yaml(root_dir/'podarcis.yaml')
     engines = data.setdefault('engines', {})
     engines[engine_name] = enabled
-    save_yaml(yaml_path, data)
+    save_yaml(root_dir/'podarcis.yaml', data)
 
 
 
@@ -108,10 +81,9 @@ def get_git_info(root_dir: Path) -> tuple[str, str]:
 
 def load_version_info(root_dir: Path) -> tuple[str, str]:
     '''Read release version and date metadata.'''
-    version_file = root_dir / 'VERSION'
-    version, date = '0.1.0', '2026-07-24'
-    if version_file.exists():
-        for line in version_file.read_text(encoding='utf-8').splitlines():
+    version, date = '', ''
+    if (f := root_dir/'VERSION').exists():
+        for line in f.read_text(encoding='utf-8').splitlines():
             line = line.strip()
             if line.startswith('version='):
                 version = line.split('=', 1)[1].strip()

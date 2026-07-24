@@ -105,10 +105,10 @@ def interactive_config(root: Path) -> None:
                         '[bold green]✓ Skill configs updated.[/bold green]\n')
 
             case 'Optional Tool Engines':
-                from tui.common import load_podarcis_config, set_engine_status
+                from tui.common import load_yaml, set_engine_status
                 import shutil
 
-                pod_cfg = load_podarcis_config(root)
+                pod_cfg = load_yaml(root/'podarcis.yaml')
                 qmd_enabled = bool(pod_cfg.get('engines', {}).get('qmd', False))
                 qmd_bin = shutil.which('qmd')
 

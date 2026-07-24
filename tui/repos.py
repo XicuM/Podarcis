@@ -4,7 +4,7 @@
 import subprocess
 from pathlib import Path
 
-from tui.common import load_json, load_yaml, save_yaml, load_podarcis_config
+from tui.common import load_json, load_yaml, save_yaml
 from tui.console import console
 
 REPO_NAMES = ['wiki', 'workspace']
@@ -16,7 +16,7 @@ def get_repos_config_path(root: Path | str) -> Path:
 
 def load_repos_config(root: Path) -> dict:
     '''Load repository URLs from podarcis.yaml.'''
-    pod_cfg = load_podarcis_config(root)
+    pod_cfg = load_yaml(root/'podarcis.yaml')
     repos = pod_cfg.get('repositories', {})
     if not isinstance(repos, dict):
         repos = {}

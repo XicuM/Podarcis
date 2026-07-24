@@ -12,7 +12,7 @@ if str(root) not in sys.path:
     sys.path.insert(0, str(root))
 
 from tui.banner import display_project_banner
-from tui.common import load_podarcis_config, load_yaml, run_command, save_yaml
+from tui.common import load_yaml, run_command, save_yaml
 from tui.console import HAS_RICH, console
 
 if HAS_RICH:
@@ -75,19 +75,9 @@ def _bootstrap_venv() -> None:
 
 # ── podarcis.yaml ──────────────────────────────────────────────────────────
 
-def _create_podarcis_yaml() -> None:
-    yaml_path = root / 'podarcis.yaml'
-    if yaml_path.exists():
-        _say('[green]✓ podarcis.yaml already exists.[/green]')
-        return
-
-    save_yaml(yaml_path, {
-        'apis': {},
-        'repositories': {},
-        'engines': {'qmd': False},
-    })
-    _say('[green]✓ Created podarcis.yaml.[/green]\n')
-
+def _create_podarcis_yaml() -> None: 
+    if (yaml := root/'podarcis.yaml').exists(): return
+    save_yaml(yaml, {'apis': {}, 'repositories': {}, 'engines': {'qmd': False}})
 
 def _configure_repos() -> None:
     import questionary
@@ -100,7 +90,7 @@ def _configure_repos() -> None:
         current = get_repo_url(root, name)
         _say()
         url = questionary.text(
-            f'Git URL for "{name}" repo (leave empty to skip)',
+            f'Git URL for "{name}" repo (leave empty to skip):\n  >>',
             default=current,
             style=style,
         ).ask()
@@ -124,7 +114,7 @@ def _configure_qmd(enabled_servers: set[str]) -> None:
 
     from tui.common import set_engine_status
 
-    pod_cfg = load_podarcis_config(root)
+    pod_cfg = load_yaml(root/'podarcis.yaml')
     current = bool(pod_cfg.get('engines', {}).get('qmd', False))
 
     qmd_bin = shutil.which('qmd')

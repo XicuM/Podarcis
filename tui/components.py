@@ -127,8 +127,7 @@ def load_token_cache(root: Path) -> dict:
 
 def save_token_cache(root: Path, cache: dict) -> None:
     '''Save cached token counts to persistent cache file.'''
-    cache_file = root / '.agents' / 'token_cache.json'
-    save_json(cache_file, cache)
+    
 
 
 def discover_components(root: Path) -> tuple[dict, dict]:
@@ -199,8 +198,7 @@ def discover_components(root: Path) -> tuple[dict, dict]:
                     'words': len(content.split())
                 }
 
-    if cache_modified:
-        save_token_cache(root, token_cache)
+    if cache_modified: save_json(root/'.agents'/'token_cache.json', token_cache)
 
     return mcp_servers, skills
 
