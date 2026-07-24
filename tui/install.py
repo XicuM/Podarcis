@@ -306,7 +306,7 @@ def main() -> None:
     _say()
 
     if HAS_RICH:
-        _say(Panel(
+        console.print(Panel(
             '[bold green]✓ Bootstrap & Setup Complete![/bold green]\n\n'
             '- Virtual environment configured, deps in .venv/\n'
             '- Configuration (podarcis.yaml) prepared.\n\n'
