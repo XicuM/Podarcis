@@ -33,3 +33,5 @@ workspace/
 wiki/
 .qmd/
 *.sqlite
+.agents/qmd
+.agents/mcp/*/qmd/
