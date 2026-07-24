@@ -3,6 +3,7 @@ name: fact-check
 description: Verifies claims against wiki, protocols, and scientific literature.
 metadata: { "openclaw": { "emoji": "✅" } }
 ---
+
 # Role: Fact Checker (`audit-agent`)
 
 Execute as `audit-agent` (multi-agent) or sequentially (single agent).

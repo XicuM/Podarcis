@@ -1,16 +1,15 @@
-"""google-drive-mcp — FastMCP server for reading/downloading files from Google Drive.
+"""google-drive-mcp — FastMCP server for searching and reading files directly from Google Drive.
 
-Provides read-only access to Google Drive files. Exposes tools to:
-  - List and search files in Google Drive.
-  - Download files/folders and copy them to the sources/internal_documentation/ directory.
-  - Convert Google Docs/Sheets to Markdown/CSV during download.
+Exposes tools:
+  - gdrive_list_files: Search/list files in Google Drive.
+  - gdrive_read_file: Read file content directly, converting Google Docs, Sheets, Slides, and PDFs to Markdown/CSV text in-memory.
 """
 from __future__ import annotations
 
 import io
 import os
-import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Annotated
 
@@ -23,18 +22,14 @@ from markitdown import MarkItDown
 
 def _find_root() -> Path:
     env = os.environ.get("PROJECT_ROOT")
-    if env:
-        return Path(env).resolve()
+    if env: return Path(env).resolve()
     for parent in Path(__file__).resolve().parents:
-        if (parent / "state.json").exists():
-            return parent
+        if (parent / "AGENTS.md").exists(): return parent
     raise RuntimeError(
         "Cannot locate project root. Set the PROJECT_ROOT environment variable."
     )
 
 ROOT = _find_root()
-INTERNAL_DOC_DIR = ROOT / "sources" / "internal_documentation"
-
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 DEFAULT_CLIENT_CONFIG = {
@@ -52,7 +47,6 @@ DEFAULT_CLIENT_CONFIG = {
 # ── Authentication Helper ──────────────────────────────────────────────────────
 
 def get_credentials():
-    # 1. Try Service Account
     service_account_path = os.environ.get("GDRIVE_SERVICE_ACCOUNT_PATH") or str(
         ROOT / ".agents" / "mcp" / "gdrive" / "service_account.json"
     )
@@ -62,7 +56,6 @@ def get_credentials():
             service_account_path, scopes=SCOPES
         )
 
-    # 2. Try OAuth 2.0 (credentials.json + token.json)
     credentials_path = os.environ.get("GDRIVE_CREDENTIALS_PATH") or str(
         ROOT / ".agents" / "mcp" / "gdrive" / "credentials.json"
     )
@@ -81,34 +74,19 @@ def get_credentials():
             creds.refresh(Request())
         else:
             raise RuntimeError(
-                f"Google Drive OAuth token is missing or expired. Please run the automatic setup/authentication flow:\n"
+                f"Google Drive OAuth token is missing or expired. Run setup:\n"
                 f"PROJECT_ROOT={ROOT} .venv/bin/python .agents/mcp/gdrive/server.py --auth"
             )
     return creds
-
-# ── Helper for snake_case conversion ──────────────────────────────────────────
-
-def to_snake_case(filename: str) -> str:
-    path = Path(filename)
-    stem = path.stem
-    ext = path.suffix
-    
-    s = stem.lower()
-    s = re.sub(r'[^a-z0-9_\-]', '_', s)
-    s = s.replace('-', '_')
-    s = re.sub(r'_+', '_', s)
-    s = s.strip('_')
-    
-    return f"{s}{ext}"
 
 # ── Server ────────────────────────────────────────────────────────────────────
 
 mcp = FastMCP(
     "google-drive-mcp",
     instructions=(
-        "Google Drive search and downloader. Allows read-only access to files. "
-        "Allows listing, searching, and downloading files to sources/internal_documentation/ "
-        "while converting Google Docs/Sheets to Markdown/CSV."
+        "Google Drive search and content reader. Read-only access to files in Google Drive. "
+        "Allows listing/searching files and reading file contents directly in-memory "
+        "(converting Google Docs/Sheets/Slides/PDFs to Markdown/CSV)."
     ),
 )
 
@@ -120,7 +98,7 @@ def get_drive_service():
 
 @mcp.tool()
 async def gdrive_list_files(
-    query: Annotated[str | None, "Search query (Google Drive q parameter format e.g. name contains 'design' or mimeType = 'application/vnd.google-apps.folder')"] = None,
+    query: Annotated[str | None, "Search query (Google Drive q parameter format e.g. name contains 'design')"] = None,
     page_size: Annotated[int, "Number of results to return (max 100)"] = 20,
 ) -> str:
     """List or search files in Google Drive."""
@@ -129,121 +107,101 @@ async def gdrive_list_files(
         q_parts = []
         if query:
             q_parts.append(query)
-        # Ensure we don't list trashed files
         q_parts.append("trashed = false")
-        
         q = " and ".join(q_parts)
-        
+
         results = service.files().list(
             q=q,
             pageSize=min(page_size, 100),
             fields="files(id, name, mimeType, modifiedTime, size)",
         ).execute()
-        
+
         files = results.get("files", [])
         if not files:
             return "No files found."
-            
+
         output = ["| Name | ID | Mime Type | Size (bytes) | Modified Time |", "|---|---|---|---|---|"]
         for f in files:
             size = f.get("size", "N/A")
             output.append(f"| {f['name']} | `{f['id']}` | {f['mimeType']} | {size} | {f['modifiedTime']} |")
-            
+
         return "\n".join(output)
     except Exception as e:
         return f"Error listing files: {str(e)}"
 
+
 @mcp.tool()
-async def gdrive_download_file(
+async def gdrive_read_file(
     file_id: Annotated[str, "Google Drive File ID"],
-    dest_subdir: Annotated[str | None, "Optional subdirectory name under sources/internal_documentation/ to place the file"] = None,
 ) -> str:
-    """Download a file from Google Drive and copy/convert it to the internal_documentation folder."""
+    """Read a file directly from Google Drive in-memory, converting Docs/Sheets/Slides/PDFs to Markdown/CSV text."""
     try:
         service = get_drive_service()
-        
-        # Get metadata
         meta = service.files().get(fileId=file_id, fields="id, name, mimeType").execute()
         file_name = meta["name"]
         mime_type = meta["mimeType"]
-        
-        # Determine destination folder
-        dest_dir = INTERNAL_DOC_DIR
-        if dest_subdir:
-            dest_dir = dest_dir / dest_subdir
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        
-        is_workspace_doc = False
-        export_mime_type = None
-        target_ext = None
-        
+
+        if mime_type == "application/vnd.google-apps.folder":
+            return f"Error: '{file_name}' is a folder. Use gdrive_list_files to list folder contents."
+
+        # Handle Google Workspace documents
         if mime_type == "application/vnd.google-apps.document":
-            # Google Doc -> export to docx, then convert to markdown
-            is_workspace_doc = True
-            export_mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            target_ext = ".docx"
+            request = service.files().export_media(
+                fileId=file_id,
+                mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+            return _convert_media_to_markdown(request, suffix=".docx")
+
         elif mime_type == "application/vnd.google-apps.spreadsheet":
-            # Google Sheet -> export to CSV
-            is_workspace_doc = True
-            export_mime_type = "text/csv"
-            target_ext = ".csv"
+            request = service.files().export_media(fileId=file_id, mimeType="text/csv")
+            return _download_text(request)
+
         elif mime_type == "application/vnd.google-apps.presentation":
-            # Google Slides -> export to PDF
-            is_workspace_doc = True
-            export_mime_type = "application/pdf"
-            target_ext = ".pdf"
-        elif mime_type == "application/vnd.google-apps.folder":
-            return f"Error: '{file_name}' is a folder. Downloading folders is not supported directly; please download files individually."
-            
-        # Standardize target filename to snake_case
-        clean_name = to_snake_case(file_name)
-        if target_ext and not clean_name.endswith(target_ext):
-            # Strip current extension and add target
-            path_obj = Path(clean_name)
-            clean_name = f"{path_obj.stem}{target_ext}"
-            
-        # Path where we download the file
-        local_path = dest_dir / clean_name
-        
-        # Perform download
-        fh = io.BytesIO()
-        if is_workspace_doc:
-            request = service.files().export_media(fileId=file_id, mimeType=export_mime_type)
+            request = service.files().export_media(fileId=file_id, mimeType="application/pdf")
+            return _convert_media_to_markdown(request, suffix=".pdf")
+
+        # Binary/Standard Files
+        request = service.files().get_media(fileId=file_id)
+        if mime_type.startswith("text/") or file_name.endswith((".txt", ".csv", ".json", ".md", ".py", ".html", ".xml")):
+            return _download_text(request)
         else:
-            request = service.files().get_media(fileId=file_id)
-            
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-            
-        # Write to file
-        local_path.write_bytes(fh.getvalue())
-        
-        # Conversion logic for Google Docs
-        if mime_type == "application/vnd.google-apps.document":
-            # Convert docx to markdown using MarkItDown
-            try:
-                md = MarkItDown()
-                result = md.convert(str(local_path))
-                md_content = result.text_content
-                
-                # Write to .md file
-                md_path = local_path.with_suffix(".md")
-                md_path.write_text(md_content, encoding="utf-8")
-                
-                # Remove temporary docx
-                local_path.unlink()
-                local_path = md_path
-            except Exception as conv_err:
-                return f"Downloaded Google Doc to {local_path}, but failed to convert to Markdown: {str(conv_err)}"
-                
-        # Return success with relative path from workspace root
-        rel_path = local_path.relative_to(ROOT)
-        return f"Successfully downloaded and processed '{file_name}' -> '{rel_path}'"
-        
+            ext = Path(file_name).suffix or ".bin"
+            return _convert_media_to_markdown(request, suffix=ext)
+
     except Exception as e:
-        return f"Error downloading file: {str(e)}"
+        return f"Error reading file '{file_id}': {str(e)}"
+
+
+# ── Internal Conversion Helpers ───────────────────────────────────────────────
+
+def _download_text(request) -> str:
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return fh.getvalue().decode("utf-8", errors="replace")
+
+
+def _convert_media_to_markdown(request, suffix: str) -> str:
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(fh.getvalue())
+        tmp_path = tmp.name
+
+    try:
+        md = MarkItDown()
+        result = md.convert(tmp_path)
+        return result.text_content
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
 
 # ── Main / CLI ────────────────────────────────────────────────────────────────
 
@@ -256,21 +214,21 @@ if __name__ == "__main__":
         token_path = os.environ.get("GDRIVE_TOKEN_PATH") or str(
             ROOT / ".agents" / "mcp" / "gdrive" / "token.json"
         )
-        
+
         if not os.path.exists(credentials_path):
             print("Credentials file not found. Using default application credentials...")
             flow = InstalledAppFlow.from_client_config(DEFAULT_CLIENT_CONFIG, SCOPES)
         else:
             print("Using user-provided credentials.json...")
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
-            
+
         print("Starting OAuth interactive flow. Opening browser...")
         creds = flow.run_local_server(port=0)
-        
+
         with open(token_path, "w") as token:
             token.write(creds.to_json())
-            
+
         print(f"Success! Token saved to '{token_path}'")
         sys.exit(0)
-        
+
     mcp.run()

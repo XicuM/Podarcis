@@ -1,6 +1,6 @@
 # Google Drive MCP Server (Read-only)
 
-A FastMCP server that provides read-only access to files and folders in Google Drive, with automatic conversion of Google Docs/Sheets to Markdown/CSV, saving them directly to the `sources/internal_documentation/` directory.
+A FastMCP server that provides read-only access to files and folders in Google Drive, with direct in-memory conversion of Google Docs, Sheets, Presentations, and PDFs to Markdown or CSV text.
 
 ## Setup Instructions
 
@@ -50,11 +50,6 @@ List or search files in Google Drive.
 - `query` (optional): Filter query in Google Drive `q` parameter syntax. E.g., `name contains 'meeting'` or `mimeType = 'application/vnd.google-apps.folder'`.
 - `page_size` (optional): Max number of files to return (default: 20).
 
-### `gdrive_download_file`
-Download a file from Google Drive and copy/convert it to the `sources/internal_documentation/` directory.
-- `file_id`: The ID of the file to download.
-- `dest_subdir` (optional): Subdirectory under `sources/internal_documentation/` to place the downloaded file.
-
-Google Docs (`application/vnd.google-apps.document`) are automatically converted to Markdown (`.md`).
-Google Sheets (`application/vnd.google-apps.spreadsheet`) are automatically exported to CSV (`.csv`).
-Files are saved using `snake_case` naming convention.
+### `gdrive_read_file`
+Read a file directly from Google Drive without downloading it to disk. Automatically converts Google Docs/Slides/PDFs to Markdown and Google Sheets to CSV text in-memory.
+- `file_id`: The ID of the Google Drive file to read.

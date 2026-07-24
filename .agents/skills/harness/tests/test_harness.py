@@ -4,11 +4,12 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 # Resolve paths to import the harness scripts
-harness_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".agents", "skills", "harness", "scripts"))
+harness_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts"))
 if harness_path not in sys.path:
     sys.path.append(harness_path)
 
 import runtime_gate
+
 import core_io_helper
 
 def test_approved_domains_network_gate():

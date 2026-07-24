@@ -41,11 +41,31 @@ def _find_root() -> Path:
     )
 
 ROOT = _find_root()
-_STATE_PATH = ROOT / "sources" / "state.json"
-_SOURCES_LIT = ROOT / "sources" / "literature"
+_STATE_PATH = ROOT / "workspace" / "state.json"
+_SOURCES_LIT = ROOT / "workspace" / "literature"
 
-# API key (Semantic Scholar) — optional
-_API_KEY: str = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
+# API key (Semantic Scholar) — optional, loaded from podarcis.yaml or environment
+def _load_api_key(root: Path) -> str:
+    key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
+    if key:
+        return key
+    pod_yaml = root / "podarcis.yaml"
+    if pod_yaml.exists():
+        try:
+            import yaml
+            with open(pod_yaml, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                if isinstance(data, dict):
+                    apis = data.get("apis", {})
+                    if isinstance(apis, dict) and apis.get("semantic_scholar_api_key"):
+                        val = str(apis["semantic_scholar_api_key"]).strip()
+                        if val and val != "your_api_key_here":
+                            return val
+        except Exception:
+            pass
+    return ""
+
+_API_KEY: str = _load_api_key(ROOT)
 
 # Allowed outbound domains (runtime_gate policy inlined)
 _ALLOWED_DOMAINS = {

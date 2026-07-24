@@ -1,0 +1,15 @@
+[tool.pytest.ini_options]
+testpaths = [
+    ".agents/mcp",
+    ".agents/skills",
+    "tui/tests"
+]
+python_files = ["test_*.py", "*_test.py"]
+python_functions = ["test_*"]
+pythonpath = [
+    ".",
+    ".agents/mcp/wiki",
+    ".agents/mcp/finance",
+    ".agents/mcp/research",
+    ".agents/skills/harness/scripts"
+]

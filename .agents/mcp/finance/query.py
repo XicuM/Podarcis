@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Expense Tracker — Query & Insight Engine
 
-Reads the canonical `user/finance/transactions.csv` and produces markdown
+Reads the canonical `workspace/finance/transactions.csv` and produces markdown
 tables for agent consumption (budget protocol generation, monthly summaries).
 
 Subcommands:
@@ -25,7 +25,7 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
-CANONICAL_CSV = ROOT / "user" / "finance" / "transactions.csv"
+CANONICAL_CSV = ROOT / "workspace" / "finance" / "transactions.csv"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

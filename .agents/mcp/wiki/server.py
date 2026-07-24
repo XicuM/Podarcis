@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Annotated, Literal
+
 
 from mcp.server.fastmcp import FastMCP
 
@@ -28,7 +30,6 @@ def _find_root() -> Path:
     )
 
 ROOT = _find_root()
-_AGENTS_DIR = ROOT / ".agents"
 _WIKI_DIR = Path(__file__).resolve().parent
 _VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
 
@@ -47,23 +48,112 @@ mcp = FastMCP(
     instructions=(
         "Knowledge base querier and auditor for the agentic wiki. "
         "Use wiki_* tools to search or retrieve documents, lint_* tools for audits. "
-        "All wiki_* tools query across wiki/, user/protocols/, and sources/literature/."
+        "All wiki_* tools query across wiki/ and workspace/protocols/."
     ),
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _is_qmd_enabled_in_config() -> bool:
+    """Read engines.qmd from podarcis.yaml or podarcis.example.yaml."""
+    yaml_path = ROOT / "podarcis.yaml"
+    if not yaml_path.exists():
+        yaml_path = ROOT / "podarcis.example.yaml"
+    if yaml_path.exists():
+        try:
+            import yaml
+            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+            engines = data.get("engines", {})
+            return bool(engines.get("qmd", False))
+        except Exception:
+            pass
+    return False
+
+
+def get_qmd_status() -> tuple[Literal["disabled", "enabled_ok", "enabled_broken"], str]:
+    """Determine QMD engine state: disabled, enabled_ok, or enabled_broken."""
+    env_flag = os.environ.get("ENABLE_QMD")
+    if env_flag is not None:
+        enabled = env_flag.lower() in ("true", "1", "yes")
+    else:
+        enabled = _is_qmd_enabled_in_config()
+
+    if not enabled:
+        return ("disabled", "QMD engine is disabled in podarcis.yaml.")
+
+    qmd_bin = shutil.which("qmd")
+    if not qmd_bin:
+        return ("enabled_broken", "'qmd' binary not found in PATH.")
+    return ("enabled_ok", qmd_bin)
+
+
+async def _native_search(
+    query: str,
+    collection: str = "all",
+    limit: int = 5,
+) -> str:
+    """Fast native keyword search using ripgrep or Python regex matching."""
+    search_dirs = []
+    if collection in ("wiki", "all"):
+        search_dirs.append(ROOT / "wiki")
+    if collection in ("protocols", "all"):
+        search_dirs.append(ROOT / "workspace" / "protocols")
+        if not (ROOT / "workspace" / "protocols").exists():
+            search_dirs.append(ROOT / "user" / "protocols")
+    if collection in ("sources", "all"):
+        search_dirs.append(ROOT / "sources" / "literature")
+
+    search_dirs = [d for d in search_dirs if d.exists()]
+    if not search_dirs:
+        return "No files found to search."
+
+    rg_bin = shutil.which("rg")
+    if rg_bin:
+        cmd = [rg_bin, "-i", "-n", "-C", "1", "--no-heading", query] + [str(d) for d in search_dirs]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        raw_output = stdout.decode("utf-8", errors="replace").strip()
+        if raw_output:
+            lines = raw_output.splitlines()
+            return "\n".join(lines[: limit * 10])
+        else:
+            return f"No matches found for '{query}' in collection '{collection}'."
+    else:
+        import re
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
+        matches = []
+        for sdir in search_dirs:
+            for md_file in sdir.rglob("*.md"):
+                try:
+                    content = md_file.read_text(encoding="utf-8", errors="replace")
+                    for line_idx, line in enumerate(content.splitlines(), start=1):
+                        if pattern.search(line):
+                            rel_path = md_file.relative_to(ROOT)
+                            matches.append(f"{rel_path}:{line_idx}:{line.strip()}")
+                            if len(matches) >= limit * 5:
+                                break
+                except Exception:
+                    continue
+        if matches:
+            return "\n".join(matches[: limit * 5])
+        return f"No matches found for '{query}' in collection '{collection}'."
+
+
 async def _qmd(
     *args: str,
     json_output: bool = False,
 ) -> str:
-    """Run a qmd command from the .agents/ working directory and return stdout."""
+    """Run a qmd command from the wiki MCP directory (where qmd.yml lives) and return stdout."""
     cmd = ["qmd", *args]
     if json_output:
         cmd.append("--json")
     proc = await asyncio.create_subprocess_exec(
         *cmd,
-        cwd=str(_AGENTS_DIR),
+        cwd=str(_WIKI_DIR),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -96,7 +186,7 @@ async def _run_script(script: str, *args: str) -> str:
 async def wiki_search(
     query: Annotated[str, "The search query (natural language, keyword, or grep pattern)"],
     collection: Annotated[
-        Literal["wiki", "protocols", "sources", "all"],
+        Literal["wiki", "protocols", "all"],
         "Restrict to a specific collection (default: all)",
     ] = "all",
     method: Annotated[
@@ -107,6 +197,25 @@ async def wiki_search(
     min_score: Annotated[float, "Minimum relevance score threshold (0-1, default 0.0)"] = 0.0,
 ) -> str:
     """Consolidated search tool: supports keyword (grep), semantic (vector), and hybrid strategies."""
+    status, info = get_qmd_status()
+
+    if status == "enabled_broken":
+        warning = (
+            "⚠️ WARNING: QMD Vector DB Engine is explicitly ENABLED in podarcis.yaml, "
+            f"but QMD is unavailable ({info}).\n"
+            "Please install @tobilu/qmd via npm or run 'python tui/setup.py'.\n"
+            "Falling back to Native Keyword Search mode.\n\n"
+        )
+        native_res = await _native_search(query, collection=collection, limit=limit)
+        return warning + native_res
+
+    if status == "disabled":
+        prefix = ""
+        if method in ("semantic", "hybrid"):
+            prefix = "[Notice: QMD Vector DB engine is disabled in podarcis.yaml. Operating in Native Keyword Search mode.]\n\n"
+        native_res = await _native_search(query, collection=collection, limit=limit)
+        return prefix + native_res
+
     if method == "keyword":
         args = ["search", query]
         if collection != "all":
@@ -121,7 +230,15 @@ async def wiki_search(
             args += ["-c", collection]
         if min_score > 0:
             args += ["--min-score", str(min_score)]
-    return await _qmd(*args)
+    try:
+        return await _qmd(*args)
+    except Exception as e:
+        warning = (
+            f"⚠️ WARNING: QMD Vector DB execution failed ({e}).\n"
+            "Falling back to Native Keyword Search mode.\n\n"
+        )
+        native_res = await _native_search(query, collection=collection, limit=limit)
+        return warning + native_res
 
 
 @mcp.tool()
@@ -159,35 +276,56 @@ async def wiki_get(
 ) -> str:
     """Retrieve the full content of a specific document by its relative path or filename. Auto-resolves basenames if unique."""
     resolved_path = Path(path)
-    if not (ROOT / resolved_path).exists():
-        # Search under wiki/, user/protocols/, sources/literature/
-        name_query = resolved_path.name
-        matches = []
-        for search_dir in ["wiki", "user/protocols", "sources/literature"]:
-            dir_path = ROOT / search_dir
-            if dir_path.exists():
-                matches.extend(list(dir_path.rglob(f"*{name_query}*")))
-        
-        matches = sorted(list(set([m for m in matches if m.is_file()])))
-        
-        if len(matches) == 1:
-            resolved_path = matches[0].relative_to(ROOT)
-        elif len(matches) > 1:
-            options = "\n".join([f"- {m.relative_to(ROOT)}" for m in matches])
-            return f"Error: Multiple files matched '{path}'. Please specify the exact path:\n{options}"
-        else:
-            return f"Error: File '{path}' not found."
-    else:
-        if resolved_path.is_absolute():
+    if resolved_path.is_absolute():
+        try:
             resolved_path = resolved_path.relative_to(ROOT)
-            
-    return await _qmd("get", str(resolved_path))
+        except ValueError:
+            pass
+
+    full_target = ROOT / resolved_path
+    if full_target.is_file():
+        try:
+            return full_target.read_text(encoding="utf-8")
+        except Exception as e:
+            return f"Error reading file '{path}': {e}"
+
+    # Search under wiki/, user/protocols/, workspace/protocols/, sources/literature/
+    name_query = resolved_path.name
+    matches = []
+    for search_dir in ["wiki", "workspace/protocols", "user/protocols", "sources/literature"]:
+        dir_path = ROOT / search_dir
+        if dir_path.exists():
+            matches.extend(list(dir_path.rglob(f"*{name_query}*")))
+
+    matches = sorted(list(set([m for m in matches if m.is_file()])))
+
+    if len(matches) == 1:
+        try:
+            return matches[0].read_text(encoding="utf-8")
+        except Exception as e:
+            return f"Error reading file '{matches[0].relative_to(ROOT)}': {e}"
+    elif len(matches) > 1:
+        options = "\n".join([f"- {m.relative_to(ROOT)}" for m in matches])
+        return f"Error: Multiple files matched '{path}'. Please specify the exact path:\n{options}"
+    else:
+        return f"Error: File '{path}' not found."
 
 
 @mcp.tool()
 async def wiki_update_index() -> str:
     """Rebuild the qmd semantic index after adding or modifying wiki/source files."""
-    return await _qmd("update")
+    status, info = get_qmd_status()
+    if status == "disabled":
+        return "[Notice: QMD Vector DB engine is disabled in podarcis.yaml. Index update skipped.]"
+    if status == "enabled_broken":
+        return (
+            "⚠️ WARNING: QMD Vector DB Engine is ENABLED in podarcis.yaml, "
+            f"but QMD is unavailable ({info}). Index update skipped."
+        )
+    try:
+        return await _qmd("update")
+    except Exception as e:
+        return f"⚠️ WARNING: QMD Index update failed ({e})."
 
 
 @mcp.tool()
@@ -203,10 +341,10 @@ async def complete_source_synthesis(
     """Atomic transaction tool: Writes wiki page with standard frontmatter, marks the queue item as done, updates search index, and runs link audits."""
     import datetime
     target_file = ROOT / wiki_path
-    
+
     # 1. Ensure target directory exists
     target_file.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # 2. Add standardized YAML frontmatter if not present in content
     if not content.strip().startswith("---"):
         related_str = "\n".join([f"  - \"{r}\"" for r in related])
@@ -219,13 +357,13 @@ async def complete_source_synthesis(
             f"---\n\n"
         )
         content = frontmatter + content
-        
+
     # 3. Write content to the target file
     try:
         target_file.write_text(content, encoding="utf-8")
     except Exception as e:
         return f"Error writing wiki file: {e}"
-        
+
     # 4. Update state.json (mark queue item status as 'done')
     state_path = ROOT / "state.json"
     queue_updated = False
@@ -243,21 +381,27 @@ async def complete_source_synthesis(
                 state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
         except Exception as e:
             return f"Wiki file written, but failed to update state.json queue: {e}"
-            
-    # 5. Rebuild search index
+
+    # 5. Rebuild search index (if QMD active)
     index_res = ""
-    try:
-        index_res = await _qmd("update")
-    except Exception as e:
-        index_res = f"Index update error: {e}"
-        
+    status, info = get_qmd_status()
+    if status == "enabled_ok":
+        try:
+            index_res = await _qmd("update")
+        except Exception as e:
+            index_res = f"Index update warning: {e}"
+    elif status == "enabled_broken":
+        index_res = f"⚠️ WARNING: QMD Vector DB Engine is ENABLED in podarcis.yaml, but QMD is unavailable ({info}). Index update skipped."
+    else:
+        index_res = "[Notice: QMD Vector DB engine is disabled in podarcis.yaml. Index update skipped.]"
+
     # 6. Run link audits on target directory
     audit_res = ""
     try:
         audit_res = await _run_script("check_links.py", str(target_file.parent))
     except Exception as e:
         audit_res = f"Link checker error: {e}"
-        
+
     res_summary = (
         f"✓ Successfully wrote wiki page to: {wiki_path}\n"
         f"✓ Queue status for '{queue_id}' updated to 'done': {queue_updated}\n"
@@ -265,6 +409,7 @@ async def complete_source_synthesis(
         f"--- Link Auditor Output ---\n{audit_res}"
     )
     return res_summary
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

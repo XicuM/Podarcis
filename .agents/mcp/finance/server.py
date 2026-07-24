@@ -247,7 +247,7 @@ def expense_export_monthly(
 @mcp.resource("finance://transactions")
 def resource_transactions() -> str:
     """Live contents of the canonical transactions CSV."""
-    p = ROOT / "user" / "finance" / "transactions.csv"
+    p = ROOT / "workspace" / "finance" / "transactions.csv"
     if not p.exists():
         return "# No transactions found\n\ntransactions.csv does not exist yet."
     return p.read_text(encoding="utf-8")
@@ -256,7 +256,7 @@ def resource_transactions() -> str:
 @mcp.resource("finance://category-rules")
 def resource_category_rules() -> str:
     """Live contents of category_rules.json (partner patterns and custom rules)."""
-    p = ROOT / "user" / "finance" / "category_rules.json"
+    p = ROOT / "workspace" / "finance" / "category_rules.json"
     if not p.exists():
         return json.dumps({}, indent=2)
     return p.read_text(encoding="utf-8")

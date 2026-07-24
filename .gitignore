@@ -3,8 +3,14 @@ __pycache__/
 .venv/
 .env
 .env.local
+.vscode/
+
+# API keys and credentials
 *.secret
-sources/state.json
+*.secret.yaml
+podarcis.yaml
+credentials.json
+token.json
 
 # Don't track generated logs
 logs/
@@ -21,8 +27,9 @@ opencode-sync/
 .obsidian/recent-files.json
 .obsidian/backlink-cache.json
 
-# Temporary workspace
+# Workspace
 tmp/
-user/
+workspace/
 wiki/
-sources/
+.qmd/
+*.sqlite

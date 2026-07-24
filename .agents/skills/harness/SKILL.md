@@ -3,6 +3,7 @@ name: harness
 description: Runtime state, context compaction, and permission gating.
 metadata: { "openclaw": { "emoji": "🛡️" } }
 ---
+
 # Role: Agent Harness (Universal Utility)
 
 Shared runtime infrastructure providing state management, automated context compaction, and execution permission gating.

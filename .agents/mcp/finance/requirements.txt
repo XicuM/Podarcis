@@ -1,0 +1,4 @@
+yfinance
+PyPortfolioOpt
+vectorbt
+websockets>=11.0

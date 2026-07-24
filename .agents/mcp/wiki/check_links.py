@@ -5,10 +5,7 @@ import sys
 def find_markdown_links(content):
     # Standard markdown links [text](link)
     # Ignores external links, mailto, and anchors
-    links = re.findall(r'\[[^\]]+\]\(([^)]+)\)', content)
-    # Footnote style links [^1]: [text](link)
-    links += re.findall(r'\[\^[0-9]+\]: \[?[^\]]+\]?\(([^)]+)\)', content)
-    return links
+    return re.findall(r'\[[^\]]+\]\(([^)]+)\)', content)
 
 def check_footnotes(content):
     # Find all footnote references [^1]
@@ -39,7 +36,7 @@ def check_file(filepath):
     # Check Links
     links = find_markdown_links(content)
     for link in links:
-        if link.startswith(('http://', 'https://', '#', 'mailto:')):
+        if link.startswith(('http://', 'https://', '#', 'mailto:', 'gdrive:')):
             continue
         
         # Strip query params or anchors
@@ -60,8 +57,8 @@ def check_file(filepath):
     
     # Check Frontmatter
     parts = os.path.normpath(filepath).split(os.sep)
-    is_wiki_or_user = 'wiki' in parts or 'user' in parts
-    if os.path.basename(filepath) != '_index.md' and is_wiki_or_user:
+    is_wiki_or_workspace = 'wiki' in parts or 'workspace' in parts or 'user' in parts
+    if os.path.basename(filepath) != '_index.md' and is_wiki_or_workspace:
         fm_match = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
         if not fm_match:
             results["missing_frontmatter"].append("Entire YAML frontmatter block is missing")
@@ -93,9 +90,9 @@ def run_audit(root_dir):
         if any(ignored in root for ignored in ['.git', '.venv', '.obsidian', '__pycache__']):
             continue
         
-        # Check for directory bloat in wiki or sources folder
+        # Check for directory bloat in wiki or workspace folder
         parts = os.path.normpath(root).split(os.sep)
-        if 'wiki' in parts or 'sources' in parts:
+        if 'wiki' in parts or 'workspace' in parts:
             # Count immediate children, excluding _index.md and hidden files/dirs
             items = [d for d in dirs if not d.startswith('.') and d != '__pycache__'] + \
                     [f for f in files if not f.startswith('.') and f != '_index.md' and not f.endswith('.pyc')]

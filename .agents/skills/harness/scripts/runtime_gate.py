@@ -28,8 +28,30 @@ def check_permission(action_type: str, details: str) -> bool:
         except Exception:
             raise PermissionError(f"Gating Error: Invalid URL details: {details}")
 
-        # Allow all network requests
-        return True
+        if domain in APPROVED_DOMAINS: return True
+
+        if os.environ.get("HARNESS_BYPASS_GATE") == "1":
+            print(f"⚠️  [Permission Gate] Bypass active. Allowing network request: {details}")
+            return True
+
+        prompt = f"\n⚠️  [Permission Gate] Script is attempting to access an unapproved domain:\nDomain: {domain} ({details})\nAllow this request? (y/n): "
+
+        if not sys.stdin.isatty():
+            raise PermissionError(f"Permission Denied: Network request to '{domain}' blocked in non-interactive environment: {details}")
+
+        try:
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            response = sys.stdin.readline().strip().lower()
+            if response in ("y", "yes"):
+                return True
+            else:
+                raise PermissionError("Permission Denied: Network request refused by user.")
+        except Exception as e:
+            if isinstance(e, PermissionError):
+                raise
+            raise PermissionError("Permission Gate Error: Failed to prompt user. Network request blocked.")
+
 
     elif action_type == "shell":
         if os.environ.get("HARNESS_BYPASS_GATE") == "1":
@@ -46,13 +68,10 @@ def check_permission(action_type: str, details: str) -> bool:
             sys.stdout.write(prompt)
             sys.stdout.flush()
             response = sys.stdin.readline().strip().lower()
-            if response in ("y", "yes"):
-                return True
-            else:
-                raise PermissionError(f"Permission Denied: Shell command execution refused by user.")
+            if response in ("y", "yes"): return True
+            else: raise PermissionError(f"Permission Denied: Shell command execution refused by user.")
         except Exception as e:
-            if isinstance(e, PermissionError):
-                raise
+            if isinstance(e, PermissionError): raise
             raise PermissionError(f"Permission Gate Error: Failed to prompt user. Shell execution blocked.")
             
     else:

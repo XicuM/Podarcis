@@ -1,6 +1,9 @@
 ---
 name: menumaker
 description: Computes science-based, cost-optimized healthy menus using USDA food data and linear programming. Use this to design nutritional protocols or investigate food properties.
+disable-model-invocation: true
+user-invocable: false
+disabled: true
 ---
 
 # Menumaker Skill — Nutritional Reasoning & Menu Design
@@ -19,9 +22,9 @@ MenuMaker is a suite of tools that compute **science-based, cost-optimized healt
 3. **Linear programming** — finding the cheapest combination of foods meeting all requirements.
 4. **Local Pricing** — current grocery prices (e.g., Mercadona).
 
-## The Wiki / User Boundary Strict Workflow
+## The Wiki / Workspace Boundary Strict Workflow
 
-This project adheres strictly to the **wiki (objective) vs user (actionable)** separation of concerns. You must use the tools in the appropriate decoupled repository context.
+This project adheres strictly to the **wiki (objective) vs workspace (actionable)** separation of concerns. You must use the tools in the appropriate decoupled repository context.
 
 ### Objective Knowledge Base (`wiki/` repository)
 *   Must remain anonymous and objective. Do not include user-specific data.
@@ -30,13 +33,13 @@ This project adheres strictly to the **wiki (objective) vs user (actionable)** s
     *   `get_food_nutrients(food_name)`: Get the objective macronutrient and micronutrient profiles.
 *   **Workflow**: When investigating a food's properties, create an objective profile in the `wiki/` repository (e.g., `wiki/nutrition/chicken_breast.md`).
 
-### Actionable Protocols & User Context (`user/` repository)
+### Actionable Protocols & Workspace Context (`workspace/` repository)
 *   Personalized, step-by-step instructions.
 *   **Relevant Tools**:
-    *   `get_intake_targets(age, gender, stage)`: Computes daily targets. Always extract the arguments (age, gender) from the user's profile located in the `user/` workspace.
+    *   `get_intake_targets(age, gender, stage)`: Computes daily targets. Always extract the arguments (age, gender) from the profile located in the `workspace/` repository.
     *   `optimize_menu(age, gender, stage)`: Runs linear programming to generate the optimal list of raw commodities.
     *   `price_menu(items)`: Calculates the estimated cost of a specific menu.
-*   **Workflow**: When generating a meal plan, invoke the optimizer, translate the raw commodities into practical meals, and write an actionable protocol inside `user/protocols/` (e.g., `user/protocols/weekly_meal_plan.md`). Cite the `wiki/` when referring to specific foods.
+*   **Workflow**: When generating a meal plan, invoke the optimizer, translate the raw commodities into practical meals, and write an actionable protocol inside `workspace/protocols/` (e.g., `workspace/protocols/weekly_meal_plan.md`). Cite the `wiki/` when referring to specific foods.
 
 ## Nutritional Reasoning & Translation Heuristics
 

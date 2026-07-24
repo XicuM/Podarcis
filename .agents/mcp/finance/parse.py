@@ -3,7 +3,7 @@
 
 Ingests a bank Transaction export CSV from sources/scratch/, deduplicates by
 transaction_id, classifies every row by mcc_code or description heuristics,
-appends new rows to the canonical `user/finance/transactions.csv`.
+appends new rows to the canonical `workspace/finance/transactions.csv`.
 
 Usage:
     .venv/bin/python .agents/skills/expense-tracker/scripts/parse.py \
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
-CANONICAL_CSV = ROOT / "user" / "finance" / "transactions.csv"
+CANONICAL_CSV = ROOT / "workspace" / "finance" / "transactions.csv"
 
 # ── MCC code → human-readable spend_category ─────────────────────────────────
 MCC_MAP: dict[str, str] = {
@@ -62,12 +62,12 @@ MCC_MAP: dict[str, str] = {
 }
 
 # ── Description / counterparty heuristics for rows without an MCC ─────────────
-# User-specific patterns live in user/finance/category_rules.json so that
+# User-specific patterns live in workspace/finance/category_rules.json so that
 # skill files remain free of personal data (per AGENTS.md).
 
 
 def _load_rules() -> dict:
-    rules_path = ROOT / "user" / "finance" / "category_rules.json"
+    rules_path = ROOT / "workspace" / "finance" / "category_rules.json"
     if not rules_path.exists():
         return {}
     with open(rules_path, "r") as f:
