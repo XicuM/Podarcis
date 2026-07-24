@@ -21,6 +21,9 @@ if HAS_RICH:
 def _say(*args: str) -> None:
     console.print(''.join(args))
 
+def _hr() -> None:
+    _say('[dim]──────────────────────────────────────────────[/dim]')
+
 def _select(prompt: str, choices: list[str], default: str | None = None) -> str:
     '''Arrow-key select prompt.'''
     import questionary
@@ -315,17 +318,22 @@ def main() -> None:
     display_project_banner(root)
 
     _create_podarcis_yaml()
+    _hr()
 
     if not _ensure_questionary():
         _say('[yellow]Skipping interactive setup. Run [bold]make config[/bold] later.[/yellow]\n')
     else:
         enabled = _configure_mcp_servers()
+        _hr()
         _configure_qmd(enabled)
+        _hr()
         _configure_skills()
+        _hr()
         _configure_repos()
+        _hr()
 
     from tui.repos import sync_repos
-    _say('[#29b8db]Syncing workspace repos (wiki, workspace)...[/#29b8db]')
+    _say('[#29b8db]Syncing workspace repos...[/#29b8db]')
     sync_repos(root, clone_missing=True, update_remotes=True)
     _say()
 
