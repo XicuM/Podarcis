@@ -3,7 +3,7 @@
 from pathlib import Path
 from tui.banner import display_project_banner
 from tui.components import (
-    SERVER_NAME_MAP, discover_components, get_enabled_mcp_servers,
+    discover_components, get_enabled_mcp_servers,
     install_deps, set_mcp_server_status, set_skill_status,
 )
 from tui.console import console
@@ -70,10 +70,7 @@ def interactive_config(root: Path) -> None:
                 choices = [
                     questionary.Choice(
                         title=k,
-                        checked=(
-                            k in enabled_servers
-                            or SERVER_NAME_MAP.get(k) in enabled_servers
-                        ),
+                        checked=(k in enabled_servers),
                     )
                     for k in sorted(mcp_servers)
                 ]

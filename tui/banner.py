@@ -3,7 +3,7 @@
 import random
 from pathlib import Path
 from tui.common import load_one_liners, load_version_info
-from tui.components import SERVER_NAME_MAP, discover_components, get_enabled_mcp_servers
+from tui.components import discover_components, get_enabled_mcp_servers
 from tui.console import HAS_RICH, console
 
 if HAS_RICH:
@@ -23,10 +23,10 @@ def display_project_banner(root_dir: Path, splash: str | None = None) -> None:
     cwd = str(root_dir)
     left_w, right_w = 26, 42
 
-    enabled_count_mcp = sum(1 for m in mcp_servers if m in enabled_mcp or SERVER_NAME_MAP.get(m) in enabled_mcp)
+    enabled_count_mcp = sum(1 for m in mcp_servers if m in enabled_mcp)
     enabled_mcp_tokens = sum(
         info.get('tokens', 0) for m, info in mcp_servers.items()
-        if m in enabled_mcp or SERVER_NAME_MAP.get(m) in enabled_mcp
+        if m in enabled_mcp
     )
     enabled_count_skills = sum(1 for s in skills if skills[s]['enabled'])
     # Token count in header title sums strictly enabled skills only
@@ -36,7 +36,7 @@ def display_project_banner(root_dir: Path, splash: str | None = None) -> None:
     mcp_extra = f'{enabled_mcp_tokens:,} tk'
     right_items = [('header', mcp_hdr, mcp_extra, True)]
     for m in sorted(mcp_servers):
-        is_enabled = m in enabled_mcp or SERVER_NAME_MAP.get(m) in enabled_mcp
+        is_enabled = m in enabled_mcp
         tok_count = mcp_servers[m].get('tokens', 0)
         right_items.append(('item', m, tok_count, is_enabled))
 

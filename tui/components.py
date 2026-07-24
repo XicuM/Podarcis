@@ -5,13 +5,20 @@ from pathlib import Path
 from tui.common import get_venv_pip, load_json, save_json
 from tui.console import HAS_RICH, console
 
-SERVER_NAME_MAP = {
-    'finance': 'finance-mcp',
-    'wiki': 'wiki-mcp',
-    'research': 'research-mcp',
-    'gdrive': 'google-drive-mcp',
-    'menumaker': 'menumaker'
-}
+def _server_name_map(root: Path) -> dict[str, str]:
+    '''Derive dir_name → opencode_key from opencode.json command paths.'''
+    data = load_json(root / 'opencode.json')
+    mapping: dict[str, str] = {}
+    for key, cfg in data.get('mcp', {}).items():
+        cmd = cfg.get('command', [])
+        if len(cmd) >= 2 and '/mcp/' in cmd[1]:
+            parts = cmd[1].replace('\\', '/').split('/')
+            try:
+                idx = parts.index('mcp')
+                mapping[parts[idx + 1]] = key
+            except (ValueError, IndexError):
+                pass
+    return mapping
 
 
 def get_skill_desc(root_dir: Path, name: str) -> str:
@@ -142,7 +149,7 @@ def discover_components(root: Path) -> tuple[dict, dict]:
     if mcp_dir.exists():
         for d in mcp_dir.iterdir():
             if d.is_dir():
-                key = SERVER_NAME_MAP.get(d.name, d.name)
+                key = _server_name_map(root).get(d.name, d.name)
                 req_file = d / 'requirements.txt'
                 server_py = d / 'server.py'
                 mtime = server_py.stat().st_mtime if server_py.exists() else 0
@@ -209,11 +216,12 @@ def get_enabled_mcp_servers(root: Path) -> set[str]:
     enabled = set()
     data = load_json(opencode_path)
     mcp_data = data.get('mcp', {})
+    smap = _server_name_map(root)
     for key, cfg in mcp_data.items():
         if cfg.get('enabled', True):
             enabled.add(key)
-            for dir_name, mapped in SERVER_NAME_MAP.items():
-                if     mapped == key: enabled.add(dir_name)
+            for dir_name, mapped in smap.items():
+                if mapped == key: enabled.add(dir_name)
                 elif dir_name == key: enabled.add(mapped)
 
     mcp_cfg_path = root / '.agents' / 'mcp_config.json'
@@ -223,7 +231,7 @@ def get_enabled_mcp_servers(root: Path) -> set[str]:
         for key, cfg in mcp_servers.items():
             if cfg.get('disabled', False):
                 enabled.discard(key)
-                for dir_name, mapped in SERVER_NAME_MAP.items():
+                for dir_name, mapped in smap.items():
                     if mapped == key:
                         enabled.discard(dir_name)
                     elif dir_name == key:

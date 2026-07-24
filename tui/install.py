@@ -13,10 +13,7 @@ if str(root) not in sys.path:
 
 from tui.banner import display_project_banner
 from tui.common import load_yaml, run_command, save_yaml
-from tui.console import HAS_RICH, console
-
-if HAS_RICH:
-    from rich.panel import Panel
+from tui.console import console
 
 def _say(*args: str) -> None:
     console.print(''.join(args))
@@ -100,10 +97,8 @@ def _configure_repos() -> None:
         if url and url != current:
             set_repo_url(root, name, url, update_remote=False)
             _say(f'[green]✓ {name} → {url}[/green]')
-        elif url:
-            _say(f'[dim]{name}: {url}[/dim]')
-        else:
-            _say(f'[dim]{name}: skipped[/dim]')
+        elif url: _say(f'[dim]{name}: {url}[/dim]')
+        else: _say(f'[dim]{name}: skipped[/dim]')
     _say()
 
 # ── QMD engine ─────────────────────────────────────────────────────────────
@@ -232,7 +227,7 @@ def _prompt_gdrive_credentials() -> bool:
 def _configure_mcp_servers() -> set[str]:
     import questionary
     from tui.components import (
-        SERVER_NAME_MAP, discover_components,
+        discover_components,
         get_enabled_mcp_servers, set_mcp_server_status,
     )
 
@@ -246,7 +241,7 @@ def _configure_mcp_servers() -> set[str]:
     choices = [
         questionary.Choice(
             title=k,
-            checked=(k in enabled or SERVER_NAME_MAP.get(k) in enabled),
+            checked=(k in enabled),
         )
         for k in sorted(servers)
     ]
@@ -328,8 +323,8 @@ def main() -> None:
     sync_repos(root, clone_missing=True, update_remotes=True)
     _say()
 
-    if HAS_RICH:
-        console.print(Panel(
+    from rich.panel import Panel
+    console.print(Panel(
             '[bold green]✓ Bootstrap & Setup Complete![/bold green]\n\n'
             '- Virtual environment configured, deps in .venv/\n'
             '- Configuration (podarcis.yaml) prepared.\n\n'
@@ -340,8 +335,6 @@ def main() -> None:
             '  • Lint:       [bold]make lint[/bold]',
             border_style='green', expand=False,
         ))
-    else:
-        console.rule('Setup Complete!')
 
 if __name__ == '__main__':
     try:
