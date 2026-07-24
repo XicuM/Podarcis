@@ -277,7 +277,8 @@ def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: d
             save_json(mcp_cfg_path, mcp_cfg_data)
 
     if enable and mcp_info.get('req'):
-        install_deps(root, str(mcp_info['req']), True, f'Installing dependencies for {server_key}...')
+        install_deps(root, str(mcp_info['req']), True, f'Installing deps for {server_key}...')
+        console.print(f'[green]✓ Dependencies installed for {server_key}.[/green]')
 
 
 def set_skill_status(root: Path, skill_name: str, enable: bool, skill_info: dict) -> None:

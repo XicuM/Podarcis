@@ -14,7 +14,6 @@ if str(root) not in sys.path:
 from tui.banner import display_project_banner
 from tui.common import load_podarcis_config, load_yaml, run_command, save_yaml
 from tui.console import HAS_RICH, console
-from tui.gdrive import setup_google_drive
 
 if HAS_RICH:
     from rich.panel import Panel
@@ -134,26 +133,6 @@ def _configure_qmd(enabled_servers: set[str]) -> None:
             _say('[bold yellow]⚠️ QMD install failed. wiki-mcp falls back to native search.[/bold yellow]')
     _say()
 
-# ── API keys ───────────────────────────────────────────────────────────────
-
-def _configure_api_keys(enabled_servers: set[str]) -> None:
-    if not (enabled_servers & {'research-mcp', 'research'}):
-        return
-
-    import questionary
-
-    _say('[bold #29b8db]API Credentials[/bold #29b8db]')
-    key = questionary.text(
-        'Semantic Scholar API key',
-        style=questionary.Style(_QSTYLE),
-    ).ask() or ''
-
-    yaml_path = root / 'podarcis.yaml'
-    data = load_yaml(yaml_path) if yaml_path.exists() else {}
-    data.setdefault('apis', {})['semantic_scholar_api_key'] = key
-    save_yaml(yaml_path, data)
-    _say()
-
 # ── questionary helpers ───────────────────────────────────────────────────
 
 def _ensure_questionary() -> bool:
@@ -187,6 +166,52 @@ _QSTYLE = [
 
 # ── MCP servers ────────────────────────────────────────────────────────────
 
+def _prompt_research_credentials() -> bool:
+    '''Prompt for Semantic Scholar API key. Returns False if skipped.'''
+    import questionary
+
+    _say('[bold #29b8db]Credentials for research-mcp[/bold #29b8db]')
+    key = questionary.text(
+        'Semantic Scholar API key (leave empty to skip)',
+        style=questionary.Style(_QSTYLE),
+    ).ask()
+    if key is None:
+        raise SystemExit(1)
+    if not key.strip():
+        _say('[yellow]⚠️ No API key — research-mcp deactivated.[/yellow]\n')
+        return False
+
+    yaml_path = root / 'podarcis.yaml'
+    data = load_yaml(yaml_path) if yaml_path.exists() else {}
+    data.setdefault('apis', {})['semantic_scholar_api_key'] = key.strip()
+    save_yaml(yaml_path, data)
+    _say('[green]✓ API key saved.[/green]\n')
+    return True
+
+
+def _prompt_gdrive_credentials() -> bool:
+    '''Prompt for Google Drive OAuth. Returns False if skipped or failed.'''
+    import questionary
+
+    _say('[bold #29b8db]Credentials for google-drive-mcp[/bold #29b8db]')
+    choice = questionary.select(
+        'Set up Google Drive access?',
+        choices=['yes', 'skip'], default='yes',
+        style=questionary.Style(_QSTYLE),
+    ).ask()
+    if choice is None:
+        raise SystemExit(1)
+    if choice == 'skip':
+        _say('[yellow]⚠️ Google Drive not configured — gdrive-mcp deactivated.[/yellow]\n')
+        return False
+
+    from tui.gdrive import setup_google_drive
+    if setup_google_drive(root):
+        return True
+    _say('[yellow]⚠️ Google Drive setup failed — gdrive-mcp deactivated.[/yellow]\n')
+    return False
+
+
 def _configure_mcp_servers() -> set[str]:
     import questionary
     from tui.components import (
@@ -215,9 +240,15 @@ def _configure_mcp_servers() -> set[str]:
         .ask()
     )
     if selected is None:
-        return set()
+        raise SystemExit(1)
 
     s = set(selected)
+
+    if s & {'research-mcp', 'research'} and not _prompt_research_credentials():
+        s -= {'research-mcp', 'research'}
+    if s & {'google-drive-mcp', 'gdrive'} and not _prompt_gdrive_credentials():
+        s -= {'google-drive-mcp', 'gdrive'}
+
     for k, info in servers.items():
         set_mcp_server_status(root, k, k in s, info)
     _say('[bold green]✓ MCP server configurations updated.[/bold green]\n')
@@ -245,7 +276,7 @@ def _configure_skills() -> None:
         .ask()
     )
     if selected is None:
-        return
+        raise SystemExit(1)
 
     s = set(selected)
     for k, info in skills.items():
@@ -266,16 +297,8 @@ def main() -> None:
         _say('[yellow]Skipping interactive setup. Run [bold]make config[/bold] later.[/yellow]\n')
     else:
         enabled = _configure_mcp_servers()
-        _configure_api_keys(enabled)
         _configure_qmd(enabled)
         _configure_skills()
-
-        if enabled & {'gdrive', 'google-drive-mcp'}:
-            try:
-                setup_google_drive(root)
-            except Exception as e:
-                _say(f'[bold yellow]⚠️ Google Drive setup failed: {e}[/bold yellow]')
-            _say()
 
     from tui.repos import sync_repos
     _say('[#29b8db]Syncing workspace repos (wiki, workspace)...[/#29b8db]')
@@ -298,4 +321,7 @@ def main() -> None:
         console.rule('Setup Complete!')
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(1)
