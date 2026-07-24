@@ -318,10 +318,11 @@ def main() -> None:
         _configure_repos()
         _hr()
 
-    from tui.repos import sync_repos
-    _say('[#29b8db]Syncing workspace repos...[/#29b8db]')
-    sync_repos(root, clone_missing=True, update_remotes=True)
-    _say()
+    if _select('Sync workspace repos now?', ['no', 'yes'], default='yes') == 'yes':
+        from tui.repos import sync_repos
+        _say('[#29b8db]Syncing workspace repos...[/#29b8db]')
+        sync_repos(root, clone_missing=True, update_remotes=True)
+        _say()
 
     from rich.panel import Panel
     console.print(Panel(
