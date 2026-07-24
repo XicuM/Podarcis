@@ -8,23 +8,24 @@ from tui.repos import (
 
 
 def test_convert_url_protocol_ssh_to_https():
-    ssh_url = 'git@gitlab-internal.bsc.es:xmaripra/hpdsa-wiki-wiki.git'
-    assert convert_url_protocol(ssh_url, 'https') == (
-        'https://gitlab-internal.bsc.es/xmaripra/hpdsa-wiki-wiki.git')
+    assert convert_url_protocol(
+        'git@example.com:org/repo.git', 'https') == (
+        'https://example.com/org/repo.git')
 
 
 def test_convert_url_protocol_https_to_ssh():
-    https_url = 'https://gitlab-internal.bsc.es/xmaripra/hpdsa-wiki-wiki.git'
-    assert convert_url_protocol(https_url, 'ssh') == (
-        'git@gitlab-internal.bsc.es:xmaripra/hpdsa-wiki-wiki.git')
+    assert convert_url_protocol(
+        'https://example.com/org/repo.git', 'ssh') == (
+        'git@example.com:org/repo.git')
 
 
 def test_convert_url_protocol_same_protocol():
-    ssh_url = 'git@github.com:XicuM/agentic-wiki-builder.git'
-    assert convert_url_protocol(ssh_url, 'ssh') == ssh_url
-
-    https_url = 'https://github.com/XicuM/agentic-wiki-builder.git'
-    assert convert_url_protocol(https_url, 'https') == https_url
+    assert convert_url_protocol(
+        'git@example.com:org/repo.git', 'ssh') == (
+        'git@example.com:org/repo.git')
+    assert convert_url_protocol(
+        'https://example.com/org/repo.git', 'https') == (
+        'https://example.com/org/repo.git')
 
 
 def test_repos_config_load_and_save(tmp_path: Path):
