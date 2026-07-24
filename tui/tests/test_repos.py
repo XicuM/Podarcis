@@ -29,14 +29,15 @@ def test_convert_url_protocol_same_protocol():
 
 def test_repos_config_load_and_save(tmp_path: Path):
     config = load_repos_config(tmp_path)
-    assert 'wiki' in config['repositories']
-    assert 'workspace' in config['repositories']
+    assert config == {'repositories': {}}
 
     config['repositories']['wiki'] = 'https://example.com/wiki.git'
+    config['repositories']['workspace'] = 'git@example.com:repo.git'
     save_repos_config(tmp_path, config)
 
     reloaded = load_repos_config(tmp_path)
     assert reloaded['repositories']['wiki'] == 'https://example.com/wiki.git'
+    assert reloaded['repositories']['workspace'] == 'git@example.com:repo.git'
 
 
 def test_set_repo_url_and_get(tmp_path: Path):

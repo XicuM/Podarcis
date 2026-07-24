@@ -78,16 +78,39 @@ def _create_podarcis_yaml() -> None:
         _say('[green]✓ podarcis.yaml already exists.[/green]')
         return
 
-    from tui.repos import DEFAULT_REPOS
     save_yaml(yaml_path, {
         'apis': {},
-        'repositories': {
-            'wiki': DEFAULT_REPOS['wiki'],
-            'workspace': DEFAULT_REPOS['workspace'],
-        },
+        'repositories': {},
         'engines': {'qmd': False},
     })
-    _say('[green]✓ Created podarcis.yaml with default repos.[/green]\n')
+    _say('[green]✓ Created podarcis.yaml.[/green]\n')
+
+
+def _configure_repos() -> None:
+    import questionary
+    from tui.repos import REPO_NAMES, get_repo_url, set_repo_url
+
+    _say('[bold #29b8db]Workspace Repositories[/bold #29b8db]')
+    style = questionary.Style(_QSTYLE)
+
+    for name in REPO_NAMES:
+        current = get_repo_url(root, name)
+        url = questionary.text(
+            f'Git URL for "{name}" repo (leave empty to skip)',
+            default=current,
+            style=style,
+        ).ask()
+        if url is None:
+            raise SystemExit(1)
+        url = url.strip()
+        if url and url != current:
+            set_repo_url(root, name, url, update_remote=False)
+            _say(f'[green]✓ {name} → {url}[/green]')
+        elif url:
+            _say(f'[dim]{name}: {url}[/dim]')
+        else:
+            _say(f'[dim]{name}: skipped[/dim]')
+    _say()
 
 # ── QMD engine ─────────────────────────────────────────────────────────────
 
@@ -299,6 +322,7 @@ def main() -> None:
         enabled = _configure_mcp_servers()
         _configure_qmd(enabled)
         _configure_skills()
+        _configure_repos()
 
     from tui.repos import sync_repos
     _say('[#29b8db]Syncing workspace repos (wiki, workspace)...[/#29b8db]')

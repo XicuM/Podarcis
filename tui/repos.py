@@ -7,10 +7,7 @@ from pathlib import Path
 from tui.common import load_json, load_yaml, save_yaml, load_podarcis_config
 from tui.console import console
 
-DEFAULT_REPOS = {
-    'wiki': 'git@gitlab-internal.bsc.es:xmaripra/hpdsa-wiki-wiki.git',
-    'workspace': 'git@gitlab-internal.bsc.es:xmaripra/hpdsa-wiki-workspace.git',
-}
+REPO_NAMES = ['wiki', 'workspace']
 
 
 def get_repos_config_path(root: Path | str) -> Path:
@@ -18,7 +15,7 @@ def get_repos_config_path(root: Path | str) -> Path:
 
 
 def load_repos_config(root: Path) -> dict:
-    '''Load repository URLs from podarcis.yaml, falling back to defaults.'''
+    '''Load repository URLs from podarcis.yaml.'''
     pod_cfg = load_podarcis_config(root)
     repos = pod_cfg.get('repositories', {})
     if not isinstance(repos, dict):
@@ -29,10 +26,6 @@ def load_repos_config(root: Path) -> dict:
         legacy_cfg = load_json(legacy_path)
         if legacy_cfg and 'repositories' in legacy_cfg and isinstance(legacy_cfg['repositories'], dict):
             repos = legacy_cfg['repositories']
-
-    for name, default_url in DEFAULT_REPOS.items():
-        if name not in repos or not isinstance(repos[name], str) or not repos[name].strip():
-            repos[name] = default_url
 
     return {'repositories': repos}
 
@@ -75,8 +68,7 @@ def convert_url_protocol(url: str, protocol: str) -> str:
 def get_repo_url(root: Path, repo_name: str) -> str:
     '''Get configured repository URL.'''
     config = load_repos_config(root)
-    return config.get('repositories', {}).get(
-        repo_name, DEFAULT_REPOS.get(repo_name, ''))
+    return config.get('repositories', {}).get(repo_name, '')
 
 
 def set_repo_url(root: Path | str, repo_name: str, url: str, update_remote: bool = True) -> None:
@@ -155,7 +147,7 @@ def setup_repo(root: Path | str, repo_name: str, url: str) -> None:
 
 
 def sync_repos(root: Path | str | None = None, clone_missing: bool = True, update_remotes: bool = True) -> None:
-    '''Synchronize workspace repositories (wiki, workspace).'''
+    '''Synchronize configured workspace repositories.'''
     if root is None:
         from tui.common import get_root_dir
         root_path = get_root_dir()
@@ -164,10 +156,11 @@ def sync_repos(root: Path | str | None = None, clone_missing: bool = True, updat
 
     config = load_repos_config(root_path)
 
-    for repo_name in ['wiki', 'workspace']:
+    for repo_name in REPO_NAMES:
         repo_dir = root_path / repo_name
-        url = config.get('repositories', {}).get(
-            repo_name, DEFAULT_REPOS.get(repo_name, ''))
+        url = config.get('repositories', {}).get(repo_name, '')
+        if not url:
+            continue
 
         if not repo_dir.exists() or not (repo_dir / '.git').exists():
             if clone_missing:
