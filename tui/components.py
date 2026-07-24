@@ -213,10 +213,8 @@ def get_enabled_mcp_servers(root: Path) -> set[str]:
         if cfg.get('enabled', True):
             enabled.add(key)
             for dir_name, mapped in SERVER_NAME_MAP.items():
-                if mapped == key:
-                    enabled.add(dir_name)
-                elif dir_name == key:
-                    enabled.add(mapped)
+                if     mapped == key: enabled.add(dir_name)
+                elif dir_name == key: enabled.add(mapped)
 
     mcp_cfg_path = root / '.agents' / 'mcp_config.json'
     if mcp_cfg_path.exists():
@@ -237,8 +235,7 @@ def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: d
     '''Persist enabled state for specified MCP server across config files.'''
     opencode_path = root / 'opencode.json'
     opencode_data = load_json(opencode_path)
-    if 'mcp' not in opencode_data:
-        opencode_data['mcp'] = {}
+    if 'mcp' not in opencode_data: opencode_data['mcp'] = {}
 
     dir_name = mcp_info['dir_name']
     server_script = f'.agents/mcp/{dir_name}/server.py'
