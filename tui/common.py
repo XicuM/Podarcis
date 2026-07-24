@@ -122,14 +122,9 @@ def load_version_info(root_dir: Path) -> tuple[str, str]:
 
 def load_one_liners(root_dir: Path) -> list[str]:
     '''Load punchy splash lines specifically from wiki/.podarcis/oneliners.txt.'''
-    file_path = root_dir / 'wiki' / '.podarcis' / 'oneliners.txt'
-    if not file_path.exists():
-        file_path = root_dir / 'wiki' / '.pordacis' / 'oneliners.txt'
-    if file_path.exists():
+    if (file_path := root_dir/'wiki'/'.podarcis'/'oneliners.txt').exists():
         try:
             lines = [l.strip() for l in file_path.read_text(encoding='utf-8').splitlines() if l.strip()]
-            if lines:
-                return lines
-        except Exception:
-            pass
-    return ['HPDSA: High-Performance Domain-Specific Architecture']
+            if lines: return lines
+        except Exception: pass
+    return ['Welcome to the Podarcis TUI!']

@@ -98,6 +98,7 @@ def _configure_repos() -> None:
 
     for name in REPO_NAMES:
         current = get_repo_url(root, name)
+        _say()
         url = questionary.text(
             f'Git URL for "{name}" repo (leave empty to skip)',
             default=current,
