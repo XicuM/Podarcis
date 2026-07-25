@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
 BACKENDS = {'opencode': 'opencode', 'codex': 'codex', 'agy': 'agy', 'claude': 'claude'}
@@ -240,6 +241,8 @@ def cmd_backend(args: argparse.Namespace) -> int:
 
 def cmd_frontend(args: argparse.Namespace) -> int:
     '''Open the configured frontend.'''
+    from banner import display_project_banner
+    display_project_banner(root_dir)
     return cmd_open_tool('frontend')
 
 
@@ -268,15 +271,16 @@ def cmd_lint(args: argparse.Namespace) -> int:
     '''Run markdown link checker.'''
     check_links = root_dir / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
     py_bin = _get_python_bin()
-    return subprocess.run([py_bin, str(check_links)] + args.remaining_args).returncode
+    targets = args.remaining_args if args.remaining_args else [str(root_dir)]
+    return subprocess.run([py_bin, str(check_links)] + targets).returncode
 
 
 def cmd_open_tool(tool_type: str) -> int:
     '''Open the configured tool (backend or frontend) at the current directory.'''
     valid = BACKENDS if tool_type == 'backend' else FRONTENDS
     name = get_config_value(root_dir, tool_type, default='vscode' if tool_type == 'frontend' else 'opencode')
-    command = valid.get(name, name)
-    cwd = os.getcwd()
+    command = valid.get(name.lower(), name)
+    cwd = str(root_dir)
     try:
         if tool_type == 'backend':
             # CLI tools: exec replacing current process to take over terminal
@@ -297,7 +301,18 @@ def main() -> None:
         prog='podarcis',
         description='Podarcis OKF v0.2 Research Agent engine & CLI configuration tool',
     )
-    parser.add_argument('-v', '--version', action='version', version='podarcis 0.2.0')
+    try:
+        _version = version('podarcis')
+    except PackageNotFoundError:
+        # Fallback for dev/editable installs: read directly from pyproject.toml
+        _pyproject = Path(__file__).resolve().parent.parent / 'pyproject.toml'
+        try:
+            import tomllib  # Python 3.11+
+        except ImportError:
+            import tomli as tomllib  # type: ignore[no-redef]
+        with open(_pyproject, 'rb') as _f:
+            _version = tomllib.load(_f)['project']['version']
+    parser.add_argument('-v', '--version', action='version', version=f'podarcis {_version}')
     parser.add_argument('-i', '--interactive', action='store_true', help='Launch interactive TUI menu')
 
     subparsers = parser.add_subparsers(dest='subcommand', title='Subcommands', help='Action to perform')
@@ -332,11 +347,11 @@ def main() -> None:
 
     # config backend
     cfg_backend = config_sub.add_parser('backend', help='Set the agent backend (opencode, codex, agy, claude)')
-    cfg_backend.add_argument('backend_name', help='Backend name')
+    cfg_backend.add_argument('backend_name', choices=list(BACKENDS), help='Backend name')
 
     # config frontend
     cfg_frontend = config_sub.add_parser('frontend', help='Set the frontend tool (vscode, obsidian)')
-    cfg_frontend.add_argument('frontend_name', help='Frontend name')
+    cfg_frontend.add_argument('frontend_name', metavar='{VSCode,Obsidian}', help='Frontend name')
 
     # config interactive
     config_sub.add_parser('interactive', help='Launch interactive TUI menu')
@@ -399,7 +414,7 @@ def main() -> None:
     elif args.subcommand == 'lint':
         sys.exit(cmd_lint(args))
     else:
-        sys.exit(cmd_open_tool('frontend'))
+        sys.exit(cmd_frontend(args))
 
 
 if __name__ == '__main__':

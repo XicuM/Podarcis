@@ -7,8 +7,13 @@ from pathlib import Path
 from common import load_json, load_yaml, save_yaml
 from console import console
 
-DEFAULT_REPO_NAMES = ['wiki', 'workspace']
+DEFAULT_REPO_NAMES = ['sources', 'wiki', 'workspace']
 REPO_NAMES = DEFAULT_REPO_NAMES
+
+
+def get_active_repo_names(root: Path) -> list[str]:
+    '''Return all managed repo names.'''
+    return list(DEFAULT_REPO_NAMES)
 
 
 def load_repos_config(root: Path) -> dict:
@@ -36,7 +41,7 @@ def get_repo_names(root: Path | str | None = None) -> list[str]:
     repos = config.get('repositories', {})
     if isinstance(repos, dict) and repos:
         return list(repos.keys())
-    return list(DEFAULT_REPO_NAMES)
+    return list(REPO_NAMES)
 
 
 def save_repos_config(root: Path, config: dict) -> None:
@@ -93,11 +98,12 @@ def set_repo_url(root: Path | str, repo_name: str, url: str, update_remote: bool
 
 
 def prompt_configure_repo(root: Path | str, repo_name: str, style=None) -> None:
-    '''Interactive prompt to select and configure repository mode (Local vs Remote URL).'''
+    '''Interactive prompt to select and configure repository mode (Local, Remote, or GDrive for sources).'''
     import questionary
+    from common import set_config_value
     root_path = Path(root)
     current_url = get_repo_url(root_path, repo_name)
-    is_git = bool(current_url and current_url != 'local')
+    is_git = bool(current_url and current_url not in ('local', 'gdrive'))
 
     act_choices = [
         'Keep current configuration (Skip)',
@@ -105,6 +111,9 @@ def prompt_configure_repo(root: Path | str, repo_name: str, style=None) -> None:
         'Remote Git repository (with origin URL)',
         'Cancel',
     ]
+
+    if repo_name == 'sources':
+        act_choices.insert(1, 'GDrive (no local repo)')
 
     act = questionary.select(
         'Select repository type:',
@@ -117,9 +126,16 @@ def prompt_configure_repo(root: Path | str, repo_name: str, style=None) -> None:
     if act == 'Keep current configuration (Skip)' or act == 'Cancel' or act is None:
         return
 
-    if act == 'Local Git repository (no remote)':
+    if act == 'GDrive (no local repo)':
+        set_repo_url(root_path, repo_name, 'gdrive')
+        set_config_value(root_path, 'gdrive', 'sources_backend')
+        console.print(f'[yellow]Set {repo_name} to GDrive (sources managed remotely).[/yellow]\n')
+
+    elif act == 'Local Git repository (no remote)':
         set_repo_url(root_path, repo_name, 'local')
         ensure_local_git_repo(root_path, repo_name)
+        if repo_name == 'sources':
+            set_config_value(root_path, 'local', 'sources_backend')
         console.print(f'[yellow]Set {repo_name} to local Git repository (no remote).[/yellow]\n')
 
     elif act == 'Remote Git repository (with origin URL)':
@@ -133,6 +149,8 @@ def prompt_configure_repo(root: Path | str, repo_name: str, style=None) -> None:
             new_url_str = new_url.strip()
             set_repo_url(root_path, repo_name, new_url_str or 'local')
             ensure_local_git_repo(root_path, repo_name)
+            if repo_name == 'sources':
+                set_config_value(root_path, 'local', 'sources_backend')
             if new_url_str and new_url_str != 'local':
                 console.print(f'[bold green]✓ Set remote for {repo_name} to {new_url_str}[/bold green]\n')
             else:
@@ -202,9 +220,13 @@ def sync_repos(root: Path | str | None = None, clone_missing: bool = True, updat
 
     config = load_repos_config(root_path)
 
-    for repo_name in get_repo_names(root_path):
+    for repo_name in get_active_repo_names(root_path):
         repo_dir = root_path / repo_name
         url = config.get('repositories', {}).get(repo_name, '')
+
+        if url == 'gdrive':
+            console.print(f'[bold green]✓ {repo_name}: managed via Google Drive (no local repo).[/bold green]')
+            continue
 
         # Ensure local repo exists if skipped or local
         if not repo_dir.exists() or not (repo_dir / '.git').exists():

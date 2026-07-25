@@ -4,8 +4,8 @@
     "tokens": 1840
   },
   "mcp:research": {
-    "mtime": 1784971099.8676755,
-    "tokens": 1455
+    "mtime": 1785020563.1371992,
+    "tokens": 1474
   },
   "mcp:wiki": {
     "mtime": 1784986705.6185074,
@@ -45,13 +45,13 @@
     "decl_tokens": 62
   },
   "skill:python-skill": {
-    "mtime": 1785004552.1646016,
+    "mtime": 1785018186.4898753,
     "tokens": 928,
     "decl_tokens": 37
   },
   "agent:synthesizer": {
-    "mtime": 1785004559.929123,
-    "tokens": 617,
+    "mtime": 1785020674.6679986,
+    "tokens": 639,
     "decl_tokens": 41
   },
   "agent:auditor": {
@@ -63,5 +63,15 @@
     "mtime": 1785004559.9314132,
     "tokens": 438,
     "decl_tokens": 44
+  },
+  "skill:synthesizer-gdrive": {
+    "mtime": 1785020641.3778753,
+    "tokens": 463,
+    "decl_tokens": 60
+  },
+  "skill:synthesizer-local": {
+    "mtime": 1785020641.3888757,
+    "tokens": 659,
+    "decl_tokens": 74
   }
 }

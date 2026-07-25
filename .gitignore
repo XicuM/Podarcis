@@ -23,6 +23,7 @@ logs/
 # OpenCode files
 opencode-sync/
 opencode.json
+data.json
 
 # Obsidian personal workspace data
 .obsidian/workspace.json
@@ -32,12 +33,13 @@ opencode.json
 .obsidian/starred.json
 .obsidian/recent-files.json
 .obsidian/backlink-cache.json
+.obsidian/appearance.json
+.obsidian/themes/
+.obsidian/snippets/
+.obsidian/graph.json
+.obsidian/canvas.json
 .claudian
 
 # Workspace
 workspace/
 wiki/
-.qmd/
-*.sqlite
-.agents/qmd
-.agents/mcp/*/qmd/

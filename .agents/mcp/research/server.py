@@ -41,8 +41,24 @@ def _find_root() -> Path:
     )
 
 ROOT = _find_root()
-_STATE_PATH = ROOT / "workspace" / "state.json"
-_SOURCES_LIT = ROOT / "workspace" / "literature"
+
+def _resolve_sources_paths(root: Path) -> tuple[Path, Path]:
+    """Return (state_path, sources_lit) based on sources_backend in config.yaml."""
+    pod_yaml = root / ".podarcis" / "config.yaml"
+    backend = "gdrive"
+    if pod_yaml.exists():
+        try:
+            import yaml
+            with open(pod_yaml, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            backend = data.get("sources_backend", "gdrive")
+        except Exception:
+            pass
+    if backend == "local":
+        return root / "sources" / "state.json", root / "sources" / "literature"
+    return root / "workspace" / "state.json", root / "workspace" / "literature"
+
+_STATE_PATH, _SOURCES_LIT = _resolve_sources_paths(ROOT)
 
 # API key (Semantic Scholar) — optional, loaded from .podarcis/config.yaml or environment
 def _load_api_key(root: Path) -> str:
@@ -606,7 +622,7 @@ def _update_state_json(filename_base, domain, title, abstract_summary, year):
         queue.append({
             "id": filename_base,
             "type": "Literature",
-            "path": f"sources/literature/{domain}/{filename_base}/raw.md",
+            "path": str((_SOURCES_LIT / domain / filename_base / "raw.md").relative_to(ROOT)),
             "summary": f"{title} - {abstract_summary}",
             "enqueued_at": datetime.datetime.now().isoformat(),
             "status": "pending",

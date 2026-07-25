@@ -9,7 +9,7 @@ from components import (
 )
 from common import get_config_value, set_config_value
 from console import console, QSTYLE
-from repos import get_repo_names, get_repo_url, prompt_configure_repo
+from repos import get_repo_names, get_active_repo_names, get_repo_url, prompt_configure_repo
 
 import questionary
 
@@ -127,7 +127,7 @@ def interactive_config(root: Path) -> None:
             case 'Repositories':
                 while True:
                     repo_choices = []
-                    for r_name in get_repo_names(root):
+                    for r_name in get_active_repo_names(root):
                         url = get_repo_url(root, r_name)
                         remote_label = url if url else 'local'
                         repo_choices.append(f'{r_name} ({remote_label})')

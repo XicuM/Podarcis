@@ -154,7 +154,7 @@ def run_audit(root_dir):
 
 
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else "."
+    target = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
     audit_results = run_audit(target)
     
     MAX_WORDS = 1500
@@ -162,6 +162,7 @@ if __name__ == "__main__":
         print("Audit passed: No issues found.")
     else:
         for path, res in audit_results.items():
+            rel = os.path.relpath(path, target)
             has_issues = False
             issues = []
             
@@ -176,8 +177,8 @@ if __name__ == "__main__":
                     
             if res.get("broken_links"):
                 issues.append("Broken Links:")
-                for link, target in res["broken_links"]:
-                    issues.append(f"  - {link} -> {target}")
+                for link, broken_target in res["broken_links"]:
+                    issues.append(f"  - {link} -> {broken_target}")
                 has_issues = True
                 
             if res.get("missing_footnotes"):
@@ -197,6 +198,6 @@ if __name__ == "__main__":
                 has_issues = True
                 
             if has_issues:
-                print(f"\n--- {path} ---")
+                print(f"\n--- {rel} ---")
                 for issue in issues:
                     print(issue)

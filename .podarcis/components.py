@@ -1,38 +1,40 @@
 '''Discovery, inspection, and state management for MCP servers and Skills.'''
 
+# Standard library imports
 import sys, subprocess
 from pathlib import Path
+
+# Local imports
 from common import load_json, save_json
 from console import console
+
+
+SKILLS = lambda root: root/'.agents'/'skills'
+MCPS = lambda root: root/'.agents'/'mcp'
+AGENTS = lambda root: root/'.agents'/'agents'
+
 
 def _server_name_map(root: Path) -> dict[str, str]:
     '''Derive dir_name → mcp_key from mcp_config.json or opencode.json command paths.'''
     mapping: dict[str, str] = {}
 
-    mcp_cfg = load_json(root / '.agents' / 'mcp_config.json')
+    mcp_cfg = load_json(root/'.agents'/'mcp_config.json')
     for key, cfg in mcp_cfg.get('mcpServers', {}).items():
         args = cfg.get('args', [])
         if args and '/mcp/' in args[0].replace('\\', '/'):
             parts = args[0].replace('\\', '/').split('/')
-            try:
-                idx = parts.index('mcp')
-                mapping[parts[idx + 1]] = key
-            except (ValueError, IndexError):
-                pass
-
+            try: mapping[parts[parts.index('mcp') + 1]] = key
+            except (ValueError, IndexError): pass
+                
     opencode_cfg = load_json(root / 'opencode.json')
     for key, cfg in opencode_cfg.get('mcp', {}).items():
         cmd = cfg.get('command', [])
         if len(cmd) >= 2 and '/mcp/' in cmd[1]:
             parts = cmd[1].replace('\\', '/').split('/')
-            try:
-                idx = parts.index('mcp')
-                mapping[parts[idx + 1]] = key
-            except (ValueError, IndexError):
-                pass
+            try: mapping[parts[parts.index('mcp') + 1]] = key
+            except (ValueError, IndexError): pass
 
-    mcp_dir = root / '.agents' / 'mcp'
-    if mcp_dir.exists():
+    if (mcp_dir := root/'.agents'/'mcp').exists():
         for d in mcp_dir.iterdir():
             if d.is_dir() and d.name not in mapping:
                 mapping[d.name] = f'{d.name}-mcp'
@@ -40,11 +42,9 @@ def _server_name_map(root: Path) -> dict[str, str]:
     return mapping
 
 
-
 def get_skill_desc(root_dir: Path, name: str) -> str:
     '''Parse description field from skill SKILL.md YAML frontmatter.'''
-    skill_file = root_dir / '.agents' / 'skills' / name / 'SKILL.md'
-    if skill_file.exists():
+    if (skill_file := SKILLS(root_dir)/name/'SKILL.md').exists():
         try:
             content = skill_file.read_text(encoding='utf-8')
             if content.startswith('---'):
@@ -53,15 +53,13 @@ def get_skill_desc(root_dir: Path, name: str) -> str:
                     for line in parts[1].splitlines():
                         if line.strip().lower().startswith('description:'):
                             return line.split(':', 1)[1].strip()
-        except Exception:
-            pass
+        except Exception: pass
     return 'Skill module'
 
 
 def get_agent_desc(root_dir: Path, name: str) -> str:
     '''Parse description field from agent markdown YAML frontmatter.'''
-    agent_file = root_dir / '.agents' / 'agents' / f'{name}.md'
-    if agent_file.exists():
+    if (agent_file := AGENTS(root_dir)/f'{name}.md').exists():
         try:
             content = agent_file.read_text(encoding='utf-8')
             if content.startswith('---'):
@@ -70,15 +68,14 @@ def get_agent_desc(root_dir: Path, name: str) -> str:
                     for line in parts[1].splitlines():
                         if line.strip().lower().startswith('description:'):
                             return line.split(':', 1)[1].strip()
-        except Exception:
-            pass
+        except Exception: pass
     return 'Agent module'
 
 
 def get_mcp_desc(root_dir: Path, dir_name: str, key: str = '') -> str:
     '''Extract summary docstring from MCP server entrypoint module.'''
     if not dir_name: return 'MCP server'
-    if (server_py := root_dir / '.agents' / 'mcp' / dir_name / 'server.py').exists(): 
+    if (server_py := MCPS(root_dir)/dir_name/'server.py').exists(): 
         try:
             content = server_py.read_text(encoding='utf-8')
             import re
@@ -94,9 +91,7 @@ def get_mcp_desc(root_dir: Path, dir_name: str, key: str = '') -> str:
 def run_mcp_setup(root: Path, name: str) -> bool:
     '''Dynamically load and run setup.py for an MCP server if present.'''
     dir_name = _server_name_map(root).get(name, name)
-    setup_script = root / '.agents' / 'mcp' / dir_name / 'setup.py'
-    if not setup_script.exists():
-        return True
+    if not (setup_script := MCPS(root)/dir_name/'setup.py').exists(): return True
 
     import importlib.util
     spec = importlib.util.spec_from_file_location(f'{dir_name}_setup', setup_script)
@@ -118,8 +113,7 @@ def run_mcp_setup(root: Path, name: str) -> bool:
 def build_component_choices(root: Path, comp_type: str, items: dict, enabled_set: set[str] = None) -> list:
     '''Build standardized Questionary choices with grey descriptions for components.'''
     import questionary
-    if not items:
-        return []
+    if not items: return []
 
     max_len = max(len(k) for k in items) if items else 15
     choices = []
@@ -137,16 +131,10 @@ def build_component_choices(root: Path, comp_type: str, items: dict, enabled_set
             desc = ''
             checked = False
 
-        choices.append(
-            questionary.Choice(
-                title=[
-                    ('', f'{k:<{max_len + 2}}'),
-                    ('fg:#888888', f'— {desc}'),
-                ],
-                value=k,
-                checked=checked,
-            )
-        )
+        choices.append(questionary.Choice(
+            title=[('', f'{k:<{max_len + 2}}'), ('fg:#888888', f'— {desc}')],
+            value=k, checked=checked,
+        ))
     return choices
 
 
@@ -165,10 +153,11 @@ def install_deps(root: Path, target: str, is_req: bool, message: str) -> None:
 
 def is_skill_enabled(skill_path: Path) -> bool:
     '''Check if skill is active based on SKILL.md frontmatter flags.'''
-    skill_file = skill_path / 'SKILL.md'
-    if not skill_file.exists(): return False
-    content = skill_file.read_text(encoding='utf-8')
-    if not content.startswith('---'): return True
+
+    # Check if SKILL.md exists and has a YAML frontmatter
+    if not (skill_file := skill_path/'SKILL.md').exists(): return False
+    if not (content := skill_file.read_text(encoding='utf-8')).startswith('---'): return True
+
     parts = content.split('---', 2)
     if len(parts) < 3: return True
     for line in parts[1].splitlines():
@@ -182,9 +171,11 @@ def is_skill_enabled(skill_path: Path) -> bool:
 
 def is_agent_enabled(agent_file: Path) -> bool:
     '''Check if agent is active based on markdown frontmatter flags.'''
+
+    # Check if agent markdown file exists and has a YAML frontmatter
     if not agent_file.exists(): return False
-    content = agent_file.read_text(encoding='utf-8')
-    if not content.startswith('---'): return True
+    if not (content := agent_file.read_text(encoding='utf-8')).startswith('---'): return True
+
     parts = content.split('---', 2)
     if len(parts) < 3: return True
     for line in parts[1].splitlines():
@@ -223,34 +214,24 @@ def count_mcp_tokens(mcp_dir: Path) -> int:
         std_tools = re.findall(r'name=[\"\']([a-zA-Z0-9_]+)[\"\']', content)
         for tname in std_tools: pieces.append(f'tool: {tname}')
 
-        docstrings = re.findall(
-            r'\"\"\"(.*?)\"\"\"', content, re.DOTALL
-        ) + re.findall(
-            r'\'\'\'(.*?)\'\'\'', content, re.DOTALL
-        )
-        for doc in docstrings: pieces.append(doc.strip())
+        for doc in (
+            re.findall(r'\"\"\"(.*?)\"\"\"', content, re.DOTALL) +
+            re.findall(r'\'\'\'(.*?)\'\'\'', content, re.DOTALL)
+        ): pieces.append(doc.strip())
 
         if pieces: return count_tokens('\n'.join(pieces))
         return max(100, round(count_tokens(content) * 0.35))
     except Exception: return 500
 
 
-def load_token_cache(root: Path) -> dict:
-    '''Load cached token counts from persistent cache file.'''
-    cache_file = root / '.agents' / 'token_cache.json'
-    return load_json(cache_file)
-
-
 def discover_components(root: Path) -> tuple[dict, dict]:
     '''Scan filesystem to discover registered MCP servers and skills, using persistent mtime token cache.'''
-    mcp_dir = root / '.agents' / 'mcp'
-    skills_dir = root / '.agents' / 'skills'
 
-    token_cache = load_token_cache(root)
+    token_cache = load_json(root/'.agents'/'token_cache.json')
     cache_modified = False
 
     mcp_servers = {}
-    if mcp_dir.exists():
+    if (mcp_dir := root/'.agents'/'mcp').exists():
         for d in mcp_dir.iterdir():
             if d.is_dir():
                 key = _server_name_map(root).get(d.name, d.name)
@@ -277,11 +258,11 @@ def discover_components(root: Path) -> tuple[dict, dict]:
                 }
 
     skills = {}
-    if skills_dir.exists():
+    if (skills_dir := SKILLS(root)).exists():
         for d in skills_dir.iterdir():
             if d.is_dir():
-                req_file = d / 'requirements.txt'
-                skill_file = d / 'SKILL.md'
+                req_file = d/'requirements.txt'
+                skill_file = d/'SKILL.md'
                 content = skill_file.read_text(encoding='utf-8') if skill_file.exists() else ''
                 desc = get_skill_desc(root, d.name)
                 decl_text = f'- {d.name} ({skill_file}): {desc}'
@@ -311,8 +292,7 @@ def discover_components(root: Path) -> tuple[dict, dict]:
                 }
 
     agents = {}
-    agents_dir = root / '.agents' / 'agents'
-    if agents_dir.exists():
+    if (agents_dir := AGENTS(root)).exists():
         for f in agents_dir.iterdir():
             if f.is_file() and f.suffix == '.md':
                 name = f.stem
@@ -458,10 +438,8 @@ def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: d
     venv_python = str(root/'.venv'/('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python'))
     for k in (server_key, dir_name):
         if k in mcp_cfg_data['mcpServers']:
-            if not enable:
-                mcp_cfg_data['mcpServers'][k]['disabled'] = True
-            else:
-                mcp_cfg_data['mcpServers'][k].pop('disabled', None)
+            if not enable: mcp_cfg_data['mcpServers'][k]['disabled'] = True
+            else: mcp_cfg_data['mcpServers'][k].pop('disabled', None)
         elif enable and k == server_key:
             mcp_cfg_data['mcpServers'][server_key] = {
                 'command': venv_python,
@@ -479,9 +457,8 @@ def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: d
 
 def set_skill_status(root: Path, skill_name: str, enable: bool, skill_info: dict) -> None:
     '''Update SKILL.md frontmatter flags to enable or disable model invocation.'''
-    skill_file = skill_info['path'] / 'SKILL.md'
-    if not skill_file.exists():
-        return
+    
+    if not (skill_file := skill_info['path']/'SKILL.md').exists(): return
 
     content = skill_file.read_text(encoding='utf-8')
     if not content.startswith('---'):

@@ -25,15 +25,25 @@ def _center_text(t: Text, width: int) -> Text:
     return result
 
 
+_FRONTEND_DISPLAY = {'vscode': 'VSCode', 'obsidian': 'Obsidian'}
+_BACKEND_DISPLAY = {'opencode': 'OpenCode', 'codex': 'Codex', 'agy': 'Agy', 'claude': 'Claude'}
+
+
 def _build_subtitle(root_dir: Path) -> Text:
-    backend = get_config_value(root_dir, 'backend', default='No backend')
-    frontend = get_config_value(root_dir, 'frontend', default='No frontend')
+    backend = _BACKEND_DISPLAY.get(
+        get_config_value(root_dir, 'backend'), 'No backend',
+    )
+    frontend = _FRONTEND_DISPLAY.get(
+        get_config_value(root_dir, 'frontend'), 'No frontend',
+    )
     path_str = str(root_dir).replace(str(Path.home()), '~')
-    t = Text()
-    parts = [(backend, 'white'), (' — ', 'cyan'), (frontend, 'white'), (' — ', 'cyan'), (path_str, 'white')]
-    for text, style in parts:
-        t.append(text, style=style)
-    return t
+    return (Text()
+        .append(backend, style='white')
+        .append(' — ', style='cyan')
+        .append(frontend, style='white')
+        .append(' — ', style='cyan')
+        .append(path_str, style='white')
+    )
 
 
 def _render_right_cell(
@@ -48,6 +58,9 @@ def _render_right_cell(
     '''Format right-hand MCP or skill item cell for side-by-side layout.'''
     cell = Text()
     if kind == 'header':
+        if extra:
+            max_title = width - 2 - tok_w
+            if len(title) > max_title: title = title[:max(max_title - 3, 0)] + '...'
         cell.append(title, style=BORDER_STYLE)
         extra_str = str(extra) if extra else ''
         if extra_str:
@@ -55,11 +68,16 @@ def _render_right_cell(
             tok_formatted = extra_str.rjust(tok_w)
             cell.append(' ' * sp + tok_formatted, style='dim white')
             used = len(title) + sp + len(tok_formatted)
-        else:
-            used = len(title)
+        else: used = len(title)
         cell.append(' ' * max(0, width - used))
     elif kind == 'item':
         dot_style = 'bold green' if enabled else 'bold red'
+        if extra is not None:
+            max_title = width - 2 - 2 - tok_w
+            if len(title) > max_title: title = title[:max(max_title - 3, 0)] + '...'
+        else:
+            max_title = width - 2
+            if len(title) > max_title: title = title[:max(max_title - 3, 0)] + '...'
         cell.append('● ' if enabled else '○ ', style=dot_style)
         cell.append(title, style='bold white')
         used = 2 + len(title)
@@ -70,25 +88,23 @@ def _render_right_cell(
             cell.append(' ' * sp + tok_formatted, style='dim white')
             used += sp + len(tok_formatted)
         cell.append(' ' * max(0, width - used))
-    else:
-        cell.append(' ' * width)
+    else: cell.append(' ' * width)
     return cell
 
 
-def display_project_banner(root_dir: Path, splash: str | None = None) -> None:
+def display_project_banner(root_dir: Path, splash: str | None = None, right_w: int = 42) -> None:
     '''Render side-by-side logo and component status header box.'''
     logo_path = Path(__file__).resolve().parent/'logo.txt'
     logo_lines = ([
         l.replace('\u2800', ' ').rstrip()
         for l in logo_path.read_text('utf-8').splitlines()
-    ] if logo_path.exists() else []
-    )
+    ] if logo_path.exists() else [])
 
     version, date_str = load_version_info(root_dir)
     mcp_servers, skills, agents = discover_components(root_dir)
     enabled_mcp = get_enabled_mcp_servers(root_dir)
 
-    left_w, right_w, col_gap = 26, 42, 4
+    left_w, col_gap = 26, 4
     total_inner_w = left_w + col_gap + right_w
 
     # Count active components and tokens for display
@@ -103,6 +119,7 @@ def display_project_banner(root_dir: Path, splash: str | None = None) -> None:
     skill_hdr = f'Skills ({skill_active}/{len(skills)})'
     agent_hdr = f'Agents ({agent_active}/{len(agents)})'
 
+    # Components for the right column
     right_items = [
         ('header', mcp_hdr, f'{mcp_tokens:,} tk', True),
         *[
@@ -132,30 +149,32 @@ def display_project_banner(root_dir: Path, splash: str | None = None) -> None:
     if len(formatted_splash) > total_inner_w:
         formatted_splash = formatted_splash[: total_inner_w - 3] + '...'
 
-    def _print_row(content: Text | str, style: str = '') -> None:
-        row = Text('│ ', style=BORDER_STYLE)
-        if isinstance(content, str):row.append(content, style=style)
-        else: row.append(content)
-        row.append(' │', style=BORDER_STYLE)
-        console.print(row)
+    def print_row(content: Text | str, style: str = '') -> None:
+        console.print(Text()
+            .append('│ ', style=BORDER_STYLE)
+            # Apply style if content is a string, otherwise inherit style from Text object
+            .append(content, style=style if isinstance(content, str) else None)
+            .append(' │', style=BORDER_STYLE)
+        )
 
     # Top border & splash section
-    top_border = Text('╭', style=BORDER_STYLE)
-    top_border.append('─' * d_left, style='#29b8db')
-    top_border.append(title, style='bold white on #29b8db')
-    top_border.append('─' * d_right, style='#29b8db')
-    top_border.append('╮', style=BORDER_STYLE)
-    console.print(top_border)
+    console.print(Text()
+        .append('╭', style=BORDER_STYLE)
+        .append('─' * d_left, style='#29b8db')
+        .append(title, style='bold white on #29b8db')
+        .append('─' * d_right, style='#29b8db')
+        .append('╮', style=BORDER_STYLE)
+    )
 
-    _print_row(formatted_splash.center(total_inner_w), style='italic dim')
+    print_row(formatted_splash.center(total_inner_w), style='italic dim')
 
     subtitle = _build_subtitle(root_dir)
     if len(subtitle) > total_inner_w:
         subtitle = subtitle[: total_inner_w - 3]
         subtitle.append('...', style='dim white')
 
-    _print_row(_center_text(subtitle, total_inner_w))
-    _print_row(' ' * total_inner_w)
+    print_row(_center_text(subtitle, total_inner_w))
+    print_row(' ' * total_inner_w)
 
     # Side-by-side logo and component status rendering
     left_lines = [line[:left_w].ljust(left_w) for line in logo_lines]
@@ -165,14 +184,15 @@ def display_project_banner(root_dir: Path, splash: str | None = None) -> None:
         item_tuple = item if isinstance(item, tuple) and len(item) == 4 else fill_item
         kind, item_title, extra, enabled = item_tuple
 
-        row = Text('│ ', style=BORDER_STYLE)
-        row.append(left_str, style='#29b8db')
-        row.append(' ' * col_gap)
-        row.append(_render_right_cell(kind, item_title, extra, enabled, right_w))
-        row.append(' │', style=BORDER_STYLE)
-        console.print(row)
+        console.print(Text()
+            .append('│ ', style=BORDER_STYLE)
+            .append(left_str, style='#29b8db')
+            .append(' ' * col_gap)
+            .append(_render_right_cell(kind, item_title, extra, enabled, right_w))
+            .append(' │', style=BORDER_STYLE)
+        )
 
-    _print_row(' ' * total_inner_w)
+    print_row(' ' * total_inner_w)
 
     # Repository links (2-column: cyan name column, dim white remote column)
     name_w = 12
@@ -183,14 +203,13 @@ def display_project_banner(root_dir: Path, splash: str | None = None) -> None:
         disp_url = url if len(url) <= rem_w else url[: rem_w - 3] + '...'
         url_str = disp_url.ljust(rem_w)
 
-        r_text = Text()
-        r_text.append(f' {name_str}', style='cyan')
-        r_text.append(url_str, style='dim white')
-        _print_row(r_text)
+        print_row(Text()
+            .append(f' {name_str}', style='cyan')
+            .append(url_str, style='dim white')
+        )
 
     # Bottom border
-    bot_border = Text('╰' + '─' * (total_inner_w + 2) + '╯', style=BORDER_STYLE)
-    console.print(bot_border)
+    console.print(Text('╰' + '─' * (total_inner_w + 2) + '╯', style=BORDER_STYLE))
 
 
 def display_install_banner(root_dir: Path, splash: str | None = None) -> None:
@@ -207,12 +226,10 @@ def display_install_banner(root_dir: Path, splash: str | None = None) -> None:
     if len(formatted_splash) > total_inner_w:
         formatted_splash = formatted_splash[: total_inner_w - 3] + '...'
 
-    def _print_row(content: Text | str, style: str = '') -> None:
+    def print_row(content: Text | str, style: str = '') -> None:
         row = Text('│ ', style=BORDER_STYLE)
-        if isinstance(content, str):
-            row.append(content, style=style)
-        else:
-            row.append(content)
+        if isinstance(content, str): row.append(content, style=style)
+        else: row.append(content)
         row.append(' │', style=BORDER_STYLE)
         console.print(row)
 
@@ -224,15 +241,14 @@ def display_install_banner(root_dir: Path, splash: str | None = None) -> None:
     top_border.append('╮', style=BORDER_STYLE)
     console.print(top_border)
 
-    _print_row(formatted_splash.center(total_inner_w), style='italic dim')
+    print_row(formatted_splash.center(total_inner_w), style='italic dim')
 
     subtitle = _build_subtitle(root_dir)
     if len(subtitle) > total_inner_w:
         subtitle = subtitle[: total_inner_w - 3]
         subtitle.append('...', style='dim white')
-    _print_row(_center_text(subtitle, total_inner_w))
+    print_row(_center_text(subtitle, total_inner_w))
 
     # Bottom border
     bot_border = Text('╰' + '─' * (total_inner_w + 2) + '╯', style=BORDER_STYLE)
     console.print(bot_border)
-

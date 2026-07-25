@@ -236,14 +236,22 @@ def _configure_agents() -> None:
 def _configure_global_command() -> None:
     _box(
         'Global Executable Setup',
-        'Optionally installs the "podarcis" CLI executable into ~/.local/bin/podarcis '
+        'Optionally installs the "podarcis" CLI executable into ~/.local/bin '
         'allowing you to run status, config, test, and lint commands directly from any shell prompt.',
     )
-    ans = _select('Install "podarcis" command globally in ~/.local/bin?', ['yes', 'no'], default='yes')
+    ans = _select('Install command globally in ~/.local/bin?', ['yes', 'no'], default='yes')
     if ans == 'yes':
+        import questionary
+        name = questionary.text(
+            'Command name (Enter for "podarcis"):',
+            default='podarcis',
+            style=questionary.Style(QSTYLE),
+        ).ask()
+        if not name:
+            name = 'podarcis'
         local_bin = Path.home() / '.local' / 'bin'
         local_bin.mkdir(parents=True, exist_ok=True)
-        symlink_target = local_bin / 'podarcis'
+        symlink_target = local_bin / name
         source_target = root / 'podarcis'
         try:
             if symlink_target.is_symlink() or symlink_target.exists():
