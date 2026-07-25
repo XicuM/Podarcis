@@ -27,20 +27,20 @@ graph TD
 
 ```text
 ├── .agents/              # Agent scripts, tools, and execution packages (skills)
-│   ├── mcp/              # MCP servers (wiki, research, gdrive, finance, menumaker)
+│   ├── mcp/              # MCP servers (wiki, research, gdrive, finance, menumaker-mcp)
 │   └── skills/           # Action packages (ingest, fact-check, harness, build-protocol, ...)
-├── tui/                  # Python TUI package: setup, config, repo sync, and banner utilities
+├── .podarcis/            # Core Podarcis engine: install, config, repo sync, and console UI
 ├── wiki/                 # Decoupled Repository: Synthesized, objective knowledge base (anonymized)
-│                         #   → not present by default; cloned during `make setup`
+│                         #   → not present by default; cloned during `make install`
 ├── workspace/            # Decoupled Repository: Personal profile, feedback, active protocols, and reviews
-│                         #   → not present by default; cloned during `make setup`
-├── podarcis.example.yaml # Template for local secrets and configuration (copy → podarcis.yaml)
-├── opencode.json         # MCP server definitions for OpenCode / compatible IDE agents
+│                         #   → not present by default; cloned during `make install`
+├── opencode.json         # Generated MCP server definitions for OpenCode / compatible IDE agents
+
 ├── Makefile              # Developer workflow shortcuts
 └── pyproject.toml        # Python package metadata and pytest configuration
 ```
 
-> **Note:** `wiki/` and `workspace/` are independent git repositories that are not tracked by the main project's git index. They are cloned automatically during `make setup` using the URLs defined in `podarcis.yaml`.
+> **Note:** `wiki/` and `workspace/` are independent git repositories that are not tracked by the main project's git index. They are cloned automatically during `make install` using the URLs defined in `.podarcis/config.yaml`.
 
 ---
 
@@ -48,9 +48,9 @@ graph TD
 
 * **Literature Search**: `research-mcp` queries Semantic Scholar for peer-reviewed publications, abstracts, and citation graphs — the primary tool for evidence discovery.
 * **Direct Google Drive Access**: `google-drive-mcp` provides access to internal team documents, raw data, and pre-prints not indexed in public databases, without staging files in the git repo.
-* **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `finance-mcp`, `google-drive-mcp`, `menumaker`) allow LLMs to search literature, query databases, read drive files, and interact with menus.
+* **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `finance-mcp`, `google-drive-mcp`, `menumaker-mcp`) allow LLMs to search literature, query databases, read drive files, and interact with menus.
 * **Hermetic Repositories**: The `wiki/` and `workspace/` directories are decoupled git repositories to ensure clear boundaries between objective knowledge and private context.
-* **Modular TUI**: The `tui/` Python package provides interactive setup, configuration, and repository management tools, separating bootstrap from day-to-day configuration.
+* **Modular Podarcis Engine**: The `.podarcis/` Python package provides interactive setup, configuration, and repository management tools, separating bootstrap from day-to-day configuration.
 
 ---
 
@@ -63,37 +63,46 @@ cd Podarcis
 ```
 
 ### 2. Run Automated Setup
-Run the bootstrap script (or `make install`) to automatically configure the Python virtual environment, install dependencies, create `podarcis.yaml`, set up Google Drive credentials, and clone the decoupled workspace repositories:
+Run `make install` to automatically configure the Python virtual environment, install dependencies, create `.podarcis/config.yaml`, set up Google Drive credentials, install the `podarcis` CLI tool (and optionally link it to `~/.local/bin`), and clone workspace repositories:
 
 ```bash
 make install
 ```
 
-The script will prompt you to:
-- Enable/disable the **QMD Vector DB** semantic search engine.
-- Select the **Git clone protocol** (`ssh` / `https`) for workspace repositories.
-- Authenticate **Google Drive** access (OAuth flow).
-
-### 3. Configure MCP Servers & Skills (Optional)
-After setup, use the interactive configuration tool to enable/disable individual MCP servers, skills, and repositories:
+### 3. Configure & Use `podarcis` CLI
+After setup, use the `podarcis` CLI tool for agentic and user configuration, testing, and status inspection:
 
 ```bash
-make config
+# View status of MCP servers, skills, agents, and repos (human or JSON format for agents)
+podarcis status
+podarcis status --json
+
+# Non-interactive configuration changes
+podarcis config enable skill harness
+podarcis config disable mcp finance-mcp
+
+# Launch interactive TUI configuration menu
+podarcis config interactive
+
+# Run tests or linting
+podarcis test
+podarcis lint
 ```
 
-### 4. Quick Commands (Makefile)
+### 4. Build & Workflow Commands
 
-| Command       | Description                                           |
-|---------------|-------------------------------------------------------|
-| `make install`| Bootstrap venv, dependencies, config, and clone repos |
-| `make config` | Interactively enable/disable MCP servers and skills   |
-| `make sync`   | Sync (pull/clone) decoupled workspace repositories    |
-| `make test`   | Run test suite across all MCP servers and skills      |
-| `make lint`   | Run link integrity check across wiki markdown files   |
-| `make clean`  | Clean Python build artifacts and cache files          |
+| Command | Description |
+|---|---|
+| `make install` | Bootstrap venv, dependencies, credentials, and `podarcis` CLI |
+| `podarcis status` | Display component, agent, skill, and repository status (`--json` supported) |
+| `podarcis config` | Non-interactive (`enable`/`disable`/`repo`) or interactive (`interactive`) config |
+| `podarcis test` | Run test suite across all MCP servers and skills |
+| `podarcis lint` | Run link integrity check across wiki markdown files |
+| `make clean` | Clean Python build artifacts and cache files |
 
 ### 5. Connect MCP Servers to your Agent / IDE
-The project defines native MCP servers in `opencode.json`. The servers auto-detect the project root (via `AGENTS.md`) and use relative Python paths via `.venv/bin/python`.
+The project automatically generates `opencode.json` defining native MCP servers from `.agents/mcp/` and `.agents/mcp_config.json`. The servers auto-detect the project root (via `AGENTS.md`) and use relative Python paths via `.venv/bin/python`.
+
 
 If using Claude Desktop or another MCP client, reference `.venv/bin/python` and `.agents/mcp/*/server.py`.
 

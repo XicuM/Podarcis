@@ -3,20 +3,26 @@ __pycache__/
 .venv/
 .env
 .env.local
+
+# VSCode
 .vscode/
+
+# Python package metadata
+podarcis.egg-info
 
 # API keys and credentials
 *.secret
 *.secret.yaml
-podarcis.yaml
+.podarcis/config.yaml
 credentials.json
 token.json
 
 # Don't track generated logs
 logs/
 
-# OpenCode runtime sync files
+# OpenCode files
 opencode-sync/
+opencode.json
 
 # Obsidian personal workspace data
 .obsidian/workspace.json
@@ -26,9 +32,9 @@ opencode-sync/
 .obsidian/starred.json
 .obsidian/recent-files.json
 .obsidian/backlink-cache.json
+.claudian
 
 # Workspace
-tmp/
 workspace/
 wiki/
 .qmd/

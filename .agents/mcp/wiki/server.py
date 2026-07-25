@@ -55,10 +55,8 @@ mcp = FastMCP(
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _is_qmd_enabled_in_config() -> bool:
-    """Read engines.qmd from podarcis.yaml or podarcis.example.yaml."""
-    yaml_path = ROOT / "podarcis.yaml"
-    if not yaml_path.exists():
-        yaml_path = ROOT / "podarcis.example.yaml"
+    """Read engines.qmd from .podarcis/config.yaml."""
+    yaml_path = ROOT / ".podarcis" / "config.yaml"
     if yaml_path.exists():
         try:
             import yaml
@@ -79,7 +77,7 @@ def get_qmd_status() -> tuple[Literal["disabled", "enabled_ok", "enabled_broken"
         enabled = _is_qmd_enabled_in_config()
 
     if not enabled:
-        return ("disabled", "QMD engine is disabled in podarcis.yaml.")
+        return ("disabled", "QMD engine is disabled in .podarcis/config.yaml.")
 
     qmd_bin = shutil.which("qmd")
     if not qmd_bin:

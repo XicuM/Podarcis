@@ -64,10 +64,10 @@ def get_credentials():
     from google.oauth2.credentials import Credentials
     creds = None
 
-    # Try podarcis.yaml first
+    # Load from .podarcis/config.yaml
     try:
         import yaml
-        podarcis_path = ROOT / "podarcis.yaml"
+        podarcis_path = ROOT / ".podarcis" / "config.yaml"
         if podarcis_path.exists():
             with open(podarcis_path) as f:
                 pod_data = yaml.safe_load(f) or {}

@@ -44,12 +44,12 @@ ROOT = _find_root()
 _STATE_PATH = ROOT / "workspace" / "state.json"
 _SOURCES_LIT = ROOT / "workspace" / "literature"
 
-# API key (Semantic Scholar) — optional, loaded from podarcis.yaml or environment
+# API key (Semantic Scholar) — optional, loaded from .podarcis/config.yaml or environment
 def _load_api_key(root: Path) -> str:
     key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
     if key:
         return key
-    pod_yaml = root / "podarcis.yaml"
+    pod_yaml = root / ".podarcis" / "config.yaml"
     if pod_yaml.exists():
         try:
             import yaml

@@ -9,7 +9,7 @@ A collection of four MCP servers that provide domain-specific tools and resource
 | **finance-mcp** | Investment calculations and expense tracking | `finance/server.py` |
 | **wiki-mcp** | Knowledge base query and linting | `wiki/server.py` |
 | **research-mcp** | Academic literature discovery and ingestion | `research/server.py` |
-| **menumaker** | Nutritional optimization and menu pricing | `menumaker/server.py` |
+| **menumaker-mcp** | Nutritional optimization and menu pricing | `menumaker/server.py` |
 
 ## Installation
 
@@ -47,7 +47,7 @@ Add the following to your MCP host configuration (e.g., `~/.config/claude/claude
         "SEMANTIC_SCHOLAR_API_KEY": "optional-api-key"
       }
     },
-    "menumaker": {
+    "menumaker-mcp": {
       "command": "/absolute/path/to/.venv/bin/python",
       "args": ["/absolute/path/to/.agents/mcp/menumaker/server.py"]
     }
@@ -92,7 +92,7 @@ Add the following to your MCP host configuration (e.g., `~/.config/claude/claude
 - `research://state` - Live contents of the ingestion queue.
 - `research://sources/index` - Live contents of the sources catalogue.
 
-### menumaker
+### menumaker-mcp
 
 **Tools**
 - `get_intake_targets` - Compute daily nutrient intake targets.

@@ -1,28 +1,45 @@
 import os
 import re
 import sys
+import yaml
+
+def strip_code_blocks(content):
+    # Strip fenced code blocks
+    content = re.sub(r'```[\s\S]*?```', '', content)
+    # Strip inline code spans
+    content = re.sub(r'`[^`\n]+`', '', content)
+    return content
 
 def find_markdown_links(content):
     # Standard markdown links [text](link)
     # Ignores external links, mailto, and anchors
     return re.findall(r'\[[^\]]+\]\(([^)]+)\)', content)
 
-def check_footnotes(content):
-    # Find all footnote references [^1]
-    refs = re.findall(r'\[\^([a-zA-Z0-9]+)\](?!:)', content)
-    # Find all footnote definitions [^1]:
-    defs = re.findall(r'\[\^([a-zA-Z0-9]+)\]:', content)
+def check_footnotes(content, sources_ids=None):
+    # Find all footnote definitions [^id]: starting at beginning of line
+    defs = re.findall(r'^\s*\[\^([a-zA-Z0-9_-]+)\]:', content, re.MULTILINE)
+    
+    # Strip footnote definition lines before searching for references
+    content_no_defs = re.sub(r'^\s*\[\^([a-zA-Z0-9_-]+)\]:.*$', '', content, flags=re.MULTILINE)
+    refs = re.findall(r'\[\^([a-zA-Z0-9_-]+)\]', content_no_defs)
     
     missing_defs = [r for r in refs if r not in defs]
     unused_defs = [d for d in defs if d not in refs]
     
-    return missing_defs, unused_defs
+    unmatched_sources = []
+    if sources_ids is not None:
+        for ref in refs:
+            if ref not in sources_ids and ref not in defs:
+                unmatched_sources.append(ref)
+                
+    return missing_defs, unused_defs, unmatched_sources
 
 def check_file(filepath):
     results = {
         "broken_links": [],
         "missing_footnotes": [],
         "unused_footnotes": [],
+        "unmatched_sources": [],
         "missing_frontmatter": [],
         "word_count": 0
     }
@@ -33,8 +50,46 @@ def check_file(filepath):
     except Exception as e:
         return {"error": str(e)}
     
+    content_no_code = strip_code_blocks(content)
+
+    # Check Frontmatter (OKF v0.2)
+    parts = os.path.normpath(filepath).split(os.sep)
+    is_wiki_or_workspace = 'wiki' in parts or 'workspace' in parts or 'user' in parts
+    filename = os.path.basename(filepath)
+    sources_ids = []
+
+    if filename not in ['index.md', '_index.md'] and is_wiki_or_workspace:
+        fm_match = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+        if not fm_match:
+            results["missing_frontmatter"].append("Entire YAML frontmatter block is missing")
+        else:
+            fm_text = fm_match.group(1)
+            try:
+                fm_data = yaml.safe_load(fm_text) or {}
+            except Exception as ye:
+                fm_data = {}
+                results["missing_frontmatter"].append(f"Invalid YAML frontmatter: {str(ye)}")
+
+            missing = []
+            if "type" not in fm_data:
+                missing.append("type")
+            if "category" not in fm_data:
+                missing.append("category")
+            if "rationale" not in fm_data:
+                missing.append("rationale")
+
+            if missing:
+                results["missing_frontmatter"].append(f"Missing required fields: {', '.join(missing)}")
+
+            # Extract source IDs
+            sources = fm_data.get("sources", [])
+            if isinstance(sources, list):
+                for src in sources:
+                    if isinstance(src, dict) and "id" in src:
+                        sources_ids.append(str(src["id"]))
+
     # Check Links
-    links = find_markdown_links(content)
+    links = find_markdown_links(content_no_code)
     for link in links:
         if link.startswith(('http://', 'https://', '#', 'mailto:', 'gdrive:')):
             continue
@@ -51,33 +106,10 @@ def check_file(filepath):
             results["broken_links"].append((link, target_path))
             
     # Check Footnotes
-    missing, unused = check_footnotes(content)
+    missing, unused, unmatched = check_footnotes(content_no_code, sources_ids)
     results["missing_footnotes"] = missing
     results["unused_footnotes"] = unused
-    
-    # Check Frontmatter
-    parts = os.path.normpath(filepath).split(os.sep)
-    is_wiki_or_workspace = 'wiki' in parts or 'workspace' in parts or 'user' in parts
-    if os.path.basename(filepath) != '_index.md' and is_wiki_or_workspace:
-        fm_match = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
-        if not fm_match:
-            results["missing_frontmatter"].append("Entire YAML frontmatter block is missing")
-        else:
-            fm_text = fm_match.group(1)
-            has_category = re.search(r'^category\s*:', fm_text, re.MULTILINE)
-            has_related = re.search(r'^related\s*:', fm_text, re.MULTILINE)
-            has_rationale = re.search(r'^rationale\s*:', fm_text, re.MULTILINE)
-            
-            missing = []
-            if not has_category:
-                missing.append("category")
-            if not has_related:
-                missing.append("related")
-            if not has_rationale:
-                missing.append("rationale")
-                
-            if missing:
-                results["missing_frontmatter"].append(f"Missing required fields: {', '.join(missing)}")
+    results["unmatched_sources"] = unmatched
     
     # Check Word Count
     results["word_count"] = len(content.split())
@@ -93,9 +125,9 @@ def run_audit(root_dir):
         # Check for directory bloat in wiki or workspace folder
         parts = os.path.normpath(root).split(os.sep)
         if 'wiki' in parts or 'workspace' in parts:
-            # Count immediate children, excluding _index.md and hidden files/dirs
+            # Count immediate children, excluding index.md / _index.md and hidden files
             items = [d for d in dirs if not d.startswith('.') and d != '__pycache__'] + \
-                    [f for f in files if not f.startswith('.') and f != '_index.md' and not f.endswith('.pyc')]
+                    [f for f in files if not f.startswith('.') and f not in ['index.md', '_index.md'] and not f.endswith('.pyc')]
             if len(items) > 15:
                 all_results[root] = {"bloated_directory": len(items)}
 
@@ -105,7 +137,7 @@ def run_audit(root_dir):
                 res = check_file(path)
                 
                 has_issues = False
-                if res.get("broken_links") or res.get("missing_footnotes") or res.get("unused_footnotes") or res.get("missing_frontmatter"):
+                if res.get("broken_links") or res.get("missing_footnotes") or res.get("unused_footnotes") or res.get("missing_frontmatter") or res.get("unmatched_sources"):
                     has_issues = True
                     
                 parts = os.path.normpath(path).split(os.sep)
@@ -114,12 +146,12 @@ def run_audit(root_dir):
                         has_issues = True
                 
                 if has_issues:
-                    # Merge with existing directory check results if any
                     if path in all_results:
                         all_results[path].update(res)
                     else:
                         all_results[path] = res
     return all_results
+
 
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "."
@@ -130,7 +162,6 @@ if __name__ == "__main__":
         print("Audit passed: No issues found.")
     else:
         for path, res in audit_results.items():
-            # Check if there are actual issues to report for this file
             has_issues = False
             issues = []
             
@@ -155,6 +186,10 @@ if __name__ == "__main__":
                 
             if res.get("unused_footnotes"):
                 issues.append(f"Unused Footnote Definitions: {', '.join(res['unused_footnotes'])}")
+                has_issues = True
+
+            if res.get("unmatched_sources"):
+                issues.append(f"Unmatched Footnote Sources: {', '.join(res['unmatched_sources'])}")
                 has_issues = True
                 
             if res.get("missing_frontmatter"):

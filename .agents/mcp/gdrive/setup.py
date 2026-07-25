@@ -1,45 +1,36 @@
 '''Google Drive OAuth and Service Account authentication helper.'''
 
+import sys
 from pathlib import Path
-from tui.common import load_yaml, save_yaml
-from tui.console import HAS_RICH, console
-
-if HAS_RICH:
-    from rich.panel import Panel
-
-# Public OAuth client_id for installed app flow (no secret needed with PKCE).
-# Replace with your own if this one is revoked:
-#   Google Cloud Console → APIs & Services → Credentials → Create OAuth client ID
-#   Application type: "Desktop app"
-DEFAULT_CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com'
-DEFAULT_CLIENT_CONFIG = {
-    'installed': {
-        'client_id': DEFAULT_CLIENT_ID,
-        'project_id': 'pavilion-496615',
-        'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
-        'token_uri': 'https://oauth2.googleapis.com/token',
-        'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs',
-        'client_secret': 'YOUR_CLIENT_SECRET',
-        'redirect_uris': ['http://localhost'],
-    }
-}
-
 
 def setup_google_drive(root: Path) -> bool:
     '''Guide user through Google Drive OAuth or Service Account setup.
     Returns True on success, False if skipped or failed.'''
-    if not HAS_RICH:
-        console.print('[yellow]⚠️ Cannot start Google Drive OAuth helper.[/yellow]')
-        return False
 
     import questionary
+    from rich.panel import Panel
+    from common import load_yaml, save_yaml
+    from console import console
 
-    gdrive_dir = root / '.agents' / 'mcp' / 'gdrive'
-    service_account_path = gdrive_dir / 'service_account.json'
-    token_path = gdrive_dir / 'token.json'
+    DEFAULT_CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com'
+    DEFAULT_CLIENT_CONFIG = {
+        'installed': {
+            'client_id': DEFAULT_CLIENT_ID,
+            'project_id': 'pavilion-496615',
+            'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+            'token_uri': 'https://oauth2.googleapis.com/token',
+            'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs',
+            'client_secret': 'YOUR_CLIENT_SECRET',
+            'redirect_uris': ['http://localhost'],
+        }
+    }
+
+    gdrive_dir = root/'.agents'/'mcp'/'gdrive'
+    service_account_path = gdrive_dir/'service_account.json'
+    token_path = gdrive_dir/'token.json'
 
     style = questionary.Style([
-        ('qmark', 'fg:#29b8db bold'),
+        ('qmark', 'fg:#e5c07b bold'),
         ('question', 'bold white'),
         ('answer', 'fg:#29b8db bold'),
         ('pointer', 'fg:#29b8db bold'),
@@ -47,21 +38,23 @@ def setup_google_drive(root: Path) -> bool:
         ('selected', 'noinherit fg:white'),
     ])
 
-    console.print('\n')
-    console.print(Panel.fit(
-        '[bold #29b8db]Google Drive MCP Credentials[/bold #29b8db]',
+    console.print(Panel(
+        'Configures Google Drive access for reading team documents, spreadsheets,\n'
+        'and pre-prints directly into Podarcis. Supports OAuth web authorization\n'
+        'or headless Service Accounts.',
+        title='[bold cyan]google-drive-mcp[/bold cyan] [bold white]configuration[/bold white]',
         border_style='#29b8db',
+        width=76,
+        expand=False,
     ))
-    console.print('Configure read-only Google Drive access.\n')
 
     if token_path.exists():
         console.print('[bold green]✓ Existing OAuth token.json detected.[/bold green]')
         choice = questionary.select(
-            'Re-authenticate?', choices=['no', 'yes'], default='no',
-            style=style,
+            'Re-authenticate?', choices=['no', 'yes'], default='no', style=style,
         ).ask()
         if choice == 'no':
-            console.print('[green]Keeping current credentials.[/green]')
+            console.print('[green]Keeping current credentials.[/green]\n')
             return True
 
     choice = questionary.select(
@@ -109,7 +102,7 @@ def setup_google_drive(root: Path) -> bool:
 
     if questionary.select(
         'Open browser to authenticate?',
-        choices=['no', 'yes'], default='yes', style=style,
+        choices=['no', 'yes'], default='yes', qmark='google-drive-mcp /', style=style,
     ).ask() != 'yes':
         console.print('[yellow]Authentication canceled.[/yellow]')
         return False
@@ -133,12 +126,12 @@ def setup_google_drive(root: Path) -> bool:
         token_data = creds.to_json()
         token_path.write_text(token_data, encoding='utf-8')
 
-        yaml_path = root / 'podarcis.yaml'
+        yaml_path = root / '.podarcis' / 'config.yaml'
         data = load_yaml(yaml_path) if yaml_path.exists() else {}
         data.setdefault('gdrive', {})['token'] = token_data
         save_yaml(yaml_path, data)
 
-        console.print('[bold green]✓ Token saved to podarcis.yaml.[/bold green]')
+        console.print('[bold green]✓ Token saved to .podarcis/config.yaml.[/bold green]')
         return True
     except Exception as e:
         console.print(f'[bold red]OAuth flow failed: {e}[/bold red]')

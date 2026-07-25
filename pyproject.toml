@@ -1,15 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "podarcis"
+version = "1.1.0"
+description = "Podarcis Open Knowledge Format (OKF v0.2) research agent engine and CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+podarcis = "podarcis.cli:main"
+
+[tool.setuptools.package-dir]
+podarcis = ".podarcis"
+
 [tool.pytest.ini_options]
 testpaths = [
     ".agents/mcp",
     ".agents/skills",
-    "tui/tests"
+    ".podarcis/tests"
 ]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
 pythonpath = [
     ".",
+    ".podarcis",
     ".agents/mcp/wiki",
     ".agents/mcp/finance",
     ".agents/mcp/research",
     ".agents/skills/harness/scripts"
 ]
+

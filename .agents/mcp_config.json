@@ -29,14 +29,13 @@
         "SEMANTIC_SCHOLAR_API_KEY": "REDACTED"
       }
     },
-    "menumaker": {
-      "command": "../menumaker-mcp/.venv/bin/python",
+    "menumaker-mcp": {
+      "command": ".venv/bin/python",
       "args": [
-        "-m",
-        "menumaker.server"
+        ".agents/mcp/menumaker/server.py"
       ],
       "env": {
-        "MENUMAKER_DATA_DIR": "../menumaker-mcp/.agents/mcp/data"
+        "PROJECT_ROOT": "."
       },
       "disabled": true
     },

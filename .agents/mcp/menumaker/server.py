@@ -44,7 +44,7 @@ def _default_paths() -> tuple[str, str, str]:
     return food, prices, recs
 
 
-server = Server("menumaker")
+server = Server("menumaker-mcp")
 
 
 @server.list_tools()

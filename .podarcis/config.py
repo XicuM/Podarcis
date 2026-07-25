@@ -5,10 +5,13 @@ import sys
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
+podarcis_dir = Path(__file__).resolve().parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
+if str(podarcis_dir) not in sys.path:
+    sys.path.insert(0, str(podarcis_dir))
 
-from tui.interactive import interactive_config
+from interactive import interactive_config
 
 
 def main() -> None:
