@@ -107,7 +107,7 @@ async def _native_search(
 
     rg_bin = shutil.which("rg")
     if rg_bin:
-        cmd = [rg_bin, "-i", "-n", "-C", "1", "--no-heading", query] + [str(d) for d in search_dirs]
+        cmd = [rg_bin, "-i", "-n", "-C", "1", "--no-heading", "--fixed-strings", query] + [str(d) for d in search_dirs]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -239,7 +239,8 @@ async def wiki_search(
         return warning + native_res
 
 
-@mcp.tool()
+# wiki_vsearch: deprecated — use wiki_search(method='semantic') instead.
+# Kept as an internal helper; NOT registered as an MCP tool.
 async def wiki_vsearch(
     query: Annotated[str, "Natural-language semantic query"],
     n: Annotated[int, "Number of results to return (default 5)"] = 5,
@@ -248,11 +249,12 @@ async def wiki_vsearch(
         "Restrict to a specific collection (default: all)",
     ] = "all",
 ) -> str:
-    """Semantic (vector) search (deprecated: use wiki_search with method='semantic' instead)."""
+    """Deprecated internal helper — use wiki_search with method='semantic' instead."""
     return await wiki_search(query, collection=collection, method="semantic", limit=n)
 
 
-@mcp.tool()
+# wiki_query: deprecated — use wiki_search(method='hybrid') instead.
+# Kept as an internal helper; NOT registered as an MCP tool.
 async def wiki_query(
     query: Annotated[str, "Query string — hybrid BM25 + vector + LLM re-ranking"],
     collection: Annotated[
@@ -261,7 +263,7 @@ async def wiki_query(
     ] = "all",
     min_score: Annotated[float, "Minimum relevance score threshold (0–1, default 0.0)"] = 0.0,
 ) -> str:
-    """Best-quality hybrid search (deprecated: use wiki_search with method='hybrid' instead)."""
+    """Deprecated internal helper — use wiki_search with method='hybrid' instead."""
     return await wiki_search(query, collection=collection, method="hybrid", min_score=min_score)
 
 
@@ -363,7 +365,21 @@ async def complete_source_synthesis(
         return f"Error writing wiki file: {e}"
 
     # 4. Update state.json (mark queue item status as 'done')
-    state_path = ROOT / "state.json"
+    # Resolve the same backend-aware path that research-mcp uses.
+    pod_yaml = ROOT / ".podarcis" / "config.yaml"
+    sources_backend = "gdrive"
+    if pod_yaml.exists():
+        try:
+            import yaml
+            _cfg = yaml.safe_load(pod_yaml.read_text(encoding="utf-8")) or {}
+            sources_backend = _cfg.get("sources_backend", "gdrive")
+        except Exception:
+            pass
+    state_path = (
+        ROOT / "sources" / "state.json"
+        if sources_backend == "local"
+        else ROOT / "workspace" / "state.json"
+    )
     queue_updated = False
     if state_path.exists():
         try:

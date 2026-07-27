@@ -1,6 +1,9 @@
 ---
 name: menumaker
 description: Computes science-based, cost-optimized healthy menus using USDA food data and linear programming. Use this to design nutritional protocols or investigate food properties.
+disable-model-invocation: true
+user-invocable: false
+disabled: true
 ---
 
 # Menumaker Skill — Nutritional Reasoning & Menu Design

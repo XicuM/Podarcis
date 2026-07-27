@@ -1,4 +1,4 @@
-.PHONY: install clean help
+.PHONY: install uninstall clean help
 
 PYTHON ?= python3
 
@@ -7,6 +7,9 @@ help: ## Show available Makefile targets
 
 install: ## Bootstrap virtual environment, dependencies, credentials, and CLI
 	@$(PYTHON) .podarcis/install.py
+
+uninstall: ## Remove symlink, venv, and build artefacts created by install
+	@$(PYTHON) .podarcis/uninstall.py
 
 clean: ## Clean Python build artifacts and cache files
 	find . -type d -name "__pycache__" -exec rm -rf {} +

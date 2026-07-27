@@ -3,6 +3,17 @@
 import shutil
 from pathlib import Path
 
+
+def setup_research(root: Path) -> bool:
+    '''Entry-point called by run_mcp_setup: ask all config questions first,
+    then let the caller install dependencies.  Returns True on success.'''
+    # 1. Credential / API-key configuration
+    cred_ok = setup_research_credentials(root)
+    # 2. Optional QMD vector-DB engine toggle
+    setup_qmd(root)
+    return cred_ok
+
+
 def setup_qmd(root: Path) -> bool:
     '''Interactive setup for QMD Vector DB Search Engine in .podarcis/config.yaml.'''
     import questionary

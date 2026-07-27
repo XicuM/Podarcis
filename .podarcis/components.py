@@ -89,8 +89,23 @@ def get_mcp_desc(root_dir: Path, dir_name: str, key: str = '') -> str:
 
 
 def run_mcp_setup(root: Path, name: str) -> bool:
-    '''Dynamically load and run setup.py for an MCP server if present.'''
-    dir_name = _server_name_map(root).get(name, name)
+    '''Dynamically load and run setup.py for an MCP server if present.
+
+    Resolution order (first match wins):
+      1. setup_{dir_name}   – canonical entry-point; orchestrates all config
+                              questions for that server in one place.
+      2. setup_{key}        – alternate name derived from the MCP registry key.
+      3. Legacy names       – setup_wiki, setup_research_credentials,
+                              setup_google_drive (kept for backwards compat).
+
+    The function is responsible only for *configuration* (prompts, writing
+    credentials/config.yaml).  Dependency installation is always performed
+    afterwards by the caller (set_mcp_server_status / _configure_mcp_servers).
+    '''
+    smap = _server_name_map(root)
+    # smap is dir_name → key; build inverse (key → dir_name) to resolve path from key
+    inv_smap = {v: k for k, v in smap.items()}
+    dir_name = inv_smap.get(name) or smap.get(name) or name
     if not (setup_script := MCPS(root)/dir_name/'setup.py').exists(): return True
 
     import importlib.util
@@ -98,8 +113,13 @@ def run_mcp_setup(root: Path, name: str) -> bool:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
+    key_name = name.replace('-', '_')
     setup_fn = (
+        # 1. Canonical entry-point: setup_<dir_name>
         getattr(mod, f'setup_{dir_name.replace("-", "_")}', None) or
+        # 2. Alternate name derived from registry key
+        getattr(mod, f'setup_{key_name}', None) or
+        # 3. Legacy / explicitly-named helpers (backwards compat)
         getattr(mod, 'setup_wiki', None) or
         getattr(mod, 'setup_research_credentials', None) or
         getattr(mod, 'setup_google_drive', None)
@@ -330,124 +350,45 @@ def discover_components(root: Path) -> tuple[dict, dict]:
 
 
 def generate_opencode_json(root: Path) -> Path:
-    '''Dynamically generate opencode.json, non-destructively merging discovered MCP servers with existing configuration.'''
-    opencode_path = root / 'opencode.json'
-    mcp_dir = root / '.agents' / 'mcp'
-    smap = _server_name_map(root)
-    mcp_cfg_path = root / '.agents' / 'mcp_config.json'
-    mcp_cfg_data = load_json(mcp_cfg_path)
-    mcp_servers_cfg = mcp_cfg_data.get('mcpServers', {})
-
-    existing_data = load_json(opencode_path)
-    if not existing_data:
-        existing_data = {'$schema': 'https://opencode.ai/config.json'}
-
-    existing_mcp = existing_data.get('mcp', {})
-    managed_mcp = {}
-
-    if mcp_dir.exists():
-        for d in sorted(mcp_dir.iterdir()):
-            if d.is_dir() and (d / 'server.py').exists():
-                dir_name = d.name
-                key = smap.get(dir_name, f'{dir_name}-mcp')
-                server_script = f'.agents/mcp/{dir_name}/server.py'
-                cur_server_cfg = existing_mcp.get(key, {})
-
-                # Determine enabled state
-                if key in mcp_servers_cfg and 'disabled' in mcp_servers_cfg[key]:
-                    enabled = not mcp_servers_cfg[key]['disabled']
-                elif dir_name in mcp_servers_cfg and 'disabled' in mcp_servers_cfg[dir_name]:
-                    enabled = not mcp_servers_cfg[dir_name]['disabled']
-                elif 'enabled' in cur_server_cfg:
-                    enabled = cur_server_cfg['enabled']
-                else:
-                    enabled = True
-
-                # Determine environment dict (preserve existing env keys + add/update mcp_config env)
-                env = cur_server_cfg.get('environment', {}).copy()
-                if key in mcp_servers_cfg:
-                    cfg_env = mcp_servers_cfg[key].get('env', {})
-                    for k, v in cfg_env.items():
-                        if k != 'PROJECT_ROOT':
-                            env[k] = v
-
-                if key == 'research-mcp' and 'SEMANTIC_SCHOLAR_API_KEY' not in env:
-                    env['SEMANTIC_SCHOLAR_API_KEY'] = ''
-
-                venv_python = str(root/'.venv'/('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python'))
-                server_entry = cur_server_cfg.copy()
-                server_entry.update({
-                    'type': 'local',
-                    'command': [venv_python, server_script],
-                    'environment': env,
-                    'enabled': enabled
-                })
-                managed_mcp[key] = server_entry
-
-    final_mcp = existing_mcp.copy()
-    final_mcp.update(managed_mcp)
-
-    existing_data['mcp'] = final_mcp
-    save_json(opencode_path, existing_data)
-    return opencode_path
+    '''Dynamically generate opencode.json. Delegates to backends adapter.'''
+    from backends import generate_for_backend
+    result = generate_for_backend(root, 'opencode')
+    return result or root / 'opencode.json'
 
 
 
 def get_enabled_mcp_servers(root: Path) -> set[str]:
-    '''Retrieve set of active MCP server identifiers from configuration files.'''
-    opencode_path = root / 'opencode.json'
-    if not opencode_path.exists():
-        generate_opencode_json(root)
+    '''Retrieve set of active MCP server identifiers from the active backend's config.'''
+    from common import get_config_value
+    from backends import read_enabled
 
-    enabled = set()
-    data = load_json(opencode_path)
-    mcp_data = data.get('mcp', {})
+    backend = get_config_value(root, 'backend', default='opencode')
+    enabled_map = read_enabled(root, backend)
+
     smap = _server_name_map(root)
-    for key, cfg in mcp_data.items():
-        if cfg.get('enabled', True):
+    enabled = set()
+    for key, is_on in enabled_map.items():
+        if is_on:
             enabled.add(key)
             for dir_name, mapped in smap.items():
-                if mapped == key: enabled.add(dir_name)
-                elif dir_name == key: enabled.add(mapped)
-
-    mcp_cfg_path = root / '.agents' / 'mcp_config.json'
-    if mcp_cfg_path.exists():
-        mcp_cfg_data = load_json(mcp_cfg_path)
-        mcp_servers = mcp_cfg_data.get('mcpServers', {})
-        for key, cfg in mcp_servers.items():
-            if cfg.get('disabled', False):
-                enabled.discard(key)
-                for dir_name, mapped in smap.items():
-                    if mapped == key:
-                        enabled.discard(dir_name)
-                    elif dir_name == key:
-                        enabled.discard(mapped)
+                if mapped == key:
+                    enabled.add(dir_name)
+                elif dir_name == key:
+                    enabled.add(mapped)
     return enabled
 
 
 def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: dict) -> None:
-    '''Persist enabled state for specified MCP server across config files.'''
-    dir_name = mcp_info['dir_name']
-    server_script = f'.agents/mcp/{dir_name}/server.py'
+    '''Persist enabled state for specified MCP server in the active backend's config.'''
+    from common import get_config_value
+    from backends import write_enabled, generate_for_backend
 
-    mcp_cfg_path = root / '.agents' / 'mcp_config.json'
-    mcp_cfg_data = load_json(mcp_cfg_path)
-    if 'mcpServers' not in mcp_cfg_data:
-        mcp_cfg_data['mcpServers'] = {}
+    # Write enable/disable to the ACTIVE backend's native config
+    backend = get_config_value(root, 'backend', default='opencode')
+    write_enabled(root, backend, server_key, enable)
 
-    venv_python = str(root/'.venv'/('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python'))
-    for k in (server_key, dir_name):
-        if k in mcp_cfg_data['mcpServers']:
-            if not enable: mcp_cfg_data['mcpServers'][k]['disabled'] = True
-            else: mcp_cfg_data['mcpServers'][k].pop('disabled', None)
-        elif enable and k == server_key:
-            mcp_cfg_data['mcpServers'][server_key] = {
-                'command': venv_python,
-                'args': [server_script],
-                'env': {'PROJECT_ROOT': str(root)}
-            }
-    save_json(mcp_cfg_path, mcp_cfg_data)
-    generate_opencode_json(root)
+    # Regenerate the active backend's config file
+    generate_for_backend(root, backend)
 
     if enable and mcp_info.get('req'):
         install_deps(root, str(mcp_info['req']), True, f'Verifying deps for {server_key}...')
@@ -510,4 +451,14 @@ def set_agent_status(root: Path, agent_name: str, enable: bool, agent_info: dict
             content = f'---\n{"\n".join(new_fm)}\n---\n\n{body}'
 
     agent_file.write_text(content, encoding='utf-8')
+
+
+def sync_all_backends(root: Path) -> dict[str, Path | None]:
+    '''Regenerate MCP config for ALL supported backends from canonical definitions.
+
+    Each backend's config is regenerated using its own enable/disable state.
+    Returns {backend_name: path_written} for each backend.
+    '''
+    from backends import generate_all
+    return generate_all(root)
 

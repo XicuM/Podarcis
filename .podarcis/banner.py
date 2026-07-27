@@ -26,7 +26,7 @@ def _center_text(t: Text, width: int) -> Text:
 
 
 _FRONTEND_DISPLAY = {'vscode': 'VSCode', 'obsidian': 'Obsidian'}
-_BACKEND_DISPLAY = {'opencode': 'OpenCode', 'codex': 'Codex', 'agy': 'Agy', 'claude': 'Claude'}
+_BACKEND_DISPLAY = {'opencode': 'OpenCode', 'codex': 'Codex', 'agy': 'Agy', 'claude': 'Claude', 'openclaw': 'OpenClaw', 'hermes': 'Hermes'}
 
 
 def _build_subtitle(root_dir: Path) -> Text:

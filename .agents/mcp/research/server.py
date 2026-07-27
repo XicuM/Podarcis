@@ -83,7 +83,7 @@ def _load_api_key(root: Path) -> str:
 
 _API_KEY: str = _load_api_key(ROOT)
 
-# Allowed outbound domains (runtime_gate policy inlined)
+# Allowed outbound domains (runtime_gate policy)
 _ALLOWED_DOMAINS = {
     "api.semanticscholar.org",
     "export.arxiv.org",
@@ -100,9 +100,12 @@ _ALLOWED_DOMAINS = {
 mcp = FastMCP(
     "research-mcp",
     instructions=(
-        "Literature discovery and ingestion server. Use search_literature to find papers, "
-        "download_paper to fetch + extract + enqueue them, and queue_* tools to manage "
-        "the ingestion queue in sources/state.json."
+        "Literature discovery and ingestion server. "
+        "Use search_literature to find papers across multiple academic providers. "
+        "Use download_paper to fetch, extract, and enqueue them (PDF → raw.md → metadata.md). "
+        "Use queue_* tools to inspect and manage the ingestion queue. "
+        "The queue state file location depends on sources_backend in .podarcis/config.yaml: "
+        "'gdrive' → workspace/state.json, 'local' → sources/state.json."
     ),
 )
 
@@ -113,7 +116,7 @@ _state_lock = asyncio.Lock()
 
 def _make_client(**kwargs) -> httpx.AsyncClient:
     """Return a configured async httpx client with retries and a shared UA header."""
-    transport = httpx.AsyncHTTPTransport(retries=3, verify=False)  # noqa: S501
+    transport = httpx.AsyncHTTPTransport(retries=3)
     headers = {"User-Agent": "Mozilla/5.0 (agentic-wiki research-mcp/1.0)"}
     if _API_KEY:
         headers["x-api-key"] = _API_KEY
@@ -121,8 +124,14 @@ def _make_client(**kwargs) -> httpx.AsyncClient:
 
 
 def _check_domain(url: str) -> None:
-    """Domain checking disabled per user request."""
-    pass
+    """Enforce the outbound domain allow-list. Raises ValueError for disallowed hosts."""
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or ""
+    if not any(host == d or host.endswith("." + d) for d in _ALLOWED_DOMAINS):
+        raise ValueError(
+            f"Outbound request to '{host}' is blocked. "
+            f"Allowed domains: {sorted(_ALLOWED_DOMAINS)}"
+        )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Metadata dataclass
@@ -345,7 +354,21 @@ async def _fetch_google_books(volume_id: str) -> PaperMetadata | None:
 
 
 async def _fetch_unpaywall_pdf(doi: str) -> str | None:
-    url = f"https://api.unpaywall.org/v2/{doi}?email=xicu.research.agent@gmail.com"
+    contact_email = os.environ.get("UNPAYWALL_EMAIL", "")
+    if not contact_email:
+        # Fallback: read from .podarcis/config.yaml
+        pod_yaml = ROOT / ".podarcis" / "config.yaml"
+        if pod_yaml.exists():
+            try:
+                import yaml
+                with open(pod_yaml, "r", encoding="utf-8") as _f:
+                    _cfg = yaml.safe_load(_f) or {}
+                contact_email = (_cfg.get("apis") or {}).get("unpaywall_email", "")
+            except Exception:
+                pass
+    if not contact_email:
+        return None  # Unpaywall requires a valid contact email
+    url = f"https://api.unpaywall.org/v2/{doi}?email={contact_email}"
     _check_domain(url)
     async with _make_client() as client:
         try:
@@ -701,17 +724,21 @@ async def download_paper(
     paper_id: Annotated[
         str,
         "Paper identifier. Accepted formats: "
-        "'openalex:<W...>', 'pmid:<id>', 'googlebooks:<id>', 'arXiv:<id>', "
-        "'local:<path>', or a raw Semantic Scholar paper hash.",
+        "'openalex:<W…>', 'pmid:<id>', 'pmcid:<id>', 'googlebooks:<id>', 'arXiv:<id>', "
+        "'DOI:<10.xxx/yyy>', 'https://doi.org/…', 'https://arxiv.org/abs/…', "
+        "'https://pubmed.ncbi.nlm.nih.gov/<id>/', 'https://openalex.org/W…', "
+        "'local:</absolute/path/to/file.pdf>', or a raw 40-char Semantic Scholar hash. "
+        "Plain text titles or keywords are also accepted and will trigger an automatic search.",
     ],
     filename_base: Annotated[
         str,
         "snake_case base name for the output directory (e.g. 'smith_2023_protein_synthesis'). "
-        "Must not contain slashes or dots.",
+        "Must not contain slashes, backslashes, or dots.",
     ],
     domain: Annotated[
         str,
-        "Subdomain folder under sources/literature/ (e.g. 'nutrition', 'sleep', 'finance').",
+        "Subdomain folder under sources/literature/ (e.g. 'nutrition', 'sleep', 'finance'). "
+        "Use a short lowercase identifier consistent with existing wiki categories.",
     ],
 ) -> dict:
     """Download and ingest an academic paper into the sources/ directory structure.

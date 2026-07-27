@@ -9,8 +9,8 @@ import sys
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
-BACKENDS = {'opencode': 'opencode', 'codex': 'codex', 'agy': 'agy', 'claude': 'claude'}
-FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian'}
+BACKENDS = {'opencode': 'opencode', 'codex': 'codex', 'agy': 'agy', 'claude': 'claude', 'openclaw': 'openclaw', 'hermes': 'hermes', 'none': None}
+FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'none': None}
 
 # Ensure root and .podarcis directories are in sys.path
 root_dir = Path(__file__).resolve().parent.parent
@@ -28,6 +28,7 @@ from components import (
     set_mcp_server_status,
     set_skill_status,
     set_agent_status,
+    sync_all_backends,
 )
 
 from repos import get_repo_names, get_repo_url, set_repo_url
@@ -119,6 +120,12 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_config_enable(args: argparse.Namespace) -> int:
     '''Enable a component (mcp, skill, agent).'''
+    backend = get_config_value(root_dir, 'backend', default='none')
+    if backend == 'none':
+        console.print(
+            '[bold yellow]Warning:[/bold yellow] No backend selected — MCP config changes will have no effect.\n'
+            'Change it with: [bold]podarcis config backend <name>[/bold] or [bold]podarcis config interactive[/bold]'
+        )
     ctype = args.type.lower()
     name = args.name
     mcp_servers, skills, agents = discover_components(root_dir)
@@ -153,6 +160,12 @@ def cmd_config_enable(args: argparse.Namespace) -> int:
 
 def cmd_config_disable(args: argparse.Namespace) -> int:
     '''Disable a component (mcp, skill, agent).'''
+    backend = get_config_value(root_dir, 'backend', default='none')
+    if backend == 'none':
+        console.print(
+            '[bold yellow]Warning:[/bold yellow] No backend selected — MCP config changes will have no effect.\n'
+            'Change it with: [bold]podarcis config backend <name>[/bold] or [bold]podarcis config interactive[/bold]'
+        )
     ctype = args.type.lower()
     name = args.name
     mcp_servers, skills, agents = discover_components(root_dir)
@@ -211,15 +224,109 @@ def cmd_config_repo(args: argparse.Namespace) -> int:
     return 0
 
 
+# Claudian Obsidian plugin ID
+_CLAUDIAN_PLUGIN_ID = 'realclaudian'
+
+# Maps Podarcis backend name to the Claudian settingsProvider value.
+# Backends absent from this map are unsupported: the plugin is disabled.
+_BACKEND_TO_CLAUDIAN: dict[str, str] = {
+    'claude': 'claude',
+    'opencode': 'opencode',
+    'codex': 'codex',
+    # 'openclaw' and 'hermes' have no Claudian providerId → plugin is disabled
+}
+
+
+def _sync_claudian_plugin(backend: str) -> None:
+    '''Sync the Claudian Obsidian plugin state to match the active Podarcis backend.
+
+    Supported backends (claude / opencode / codex): enable the plugin and
+    write the matching ``settingsProvider`` into its data.json.
+    Unsupported backends (agy / openclaw / hermes): disable the plugin entirely.
+    '''
+    obsidian_dir = root_dir / '.obsidian'
+    community_plugins_path = obsidian_dir / 'community-plugins.json'
+    plugin_data_path = obsidian_dir / 'plugins' / _CLAUDIAN_PLUGIN_ID / 'data.json'
+
+    provider = _BACKEND_TO_CLAUDIAN.get(backend)
+    supported = provider is not None
+
+    # --- community-plugins.json: add or remove the plugin entry ---
+    plugins: list[str] = []
+    if community_plugins_path.exists():
+        try:
+            import json as _json
+            plugins = _json.loads(community_plugins_path.read_text(encoding='utf-8'))
+            if not isinstance(plugins, list):
+                plugins = []
+        except Exception:
+            plugins = []
+
+    if supported and _CLAUDIAN_PLUGIN_ID not in plugins:
+        plugins.append(_CLAUDIAN_PLUGIN_ID)
+        community_plugins_path.write_text(
+            __import__('json').dumps(plugins, indent=2) + '\n', encoding='utf-8'
+        )
+        console.print(f'[dim]Claudian: enabled in community-plugins.json[/dim]')
+    elif not supported and _CLAUDIAN_PLUGIN_ID in plugins:
+        plugins.remove(_CLAUDIAN_PLUGIN_ID)
+        community_plugins_path.write_text(
+            __import__('json').dumps(plugins, indent=2) + '\n', encoding='utf-8'
+        )
+        console.print(f'[dim]Claudian: disabled in community-plugins.json (backend "{backend}" not supported)[/dim]')
+
+    # --- data.json: set settingsProvider when supported ---
+    if not supported:
+        return
+
+    plugin_data_path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {}
+    if plugin_data_path.exists():
+        try:
+            import json as _json
+            data = _json.loads(plugin_data_path.read_text(encoding='utf-8'))
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = {}
+
+    data['settingsProvider'] = provider
+    plugin_data_path.write_text(
+        __import__('json').dumps(data, indent=2) + '\n', encoding='utf-8'
+    )
+    console.print(f'[dim]Claudian: settingsProvider set to "{provider}"[/dim]')
+
+
 def cmd_config_backend(args: argparse.Namespace) -> int:
-    '''Set or show the backend name (opencode, codex, agy, claude).'''
-    backends = {'opencode', 'codex', 'agy', 'claude'}
+    '''Set or show the backend name (opencode, codex, agy, claude, openclaw, hermes, none).'''
+    backends = {'opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none'}
     name = args.backend_name.lower()
     if name not in backends:
         console.print(f'[bold red]Error:[/bold red] Unknown backend "{name}". Choose from: {", ".join(sorted(backends))}')
         return 1
     set_config_value(root_dir, name, 'backend')
+    if name == 'none':
+        console.print('[bold yellow]✓ Backend set to none.[/bold yellow] MCP configuration will be skipped.')
+        return 0
+    _sync_claudian_plugin(name)
+    # Regenerate MCP config for the newly active backend
+    from backends import generate_for_backend
+    paths = generate_for_backend(root_dir, name)
+    if paths:
+        console.print(f'[dim]Regenerated MCP config for {name}: {[str(p) for p in paths]}[/dim]')
     console.print(f'[bold green]✓ Backend set to {name}.[/bold green]')
+    return 0
+
+
+def cmd_config_sync(args: argparse.Namespace) -> int:
+    '''Regenerate MCP config for all supported backends from canonical mcp_config.json.'''
+    results = sync_all_backends(root_dir)
+    console.print('[bold #29b8db]Synced MCP config to all backends:[/bold #29b8db]\n')
+    for backend, paths in results.items():
+        if paths:
+            console.print(f'  [green]✓[/green] {backend:<12} → {[str(p.name) for p in paths]}')
+        else:
+            console.print(f'  [dim]—[/dim] {backend:<12} (no files written)')
     return 0
 
 
@@ -230,17 +337,34 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
         console.print(f'[bold red]Error:[/bold red] Unknown frontend "{name}". Choose from: {", ".join(sorted(FRONTENDS))}')
         return 1
     set_config_value(root_dir, name, 'frontend')
-    console.print(f'[bold green]✓ Frontend set to {name}.[/bold green]')
+    if name == 'none':
+        console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.')
+    else:
+        console.print(f'[bold green]✓ Frontend set to {name}.[/bold green]')
     return 0
 
 
 def cmd_backend(args: argparse.Namespace) -> int:
     '''Open the configured backend.'''
+    backend = get_config_value(root_dir, 'backend', default='none')
+    if backend == 'none':
+        console.print(
+            '[bold yellow]Warning:[/bold yellow] No backend selected.\n'
+            'Change it with: [bold]podarcis config backend <name>[/bold] or [bold]podarcis config interactive[/bold]'
+        )
+        return 1
     return cmd_open_tool('backend')
 
 
 def cmd_frontend(args: argparse.Namespace) -> int:
     '''Open the configured frontend.'''
+    frontend = get_config_value(root_dir, 'frontend', default='none')
+    if frontend == 'none':
+        console.print(
+            '[bold yellow]Warning:[/bold yellow] No frontend selected.\n'
+            'Change it with: [bold]podarcis config frontend <name>[/bold] or [bold]podarcis config interactive[/bold]'
+        )
+        return 1
     from banner import display_project_banner
     display_project_banner(root_dir)
     return cmd_open_tool('frontend')
@@ -258,6 +382,20 @@ def cmd_reinstall(args: argparse.Namespace) -> int:
     install_script = root_dir / '.podarcis' / 'install.py'
     py_bin = sys.executable
     return subprocess.run([py_bin, str(install_script)] + args.remaining_args).returncode
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    '''Remove global symlink, virtualenv, and build artefacts.'''
+    uninstall_script = root_dir / '.podarcis' / 'uninstall.py'
+    py_bin = sys.executable
+    extra: list[str] = []
+    if getattr(args, 'yes', False):
+        extra += ['--yes']
+    if getattr(args, 'dry_run', False):
+        extra += ['--dry-run']
+    if getattr(args, 'purge', False):
+        extra += ['--purge']
+    return subprocess.run([py_bin, str(uninstall_script)] + extra).returncode
 
 
 def cmd_test(args: argparse.Namespace) -> int:
@@ -346,15 +484,18 @@ def main() -> None:
     cfg_repo.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
 
     # config backend
-    cfg_backend = config_sub.add_parser('backend', help='Set the agent backend (opencode, codex, agy, claude)')
+    cfg_backend = config_sub.add_parser('backend', help='Set the agent backend (opencode, codex, agy, claude, none, …)')
     cfg_backend.add_argument('backend_name', choices=list(BACKENDS), help='Backend name')
 
     # config frontend
-    cfg_frontend = config_sub.add_parser('frontend', help='Set the frontend tool (vscode, obsidian)')
-    cfg_frontend.add_argument('frontend_name', metavar='{VSCode,Obsidian}', help='Frontend name')
+    cfg_frontend = config_sub.add_parser('frontend', help='Set the frontend tool (vscode, obsidian, none)')
+    cfg_frontend.add_argument('frontend_name', choices=list(FRONTENDS), metavar='{vscode,obsidian,none}', help='Frontend name')
 
     # config interactive
     config_sub.add_parser('interactive', help='Launch interactive TUI menu')
+
+    # config sync
+    config_sub.add_parser('sync', help='Regenerate MCP config for all backends')
 
     # backend
     subparsers.add_parser('backend', help='Open the configured backend tool')
@@ -365,6 +506,15 @@ def main() -> None:
     # reinstall
     reinstall_parser = subparsers.add_parser('reinstall', help='Re-run bootstrap installer')
     reinstall_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
+
+    # uninstall
+    uninstall_parser = subparsers.add_parser(
+        'uninstall',
+        help='Remove global symlink, virtualenv, and build artefacts',
+    )
+    uninstall_parser.add_argument('-y', '--yes', action='store_true', help='Skip all confirmations')
+    uninstall_parser.add_argument('--dry-run', action='store_true', dest='dry_run', help='Preview without removing anything')
+    uninstall_parser.add_argument('--purge', action='store_true', help='Also remove .podarcis/config.yaml')
 
     # test
     test_parser = subparsers.add_parser('test', help='Run pytest suite')
@@ -396,6 +546,8 @@ def main() -> None:
             sys.exit(cmd_config_frontend(args))
         elif args.config_action == 'interactive':
             sys.exit(cmd_interactive(args))
+        elif args.config_action == 'sync':
+            sys.exit(cmd_config_sync(args))
         else:
             if sys.stdin.isatty():
                 sys.exit(cmd_interactive(args))
@@ -409,6 +561,8 @@ def main() -> None:
         sys.exit(cmd_frontend(args))
     elif args.subcommand == 'reinstall':
         sys.exit(cmd_reinstall(args))
+    elif args.subcommand == 'uninstall':
+        sys.exit(cmd_uninstall(args))
     elif args.subcommand == 'test':
         sys.exit(cmd_test(args))
     elif args.subcommand == 'lint':

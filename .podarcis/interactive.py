@@ -10,6 +10,7 @@ from components import (
 from common import get_config_value, set_config_value
 from console import console, QSTYLE
 from repos import get_repo_names, get_active_repo_names, get_repo_url, prompt_configure_repo
+from cli import _sync_claudian_plugin
 
 import questionary
 
@@ -146,25 +147,34 @@ def interactive_config(root: Path) -> None:
                     prompt_configure_repo(root, selected_repo, style=custom_style)
 
             case 'Backend':
-                current_backend = get_config_value(root, 'backend', default='opencode')
+                current_backend = get_config_value(root, 'backend', default='none')
                 backend = questionary.select(
                     'Select Agent Backend:',
-                    choices=['opencode', 'codex', 'agy', 'claude'],
-                    default=current_backend,
+                    choices=['opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none'],
+                    default=current_backend if current_backend in ('opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none') else 'none',
                     style=custom_style,
                 ).ask()
-                if backend:
+                if backend and backend != current_backend:
                     set_config_value(root, backend, 'backend')
-                    console.print(f'[bold green]✓ Backend set to {backend}.[/bold green]\n')
+                    if backend == 'none':
+                        console.print('[bold yellow]✓ Backend set to none.[/bold yellow] MCP configuration will be skipped.\n')
+                    else:
+                        from backends import generate_for_backend
+                        _sync_claudian_plugin(backend)
+                        generate_for_backend(root, backend)
+                        console.print(f'[bold green]✓ Backend set to {backend}.[/bold green]\n')
 
             case 'Frontend':
-                current_frontend = get_config_value(root, 'frontend', default='vscode')
+                current_frontend = get_config_value(root, 'frontend', default='none')
                 frontend = questionary.select(
                     'Select Frontend Tool:',
-                    choices=['vscode', 'obsidian'],
-                    default=current_frontend,
+                    choices=['vscode', 'obsidian', 'none'],
+                    default=current_frontend if current_frontend in ('vscode', 'obsidian', 'none') else 'none',
                     style=custom_style,
                 ).ask()
                 if frontend:
                     set_config_value(root, frontend, 'frontend')
-                    console.print(f'[bold green]✓ Frontend set to {frontend}.[/bold green]\n')
+                    if frontend == 'none':
+                        console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.\n')
+                    else:
+                        console.print(f'[bold green]✓ Frontend set to {frontend}.[/bold green]\n')

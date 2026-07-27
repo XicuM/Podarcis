@@ -1,18 +1,7 @@
 '''Console output handling with Rich integration.'''
 
-import subprocess, sys
+import sys
 from pathlib import Path
-
-def _ensure_package(pkg: str) -> None:
-    try:
-        __import__(pkg)
-    except ImportError:
-        print(f'{pkg} is required but missing. Installing {pkg}...')
-        cmd = [sys.executable, '-m', 'pip', 'install', pkg]
-        subprocess.run(cmd, check=True)
-
-_ensure_package('rich')
-_ensure_package('questionary')
 
 from rich.console import Console
 from rich.panel import Panel

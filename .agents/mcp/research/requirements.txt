@@ -1,5 +1,3 @@
 academic-mcp
 httpx
-transformers
-torch
 markitdown[pdf]

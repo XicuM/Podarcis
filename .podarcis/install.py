@@ -69,22 +69,20 @@ def _bootstrap_venv() -> None:
             req_file = root / 'requirements.txt'
 
         _say(f'[green]✓ Installing dependencies from {req_file.name}...[/green]')
-        pip_bin = (
-            str(pip) if pip.exists()
-            else [sys.executable, '-m', 'pip'])
-        run_command(
-            [pip_bin, 'install', '--upgrade', 'pip']
-            if isinstance(pip_bin, str)
-            else pip_bin + ['install', '--upgrade', 'pip'])
+
+        # Bootstrap pip inside the venv via ensurepip when pip binary is absent
+        # (common on Debian/Ubuntu where system Python ships without pip).
+        if not pip.exists():
+            _say('[green]✓ Bootstrapping pip via ensurepip...[/green]')
+            run_command([str(python), '-m', 'ensurepip', '--upgrade'])
+
+        # Always prefer the venv pip; fall back to venv python -m pip (never system pip).
+        pip_cmd: list[str] = [str(pip)] if pip.exists() else [str(python), '-m', 'pip']
+
+        run_command(pip_cmd + ['install', '--upgrade', 'pip'])
         if req_file.exists():
-            run_command(
-                [pip_bin, 'install', '-r', str(req_file)]
-                if isinstance(pip_bin, str)
-                else pip_bin + ['install', '-r', str(req_file)])
-        run_command(
-            [pip_bin, 'install', '-e', str(root)]
-            if isinstance(pip_bin, str)
-            else pip_bin + ['install', '-e', str(root)])
+            run_command(pip_cmd + ['install', '-r', str(req_file)])
+        run_command(pip_cmd + ['install', '-e', str(root)])
 
 
         if (egg_info := root / 'podarcis.egg-info').exists():

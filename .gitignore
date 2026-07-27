@@ -20,10 +20,17 @@ token.json
 # Don't track generated logs
 logs/
 
-# OpenCode files
+# Agentic backend configs — managed by `podarcis`, not tracked in git
+# opencode
 opencode-sync/
 opencode.json
 data.json
+# claude code / agy
+.mcp.json
+# codex
+.codex/
+# Runtime token cache
+.agents/token_cache.json
 
 # Obsidian personal workspace data
 .obsidian/workspace.json
