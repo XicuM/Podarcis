@@ -131,7 +131,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     console.print('\n[bold white]Repositories:[/bold white]')
     for k, v in status_data['repositories'].items():
         url_str = v['remote_url'] if v['remote_url'] else 'local-only'
-        console.print(f'  • {k:<20} {url_str}')
+        console.print(f'  • [bold #29b8db]{k:<20}[/bold #29b8db] {url_str}')
 
     return 0
 

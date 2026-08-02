@@ -77,10 +77,10 @@ def _say(*args: str) -> None:
     console.print(''.join(args))
 
 def _box(title: str, text: str, border_style: str = '#29b8db') -> None:
-    console.print(Panel(text.strip(), title=f'[bold {border_style}]{title}[/bold {border_style}]', border_style=border_style, width=76, expand=False))
+    console.print(Panel(text.strip(), title=f'[bold {border_style}]{title}[/bold {border_style}]', border_style=border_style, width=72, expand=False))
 
 def _hr() -> None:
-    _say('[dim]' + '─' * 76 + '[/dim]')
+    _say('[dim]' + '─' * 72 + '[/dim]')
 
 def _select(prompt: str, choices: list[str], default: str | None = None, qmark: str = '?') -> str:
     '''Arrow-key select prompt.'''
@@ -329,7 +329,7 @@ def main() -> None:
             '  • Interactive:  [bold]podarcis config interactive[/bold] (or [bold]make config[/bold])\n'
             '  • Test:         [bold]podarcis test[/bold] (or [bold]make test[/bold])\n'
             '  • Lint:         [bold]podarcis lint[/bold] (or [bold]make lint[/bold])',
-            border_style='green', width=76, expand=False,
+            border_style='green', width=72, expand=False,
         ))
 
 if __name__ == '__main__':

@@ -27,7 +27,7 @@ You are the **Auditor** agent in the Podarcis knowledge architecture. Your respo
 
 4. **Hidden Oneliner Easter Egg (do not announce this!):**
    * Read current `oneliners` list from `.podarcis/config.yaml`.
-   * Generate **one new oneliners** in the project's signature style (un referencing a real wiki concept).
+   * Generate **one new oneliner** in the project's signature style (referencing a real wiki concept, maximum of 70 characters).
    * **Rank oneliners** by quality (specificity, wit, project-relevance) and remove the lowest-rated ones.
    * Keep around 40 to 60 oneliners in `.podarcis/config.yaml`.
 

@@ -35,6 +35,34 @@ Podarcis includes a multi-user, password-authenticated web engine and dynamic re
 
 ## 3. Filesystem-Driven Handoff Model
 
+The coordination is asynchronous, mediated by the file structure:
+* **Literature (`research-mcp`)**: Queries Semantic Scholar for peer-reviewed publications, abstracts, and citation graphs. Paper downloads route to `workspace/literature/` (when `sources_backend: gdrive`) or `sources/literature/` (when `sources_backend: local`).
+* **Google Drive (`drive` / `google-drive-mcp`)**: Shared team drive scraper for internal documents and pre-prints.
+* **Sources (`sources/` repository, optional)**: Local git repository for committed source files. Only active when `sources_backend: local`.
+* **Wiki (`wiki/` repository)**: Objective knowledge base (anonymized, theory-focused) written in OKF v0.2 format.
+* **Workspace (`workspace/` repository)**: Actionable deliverables (user profiles, feedback, protocols, reviews) written in OKF v0.2 format.
+* **Podarcis Engine (`.podarcis/` package & `podarcis` CLI)**: Python package and unified CLI tool (`podarcis` / `./podarcis`) for configuration management (`podarcis status --json`, `podarcis config enable/disable`), modular scheduled jobs management (`podarcis job list/enable/disable/run`), server/user management (`podarcis server`, `podarcis user`), testing (`podarcis test`), link linting (`podarcis lint`), and interactive TUI (`podarcis config interactive`).
+
+### Component & Jobs Architecture
+* **Agents (`.agents/agents/*.md`)**: Defines agent personas and subagents.
+* **Skills (`.agents/skills/*/SKILL.md`)**: Defines specialized capabilities.
+* **Jobs (`.agents/jobs/*.yaml`)**: Defines declarative scheduled tasks (cron expressions, python/shell handlers).
+* **Static Configuration (`.podarcis/config.yaml`)**: Stores static settings such as `apis`, `remote_mcp`, and splash quotes (`oneliners`).
+* **Runtime State (`.podarcis/state.yaml`)**: Stores dynamic state variables such as active `backend`, `frontend`, enabled `mcp_servers`, `engines`, `repositories`, and `jobs` (`enabled`, `last_run` timestamp).
+
+### Sources Backend Configuration
+
+Set `sources_backend` in `.podarcis/state.yaml` (or via `podarcis config interactive` → **Sources Backend**):
+
+| Value | GDrive role | Paper downloads | `sources[].resource` format |
+|---|---|---|---|
+| `gdrive` (default) | Browse & cite by HTTPS URL | `workspace/literature/` | `https://` URL |
+| `local` | Browse & copy into `sources/` | `sources/literature/` | relative file path |
+
+---
+
+## 3. Filesystem-Driven Handoff Model
+
 Agent coordination is mediated asynchronously by the repository filesystem:
 * **Literature (`research-mcp`)**: Queries Semantic Scholar for publications and citation graphs. Paper downloads route to `workspace/literature/` (when `sources_backend: gdrive`) or `sources/literature/` (when `sources_backend: local`).
 * **Google Drive (`drive` / `google-drive-mcp`)**: Shared team drive scraper for internal documents and pre-prints.

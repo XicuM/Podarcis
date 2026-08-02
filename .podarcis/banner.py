@@ -46,16 +46,44 @@ def _build_subtitle(root_dir: Path) -> Text:
     )
 
 
+def format_cron_readable(schedule: str) -> str:
+    '''Format cron 5-field expression into concise text for cell display.'''
+    parts = schedule.strip().split()
+    if len(parts) != 5:
+        return schedule
+    m, h, dom, mon, dow = parts
+
+    # Daily at HH:MM
+    if m.isdigit() and h.isdigit() and dom == '*' and mon == '*' and dow == '*':
+        return f'{int(h):02d}:{int(m):02d} daily'
+
+    # Weekly on Day at HH:MM
+    days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    if m.isdigit() and h.isdigit() and dom == '*' and mon == '*' and dow.isdigit():
+        d_idx = int(dow) % 7
+        return f'{days[d_idx]} {int(h):02d}:{int(m):02d}'
+
+    # Every N minutes
+    if m.startswith('*/') and h == '*' and dom == '*' and mon == '*' and dow == '*':
+        return f'every {m[2:]}m'
+
+    # Hourly
+    if m.isdigit() and h == '*' and dom == '*' and mon == '*' and dow == '*':
+        return f':{int(m):02d} hourly'
+
+    return schedule
+
+
 def _render_right_cell(
     kind: str,
     title: str,
     extra: str | int | None,
     enabled: bool,
-    width: int = 42,
-    offset: int = 22,
-    tok_w: int = 10,
+    width: int = 38,
+    offset: int = 24,
+    tok_w: int = 12,
 ) -> Text:
-    '''Format right-hand MCP or skill item cell for side-by-side layout.'''
+    '''Format right-hand MCP, skill, agent, or job item cell for side-by-side layout.'''
     cell = Text()
     if kind == 'header':
         if extra:
@@ -82,7 +110,7 @@ def _render_right_cell(
         cell.append(title, style='bold white')
         used = 2 + len(title)
         if extra is not None:
-            tok_str = f'{extra:,} tk'
+            tok_str = f'{extra:,} tk' if isinstance(extra, int) else str(extra)
             sp = max(2, offset - used)
             tok_formatted = tok_str.rjust(tok_w)
             cell.append(' ' * sp + tok_formatted, style='dim white')
@@ -92,7 +120,20 @@ def _render_right_cell(
     return cell
 
 
-def display_project_banner(root_dir: Path, splash: str | None = None, right_w: int = 42) -> None:
+from rich.cells import cell_len
+
+
+def _pad_cell(text: str, width: int) -> str:
+    '''Pad text to exact terminal cell width taking Unicode/Braille display widths into account.'''
+    w = cell_len(text)
+    if w > width:
+        while text and cell_len(text) > width:
+            text = text[:-1]
+        w = cell_len(text)
+    return text + ' ' * max(0, width - w)
+
+
+def display_project_banner(root_dir: Path, splash: str | None = None, right_w: int = 38) -> None:
     '''Render side-by-side logo and component status header box.'''
     logo_path = Path(__file__).resolve().parent/'logo.txt'
     logo_lines = ([
@@ -145,7 +186,7 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
         ('empty', '', '', True),
         ('header', job_hdr, None, True),
         *[
-            ('item', j, None, jobs[j]['enabled'])
+            ('item', j, format_cron_readable(jobs[j].get('schedule', '')), jobs[j]['enabled'])
             for j in sorted(jobs)
         ],
     ]
@@ -160,12 +201,13 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
         formatted_splash = formatted_splash[: total_inner_w - 3] + '...'
 
     def print_row(content: Text | str, style: str = '') -> None:
-        console.print(Text()
-            .append('│ ', style=BORDER_STYLE)
-            # Apply style if content is a string, otherwise inherit style from Text object
-            .append(content, style=style if isinstance(content, str) else None)
-            .append(' │', style=BORDER_STYLE)
-        )
+        row = Text().append('│ ', style=BORDER_STYLE)
+        if isinstance(content, Text):
+            row.append(content)
+        else:
+            row.append(content, style=style)
+        row.append(' │', style=BORDER_STYLE)
+        console.print(row)
 
     # Top border & splash section
     console.print(Text()
@@ -187,7 +229,7 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
     print_row(' ' * total_inner_w)
 
     # Side-by-side logo and component status rendering
-    left_lines = [line[:left_w].ljust(left_w) for line in logo_lines]
+    left_lines = [_pad_cell(line, left_w) for line in logo_lines]
     fill_item = ('empty', '', '', True)
     for left_line, item in zip_longest(left_lines, right_items, fillvalue=fill_item):
         left_str = left_line if isinstance(left_line, str) else ' ' * left_w
@@ -206,7 +248,7 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
 
     # Repository links (2-column: cyan name column, dim white remote column)
     name_w = 12
-    rem_w = total_inner_w - name_w - 1
+    rem_w = total_inner_w - name_w - 2
     for r_name in get_repo_names(root_dir):
         url = get_repo_url(root_dir, r_name) or 'local'
         name_str = r_name[:name_w].ljust(name_w)
@@ -214,7 +256,7 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
         url_str = disp_url.ljust(rem_w)
 
         print_row(Text()
-            .append(f' {name_str}', style='cyan')
+            .append(f'  {name_str}', style='bold #29b8db')
             .append(url_str, style='dim white')
         )
 
@@ -225,7 +267,7 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
 def display_install_banner(root_dir: Path, splash: str | None = None) -> None:
     '''Render clean minimal installation header box.'''
     version, date_str = load_version_info(root_dir)
-    total_inner_w = 72
+    total_inner_w = 68
 
     title = f' Podarcis — The Research Agent v{version} ({date_str}) '
     dash_count = max(4, (total_inner_w + 2) - len(title))

@@ -11,3 +11,8 @@ mcp_servers:
   menumaker-mcp: false
 gdrive_sync:
   last_sync: ''
+jobs:
+  audit_wiki:
+    enabled: true
+  gdrive_sync:
+    enabled: true

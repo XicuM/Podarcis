@@ -217,7 +217,7 @@ def main() -> None:
         'Removes the global CLI symlink, virtual environment, and build artefacts\n'
         'created by [bold]podarcis install[/bold].\n\n'
         '[dim]Wiki, workspace, and source repositories are [bold]never[/bold] touched.[/dim]',
-        border_style='#29b8db', width=76, expand=False,
+        border_style='#29b8db', width=72, expand=False,
     ))
     _hr()
 
@@ -267,7 +267,7 @@ def main() -> None:
         console.print(Panel(
             '[bold yellow]Dry-run complete.[/bold yellow]\n'
             'No files were modified. Run without [bold]--dry-run[/bold] to apply.',
-            border_style='yellow', width=76, expand=False,
+            border_style='yellow', width=72, expand=False,
         ))
     else:
         console.print(Panel(
@@ -275,7 +275,7 @@ def main() -> None:
             'Tooling artefacts removed. Your research data (wiki/, workspace/) is intact.\n\n'
             '[dim]To reinstall at any time, run:[/dim]\n'
             '  [bold]python .podarcis/install.py[/bold]  or  [bold]make install[/bold]',
-            border_style='green', width=76, expand=False,
+            border_style='green', width=72, expand=False,
         ))
 
 
