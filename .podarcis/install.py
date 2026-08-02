@@ -14,6 +14,60 @@ if str(root) not in sys.path:
 if str(podarcis_dir) not in sys.path:
     sys.path.insert(0, str(podarcis_dir))
 
+def _bootstrap_venv() -> None:
+    venv_dir = root / '.venv'
+    exe_suffix = 'Scripts' if sys.platform == 'win32' else 'bin'
+    python = venv_dir / exe_suffix / 'python'
+    pip = venv_dir / exe_suffix / ('pip.exe' if sys.platform == 'win32' else 'pip')
+
+    if sys.executable == str(python):
+        return  # already inside venv
+
+    if not venv_dir.exists() or not python.exists():
+        print('[✓] Creating Python virtual environment (.venv)...')
+        subprocess.run([sys.executable, '-m', 'venv', '--clear', str(venv_dir)], check=True)
+
+    deps_ok = (
+        python.exists()
+        and subprocess.run(
+            [str(python), '-c', 'import rich, questionary'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0
+    )
+
+    if not deps_ok:
+        req_file = podarcis_dir / 'requirements.txt'
+        if not req_file.exists():
+            req_file = root / 'requirements.txt'
+
+        print(f'[✓] Installing dependencies from {req_file.name}...')
+
+        if not pip.exists():
+            print('[✓] Bootstrapping pip via ensurepip...')
+            subprocess.run([str(python), '-m', 'ensurepip', '--upgrade'])
+
+        pip_cmd: list[str] = [str(pip)] if pip.exists() else [str(python), '-m', 'pip']
+
+        subprocess.run(pip_cmd + ['install', '--upgrade', 'pip'])
+        if req_file.exists():
+            subprocess.run(pip_cmd + ['install', '-r', str(req_file)])
+        subprocess.run(pip_cmd + ['install', '-e', str(root)])
+
+        if (egg_info := root / 'podarcis.egg-info').exists():
+            shutil.rmtree(egg_info, ignore_errors=True)
+
+    if (root / 'podarcis').exists():
+        os.chmod(root / 'podarcis', 0o755)
+
+    if '--bootstrap-only' in sys.argv:
+        sys.exit(0)
+
+    if python.exists():
+        argv = [a for a in sys.argv if a != '--bootstrap-only']
+        os.execv(str(python), [str(python)] + argv)
+
+_bootstrap_venv()
+
 from banner import display_install_banner
 from common import load_yaml, run_command, save_yaml
 from console import console, QSTYLE
@@ -40,62 +94,6 @@ def _select(prompt: str, choices: list[str], default: str | None = None, qmark: 
         raise SystemExit(1)
     return ans
 
-# ── venv bootstrap ─────────────────────────────────────────────────────────
-
-def _bootstrap_venv() -> None:
-    venv_dir = root / '.venv'
-    exe_suffix = 'Scripts' if sys.platform == 'win32' else 'bin'
-    python = venv_dir / exe_suffix / 'python'
-    pip = venv_dir / exe_suffix / ('pip.exe' if sys.platform == 'win32' else 'pip')
-
-    if sys.executable == str(python):
-        return  # already inside venv
-
-    if not venv_dir.exists() or not python.exists():
-        if venv_dir.exists():
-            shutil.rmtree(venv_dir, ignore_errors=True)
-        _say('[green]✓ Creating Python virtual environment (.venv)...[/green]')
-        run_command([sys.executable, '-m', 'venv', str(venv_dir)])
-
-    deps_ok = (
-        python.exists()
-        and subprocess.run(
-            [str(python), '-c', 'import rich, questionary'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        ).returncode == 0
-    )
-
-    if not deps_ok:
-        req_file = podarcis_dir / 'requirements.txt'
-        if not req_file.exists():
-            req_file = root / 'requirements.txt'
-
-        _say(f'[green]✓ Installing dependencies from {req_file.name}...[/green]')
-
-        # Bootstrap pip inside the venv via ensurepip when pip binary is absent
-        # (common on Debian/Ubuntu where system Python ships without pip).
-        if not pip.exists():
-            _say('[green]✓ Bootstrapping pip via ensurepip...[/green]')
-            run_command([str(python), '-m', 'ensurepip', '--upgrade'])
-
-        # Always prefer the venv pip; fall back to venv python -m pip (never system pip).
-        pip_cmd: list[str] = [str(pip)] if pip.exists() else [str(python), '-m', 'pip']
-
-        run_command(pip_cmd + ['install', '--upgrade', 'pip'])
-        if req_file.exists():
-            run_command(pip_cmd + ['install', '-r', str(req_file)])
-        run_command(pip_cmd + ['install', '-e', str(root)])
-
-
-        if (egg_info := root / 'podarcis.egg-info').exists():
-            shutil.rmtree(egg_info, ignore_errors=True)
-
-
-    if (root / 'podarcis').exists():
-        os.chmod(root / 'podarcis', 0o755)
-
-    if python.exists():
-        os.execv(str(python), [str(python)] + sys.argv)
 
 # ── .podarcis/config.yaml ──────────────────────────────────────────────────
 

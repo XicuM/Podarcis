@@ -2,8 +2,9 @@
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
 
-if [ -x "$VENV_PYTHON" ]; then
-    exec "$VENV_PYTHON" "$SCRIPT_DIR/.podarcis/cli.py" "$@"
-else
-    exec python3 "$SCRIPT_DIR/.podarcis/cli.py" "$@"
+# Bootstrap virtualenv automatically if absent or missing required libraries
+if [ ! -x "$VENV_PYTHON" ] || ! "$VENV_PYTHON" -c "import rich, questionary" &>/dev/null; then
+    python3 "$SCRIPT_DIR/.podarcis/install.py" --bootstrap-only || exit 1
 fi
+
+exec "$VENV_PYTHON" "$SCRIPT_DIR/.podarcis/cli.py" "$@"
