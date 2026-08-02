@@ -18,7 +18,6 @@ credentials.json
 token.json
 service_account.json
 
-
 # Don't track generated logs
 logs/
 
@@ -41,3 +40,12 @@ data.json
 # Workspace
 workspace/
 wiki/
+config/
+open-code-data/
+
+# Continue.dev local config (contains API keys)
+.continue/
+
+# Server runtime data & container build artifacts
+data/
+*.tar

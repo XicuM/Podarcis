@@ -1,0 +1,14 @@
+{
+  "name": "Podarcis Development Container",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "astral-sh.uv-vscode",
+        "saoudrizwan.claude-dev"
+      ]
+    }
+  },
+  "postCreateCommand": "uv sync"
+}

@@ -1,0 +1,24 @@
+networks:
+  podarcis-net:
+    driver: bridge
+
+services:
+  code-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: podarcis-code-server:latest
+    container_name: podarcis_code_server
+    networks:
+      - podarcis-net
+    environment:
+      - PASSWORD=${CODE_SERVER_PASSWORD:-change_this_password}
+      - SUDO_PASSWORD=${CODE_SERVER_PASSWORD:-change_this_password}
+    volumes:
+      - .:/home/coder/workspace
+      - ./config/code-server:/home/coder/.local/share/code-server
+      - ./config/code-config:/home/coder/.config
+      - ./config/continue:/home/coder/.continue
+    ports:
+      - "${CODE_SERVER_PORT:-8080}:8080"
+    restart: unless-stopped
