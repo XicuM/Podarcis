@@ -8,7 +8,15 @@ version = "1.2.0"
 description = "Podarcis Open Knowledge Format (OKF v0.2) research agent engine and CLI"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "mcp[cli]",
+    "rich",
+    "questionary",
+    "python-dotenv>=1.0.0",
+    "pytest",
+    "pyyaml>=6.0",
+    "yfinance",
+]
 
 [project.scripts]
 podarcis = "podarcis.cli:main"

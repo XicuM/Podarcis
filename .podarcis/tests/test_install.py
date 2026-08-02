@@ -35,6 +35,22 @@ def test_run_mcp_setup_wiki(tmp_path):
     assert res is True
 
 
+def test_setup_wiki_execution(tmp_path, monkeypatch):
+    '''Verify setup_wiki in setup.py executes cleanly when present.'''
+    setup_file = tmp_path / 'setup.py'
+    setup_file.write_text('def setup_wiki(root):\n    pass\n', encoding='utf-8')
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('wiki_setup', setup_file)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # Mock questionary select
+    class DummyPrompt:
+        def ask(self): return 'no'
+    monkeypatch.setattr('questionary.select', lambda *args, **kwargs: DummyPrompt())
+
+    mod.setup_wiki(tmp_path)
+
 def test_configure_global_command_no(tmp_path, monkeypatch):
     '''Verify _configure_global_command when user selects no.'''
     import install
