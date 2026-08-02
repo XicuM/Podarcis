@@ -33,6 +33,9 @@ data.json
 # Runtime token cache
 .agents/token_cache.json
 
+# Lockfiles & dynamic runtime state
+uv.lock
+
 # Obsidian personal configuration and workspace data (managed locally/via .podarcis)
 .obsidian/
 .claudian
