@@ -251,6 +251,12 @@ def _sync_claudian_plugin(backend: str) -> None:
     provider = _BACKEND_TO_CLAUDIAN.get(backend)
     supported = provider is not None
 
+    if supported:
+        obsidian_dir.mkdir(parents=True, exist_ok=True)
+        app_json = obsidian_dir / 'app.json'
+        if not app_json.exists():
+            app_json.write_text('{\n  "legacyEditor": false,\n  "livePreview": true\n}\n', encoding='utf-8')
+
     # --- community-plugins.json: add or remove the plugin entry ---
     plugins: list[str] = []
     if community_plugins_path.exists():
@@ -337,7 +343,11 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
         console.print(f'[bold red]Error:[/bold red] Unknown frontend "{name}". Choose from: {", ".join(sorted(FRONTENDS))}')
         return 1
     set_config_value(root_dir, name, 'frontend')
-    if name == 'none':
+    if name == 'obsidian':
+        backend = get_config_value(root_dir, 'backend', default='none')
+        _sync_claudian_plugin(backend)
+        console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green]')
+    elif name == 'none':
         console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.')
     else:
         console.print(f'[bold green]✓ Frontend set to {name}.[/bold green]')

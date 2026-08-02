@@ -179,6 +179,10 @@ def interactive_config(root: Path) -> None:
                 ).ask()
                 if frontend:
                     set_config_value(root, frontend, 'frontend')
+                    if frontend == 'obsidian':
+                        from cli import _sync_claudian_plugin
+                        backend = get_config_value(root, 'backend', default='none')
+                        _sync_claudian_plugin(backend)
                     if frontend == 'none':
                         console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.\n')
                     else:

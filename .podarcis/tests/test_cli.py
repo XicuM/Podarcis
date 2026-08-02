@@ -139,4 +139,20 @@ def test_cli_diagnose(tmp_path, monkeypatch, capsys):
     assert captured.out.strip() == '[]'
 
 
+def test_sync_claudian_plugin_dynamic_provisioning(tmp_path, monkeypatch):
+    '''Test dynamic provisioning of local .obsidian config when setting frontend to obsidian.'''
+    import cli
+    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+
+    cli._sync_claudian_plugin('opencode')
+
+    obsidian_dir = tmp_path / '.obsidian'
+    assert obsidian_dir.exists()
+    assert (obsidian_dir / 'app.json').exists()
+    assert (obsidian_dir / 'community-plugins.json').exists()
+    plugins = json.loads((obsidian_dir / 'community-plugins.json').read_text())
+    assert 'realclaudian' in plugins
+
+
+
 
