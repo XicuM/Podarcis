@@ -201,7 +201,7 @@ def test_cli_server_install_uninstall(tmp_path, monkeypatch):
     res_uninst = cli.cmd_server(args_uninst)
     assert res_uninst == 0
     assert not service_file.exists()
->>>>>>> b183796 (feat(server): add multi-user web engine, authentication, and test suite)
+
 
 
 
