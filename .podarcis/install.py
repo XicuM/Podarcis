@@ -122,12 +122,12 @@ def _create_podarcis_yaml() -> None:
                 'Filesystem traversal at gecko speed.',
                 'Podarcis: endemic to knowledge graphs everywhere.',
             ],
+            'backend': 'opencode',
+            'frontend': 'none',
         })
 
     if not st_file.exists():
         save_yaml(st_file, {
-            'backend': 'opencode',
-            'frontend': 'none',
             'repositories': {'sources': 'gdrive', 'wiki': '', 'workspace': ''},
             'engines': {'qmd': False},
             'mcp_servers': {'finance-mcp': False, 'menumaker-mcp': False},
@@ -253,6 +253,78 @@ def _configure_agents() -> None:
         set_agent_status(root, k, k in s, info)
     _say('[bold green]✓ Agent configurations updated.[/bold green]\n')
 
+
+# ── backend ────────────────────────────────────────────────────────────────
+
+def _configure_backend() -> None:
+    from common import get_config_value, set_config_value
+
+    _box(
+        'Agent Backend',
+        'The backend is the AI coding tool Podarcis subagents run inside.\n'
+        'Choosing a backend writes the MCP server configuration to its native config file.',
+    )
+
+    current = get_config_value(root, 'backend', default='none')
+    choices = ['opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none']
+    backend = _select(
+        'Select agent backend:',
+        choices,
+        default=current if current in choices else 'none',
+    )
+
+    set_config_value(root, backend, 'backend')
+    if backend != 'none':
+        from backends import generate_for_backend
+        generate_for_backend(root, backend)
+        _say(f'[bold green]✓ Backend set to {backend}.[/bold green]\n')
+    else:
+        _say('[bold yellow]✓ Backend set to none.[/bold yellow] MCP configuration will be skipped.\n')
+
+
+# ── frontend ───────────────────────────────────────────────────────────────
+
+def _configure_frontend() -> None:
+    from common import get_config_value, set_config_value
+
+    _box(
+        'Frontend Tool',
+        'The frontend is the editor or knowledge-base viewer used to browse wiki and workspace files.\n'
+        'Obsidian: markdown vault viewer. VSCode / code-server: full IDE.',
+    )
+
+    current = get_config_value(root, 'frontend', default='none')
+    choices = ['vscode', 'obsidian', 'code-server', 'none']
+    frontend = _select(
+        'Select frontend tool:',
+        choices,
+        default=current if current in choices else 'none',
+    )
+
+    set_config_value(root, frontend, 'frontend')
+    if frontend == 'obsidian':
+        backend = get_config_value(root, 'backend', default='none')
+        ans = _select(
+            f'Configure Obsidian Claudian plugin for backend "{backend}"?',
+            ['yes', 'no'],
+            default='yes',
+        )
+        if ans == 'yes':
+            try:
+                import sys as _sys
+                _sys.path.insert(0, str(root / '.podarcis'))
+                from cli import _sync_claudian_plugin
+                _sync_claudian_plugin(backend)
+                _say('[bold green]✓ Claudian plugin configured for Obsidian.[/bold green]\n')
+            except Exception as exc:
+                _say(f'[yellow]Could not configure Claudian plugin: {exc}[/yellow]\n')
+        else:
+            _say('[bold green]✓ Frontend set to obsidian.[/bold green] [dim]Skipped plugin configuration.[/dim]\n')
+    elif frontend == 'none':
+        _say('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.\n')
+    else:
+        _say(f'[bold green]✓ Frontend set to {frontend}.[/bold green]\n')
+
 # ── global command ────────────────────────────────────────────────────────
 
 def _configure_global_command() -> None:
@@ -307,6 +379,10 @@ def main() -> None:
     _configure_skills()
     _hr()
     _configure_agents()
+    _hr()
+    _configure_backend()
+    _hr()
+    _configure_frontend()
     _hr()
     _configure_repos()
     _hr()

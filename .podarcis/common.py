@@ -53,7 +53,7 @@ def save_yaml(path: Path, data: dict) -> None:
     except Exception: pass
 
 
-STATE_KEYS = {'backend', 'frontend', 'repositories', 'engines', 'mcp_servers', 'gdrive_sync', 'sources_backend'}
+STATE_KEYS = {'repositories', 'engines', 'mcp_servers', 'gdrive_sync', 'sources_backend'}
 
 
 def get_state_value(root_dir: Path, *keys: str, default: str = '') -> str:
