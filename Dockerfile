@@ -1,24 +1,27 @@
-# Dockerfile for Podarcis Code-Server Web Workspace
-FROM codercom/code-server:latest
+# Dockerfile for Podarcis Lightweight User Container (podarcis-user:latest)
+FROM python:3.12-slim
 
 USER root
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-pip \
-    python3-venv \
     curl \
     git \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv Python environment manager
+# Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Install OpenCode CLI for AI assistant integration
-RUN HOME=/home/coder curl -fsSL https://opencode.ai/install | bash && \
-    ln -sf /home/coder/.opencode/bin/opencode /usr/local/bin/opencode || true && \
-    chown -R coder:coder /home/coder/.opencode || true
+# Create non-root podarcis user
+RUN useradd -m -u 1000 podarcis && \
+    mkdir -p /home/podarcis/workspace && \
+    chown -R podarcis:podarcis /home/podarcis
 
+USER podarcis
+WORKDIR /home/podarcis/workspace
 
-# Switch back to coder user
-USER coder
-WORKDIR /home/coder/workspace
+EXPOSE 8000
+
+# Default command starts Python HTTP / Web workspace server inside user container
+CMD ["python3", "-m", "http.server", "8000"]

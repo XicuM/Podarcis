@@ -9,7 +9,7 @@ description = "Podarcis Open Knowledge Format (OKF v0.2) research agent engine a
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp[cli]",
+    "mcp[cli]>=1.0.0,<2.0.0",
     "rich",
     "questionary",
     "python-dotenv>=1.0.0",

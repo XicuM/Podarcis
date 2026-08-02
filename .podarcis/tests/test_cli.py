@@ -163,5 +163,46 @@ def test_config_frontend_obsidian_opt_in(tmp_path, monkeypatch):
 
 
 
+def test_cli_server_status_json(tmp_path, monkeypatch, capsys):
+    '''Test podarcis server status --json command.'''
+    import cli
+    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+
+    args = Namespace(server_action='status', json=True, port=8080)
+    res = cli.cmd_server(args)
+    assert res == 0
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert 'running' in data
+    assert 'port' in data
+    assert data['port'] == 8080
+
+
+def test_cli_server_install_uninstall(tmp_path, monkeypatch):
+    '''Test podarcis server install and uninstall commands.'''
+    import cli
+    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+    fake_home = tmp_path / 'home'
+    monkeypatch.setattr(Path, 'home', lambda: fake_home)
+
+    # Install
+    args_inst = Namespace(server_action='install', port=9000)
+    res_inst = cli.cmd_server(args_inst)
+    assert res_inst == 0
+
+    service_file = fake_home / '.config' / 'systemd' / 'user' / 'podarcis-server.service'
+    assert service_file.exists()
+    content = service_file.read_text(encoding='utf-8')
+    assert 'server --port 9000' in content
+
+    # Uninstall
+    args_uninst = Namespace(server_action='uninstall')
+    res_uninst = cli.cmd_server(args_uninst)
+    assert res_uninst == 0
+    assert not service_file.exists()
+>>>>>>> b183796 (feat(server): add multi-user web engine, authentication, and test suite)
+
+
 
 

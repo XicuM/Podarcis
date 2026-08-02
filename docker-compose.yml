@@ -1,24 +1,26 @@
+version: '3.8'
+
 networks:
   podarcis-net:
     driver: bridge
 
 services:
-  code-server:
+  podarcis-server:
     build:
       context: .
       dockerfile: Dockerfile
-    image: podarcis-code-server:latest
-    container_name: podarcis_code_server
+    image: podarcis-user:latest
+    container_name: podarcis_multiuser_server
     networks:
       - podarcis-net
     environment:
-      - PASSWORD=${CODE_SERVER_PASSWORD:-change_this_password}
-      - SUDO_PASSWORD=${CODE_SERVER_PASSWORD:-change_this_password}
+      - SECRET_KEY=${SECRET_KEY:-podarcis-secret-key-multiuser-2026}
+      - PORT=${PORT:-8080}
     volumes:
-      - .:/home/coder/workspace
-      - ./config/code-server:/home/coder/.local/share/code-server
-      - ./config/code-config:/home/coder/.config
-      - ./config/continue:/home/coder/.continue
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/users:/app/data/users
     ports:
-      - "${CODE_SERVER_PORT:-8080}:8080"
+      - "${PORT:-8080}:8080"
+    command: python3 -m podarcis.server.app
     restart: unless-stopped

@@ -101,14 +101,20 @@ podarcis lint
 ### 5. Connect MCP Servers to your Agent / IDE
 The project automatically generates `opencode.json` defining native MCP servers from `.agents/mcp/` and `.agents/mcp_config.json`. The servers auto-detect the project root (via `AGENTS.md`) and use relative Python paths via `.venv/bin/python`.
 
-
 If using Claude Desktop or another MCP client, reference `.venv/bin/python` and `.agents/mcp/*/server.py`.
 
 ---
 
-## 📱 Mobile Integration (OpenClaw)
+## Agentic installation
 
-This workspace can be integrated with mobile-friendly agent frontends like **OpenClaw** (e.g., via Telegram).
+This workspace can be integrated with mobile-friendly agent frontends like **OpenClaw** (e.g., via Telegram). Send this prompt to your OpenClaw or Hermes-backed agent:
+> "Replace current workspace with this repository: `git clone https://github.com/XicuM/Podarcis.git .`. Run installation steps and configure following the user needs.
 
-To install this workspace as an autonomous skill, send this prompt to your OpenClaw-backed agent:
-> "Clone this repository: `https://github.com/XicuM/Podarcis.git`. Keep the work for this project scoped to this workspace only. Install the skills in your main workspace. After install, inspect the project structure and help me finish setup. Ask before making any broader changes."
+---
+
+## 🦎 Save *Podarcis pityusensis*
+
+This project takes its name from *Podarcis*, the genus of wall lizards native to the Mediterranean basin, which means "agile-footed" in greek. In particular, the **Ibiza wall lizard** (*Podarcis pityusensis*), endemic to the islands of Ibiza and Formentera, is facing severe threats of extinction due to invasive alien snake species. If you find this project useful, please consider learning more about and supporting active conservation efforts:
+
+👉 **[Protegim ses Sargantanes — Learn & Support *Podarcis pityusensis* Conservation](https://protegimsessargantanes.org/en/home-english/)**
+

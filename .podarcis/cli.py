@@ -11,7 +11,7 @@ from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
 BACKENDS = {'opencode': 'opencode', 'codex': 'codex', 'agy': 'agy', 'claude': 'claude', 'openclaw': 'openclaw', 'hermes': 'hermes', 'none': None}
-FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'code-server': 'code-server', 'none': None}
+FRONTENDS = {'vscode': 'code', 'code-server': 'code-server', 'vscode-web': 'code-server', 'obsidian': 'obsidian', 'none': None}
 
 # Ensure root and .podarcis directories are in sys.path
 root_dir = Path(__file__).resolve().parent.parent
@@ -520,6 +520,284 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             ts = issue.get('timestamp', '')
             color = 'red' if sev == 'high' else 'yellow'
             console.print(f'{idx}. [{color}][{sev.upper()}][/{color}] [bold white][{cat}][/bold white] {summ} [dim]({ts})[/dim]')
+        console.print()
+    return 0
+
+
+
+def _get_server_pid_file() -> Path:
+    return root_dir / '.podarcis' / 'podarcis-server.pid'
+
+
+def _get_server_log_file() -> Path:
+    log_dir = root_dir / '.podarcis' / 'logs'
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / 'server.log'
+
+
+def _is_pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def cmd_server(args: argparse.Namespace) -> int:
+    '''Launch or manage Podarcis Multi-User dynamic router and admin server.'''
+    action = getattr(args, 'server_action', None)
+    port = getattr(args, 'port', 8080)
+    pid_file = _get_server_pid_file()
+    log_file = _get_server_log_file()
+
+    if action == 'stop' or getattr(args, 'stop', False):
+        action_name = 'stop'
+    elif action == 'status' or getattr(args, 'status', False):
+        action_name = 'status'
+    elif action == 'install' or getattr(args, 'install', False):
+        action_name = 'install'
+    elif action == 'uninstall' or getattr(args, 'uninstall', False):
+        action_name = 'uninstall'
+    elif action == 'start' or getattr(args, 'daemon', False):
+        action_name = 'start'
+    else:
+        action_name = 'run'
+
+    if action_name == 'start':
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().strip())
+                if _is_pid_running(pid):
+                    console.print(f'[yellow]Podarcis Server daemon is already running (PID {pid}) at http://localhost:{port}[/yellow]')
+                    return 0
+            except ValueError:
+                pass
+
+        py_bin = _get_python_bin()
+        podarcis_cli = root_dir / '.podarcis' / 'cli.py'
+        log_f = open(log_file, 'a', encoding='utf-8')
+        proc = subprocess.Popen(
+            [py_bin, str(podarcis_cli), 'server', '--port', str(port)],
+            stdout=log_f,
+            stderr=log_f,
+            cwd=str(root_dir),
+            start_new_session=True,
+        )
+        pid_file.write_text(str(proc.pid), encoding='utf-8')
+        console.print(f'[bold green]✓ Started Podarcis Server daemon (PID {proc.pid})[/bold green]')
+        console.print(f'[bold green]✓ Portal: http://localhost:{port}/login[/bold green]')
+        console.print(f'[bold green]✓ Logs: {log_file}[/bold green]')
+        return 0
+
+    elif action_name == 'stop':
+        stopped = False
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().strip())
+                if _is_pid_running(pid):
+                    import signal
+                    os.kill(pid, signal.SIGTERM)
+                    stopped = True
+            except Exception:
+                pass
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
+
+        try:
+            res = subprocess.run(['systemctl', '--user', 'is-active', 'podarcis-server'], capture_output=True, text=True)
+            if res.stdout.strip() == 'active':
+                subprocess.run(['systemctl', '--user', 'stop', 'podarcis-server'], capture_output=True)
+                stopped = True
+        except Exception:
+            pass
+
+        if stopped:
+            console.print('[yellow]✓ Stopped Podarcis Server.[/yellow]')
+        else:
+            console.print('[dim]Podarcis Server is not running.[/dim]')
+        return 0
+
+    elif action_name == 'status':
+        is_running = False
+        pid_info = None
+        systemd_info = None
+
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().strip())
+                if _is_pid_running(pid):
+                    is_running = True
+                    pid_info = pid
+            except ValueError:
+                pass
+
+        try:
+            res = subprocess.run(['systemctl', '--user', 'is-active', 'podarcis-server'], capture_output=True, text=True)
+            systemd_info = res.stdout.strip()
+            if systemd_info == 'active':
+                is_running = True
+        except Exception:
+            systemd_info = 'n/a'
+
+        if getattr(args, 'json', False):
+            print(json.dumps({
+                'running': is_running,
+                'pid': pid_info,
+                'systemd_status': systemd_info,
+                'port': port,
+                'url': f'http://localhost:{port}/login',
+            }, indent=2))
+            return 0
+
+        console.print('[bold #29b8db]Podarcis Server Status:[/bold #29b8db]')
+        console.print(f'  • Active: {"[bold green]Yes[/bold green]" if is_running else "[yellow]No[/yellow]"}')
+        if pid_info:
+            console.print(f'  • Process PID: {pid_info}')
+        if systemd_info and systemd_info != 'n/a':
+            console.print(f'  • Systemd Service: {systemd_info}')
+        console.print(f'  • Configured Port: {port}')
+        console.print(f'  • Access URL: http://localhost:{port}/login')
+        return 0
+
+    elif action_name == 'install':
+        py_bin = _get_python_bin()
+        cli_path = root_dir / '.podarcis' / 'cli.py'
+        user_service_dir = Path.home() / '.config' / 'systemd' / 'user'
+        user_service_dir.mkdir(parents=True, exist_ok=True)
+        service_file = user_service_dir / 'podarcis-server.service'
+
+        service_content = f'''[Unit]
+Description=Podarcis Multi-User Research Engine & Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={root_dir}
+ExecStart={py_bin} {cli_path} server --port {port}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+'''
+        service_file.write_text(service_content, encoding='utf-8')
+
+        try:
+            subprocess.run(['systemctl', '--user', 'daemon-reload'], check=False, capture_output=True)
+            res = subprocess.run(['systemctl', '--user', 'enable', '--now', 'podarcis-server.service'], check=False, capture_output=True, text=True)
+            if res.returncode == 0:
+                console.print(f'[bold green]✓ Installed & enabled systemd boot service at {service_file}[/bold green]')
+            else:
+                console.print(f'[bold green]✓ Created systemd user unit at {service_file}[/bold green]')
+                if res.stderr.strip():
+                    console.print(f'[dim]Note: {res.stderr.strip()}[/dim]')
+
+            subprocess.run(['loginctl', 'enable-linger'], check=False, capture_output=True)
+        except Exception as e:
+            console.print(f'[bold green]✓ Created systemd unit at {service_file}[/bold green] ({e})')
+
+        return 0
+
+    elif action_name == 'uninstall':
+        service_file = Path.home() / '.config' / 'systemd' / 'user' / 'podarcis-server.service'
+        try:
+            subprocess.run(['systemctl', '--user', 'disable', '--now', 'podarcis-server.service'], check=False, capture_output=True)
+        except Exception:
+            pass
+
+        if service_file.exists():
+            try:
+                service_file.unlink()
+                console.print(f'[yellow]✓ Removed systemd user unit {service_file}[/yellow]')
+            except OSError as e:
+                console.print(f'[bold red]Error removing service file:[/bold red] {e}')
+                return 1
+        else:
+            console.print('[dim]Systemd unit podarcis-server.service was not installed.[/dim]')
+
+        try:
+            subprocess.run(['systemctl', '--user', 'daemon-reload'], check=False, capture_output=True)
+        except Exception:
+            pass
+
+        return 0
+
+    else:
+        # Default foreground execution
+        console.print(f'[bold #29b8db]Starting Podarcis Multi-User Server on port {port}...[/bold #29b8db]')
+        console.print(f'[bold green]✓ Login Portal live at http://localhost:{port}/login[/bold green]')
+        console.print(f'[bold green]✓ Admin Dashboard live at http://localhost:{port}/admin[/bold green]')
+        from podarcis.server.app import run_server
+        run_server(port=port)
+        return 0
+
+
+
+def cmd_user(args: argparse.Namespace) -> int:
+    '''Manage per-user containers and workspaces.'''
+    from podarcis.server.user_manager import UserManager
+    mgr = UserManager(root_dir)
+    action = getattr(args, 'user_action', 'list')
+
+    if action == 'list':
+        users = mgr.get_users_registry()
+        console.print('[bold #29b8db]Podarcis Multi-User Registry:[/bold #29b8db]\n')
+        for username, info in users.items():
+            c_info = mgr.get_container_for_user(username)
+            st = c_info.get('status') if c_info else 'Stopped'
+            port = c_info.get('port') if c_info else 'Auto'
+            console.print(f'  • {username:<15} [{info.get("role", "user")}] — Status: {st} (Port: {port})')
+        return 0
+
+    elif action == 'create':
+        username = args.username.lower()
+        role = getattr(args, 'role', 'user')
+        password = getattr(args, 'password', None)
+        try:
+            mgr.create_user(username, role, password=password)
+            mgr.start_user_container(username)
+            console.print(f'[bold green]✓ Provisioned user "{username}" container.[/bold green]')
+        except Exception as e:
+            console.print(f'[bold red]Error:[/bold red] {e}')
+            return 1
+        return 0
+
+    elif action == 'password':
+        username = args.username.lower()
+        password = args.password
+        try:
+            mgr.set_user_password(username, password)
+            console.print(f'[bold green]✓ Updated password for user "{username}".[/bold green]')
+        except Exception as e:
+            console.print(f'[bold red]Error:[/bold red] {e}')
+            return 1
+        return 0
+
+    elif action == 'start':
+        username = args.username.lower()
+        info = mgr.start_user_container(username)
+        console.print(f'[bold green]✓ Started container for user "{username}" (Port: {info.get("port")}).[/bold green]')
+        return 0
+
+    elif action == 'stop':
+        username = args.username.lower()
+        mgr.stop_user_container(username)
+        console.print(f'[yellow]Stopped container for user "{username}".[/yellow]')
+        return 0
+
+    elif action == 'delete':
+        username = args.username.lower()
+        try:
+            mgr.delete_user(username)
+            console.print(f'[bold green]✓ Deleted user "{username}".[/bold green]')
+        except Exception as e:
+            console.print(f'[bold red]Error:[/bold red] {e}')
+            return 1
+        return 0
 
     return 0
 
@@ -586,16 +864,8 @@ def cmd_open_tool(tool_type: str) -> int:
     command = valid.get(name.lower(), name)
     cwd = str(root_dir)
 
-    if tool_type == 'frontend' and name.lower() in ('vscode', 'code-server', 'vscode-web'):
+    if tool_type == 'frontend' and name.lower() in ('vscode', 'vscode-web'):
         _ensure_vscode_config(root_dir)
-
-    if tool_type == 'frontend' and name.lower() in ('code-server', 'vscode-web'):
-        port = os.environ.get('CODE_SERVER_PORT', '8080')
-        console.print('[bold #29b8db]Starting Code-Server Web Workspace container...[/bold #29b8db]')
-        subprocess.run(['docker', 'compose', 'up', '-d', '--build', '--remove-orphans'], cwd=cwd)
-        console.print(f'[bold green]✓ Code-Server Web Workspace live at http://localhost:{port}[/bold green]')
-        console.print('[dim]Password: change_this_password (configured in docker-compose.yml)[/dim]')
-        return 0
 
     try:
         if tool_type == 'backend':
@@ -701,6 +971,40 @@ def main() -> None:
     # frontend
     subparsers.add_parser('frontend', help='Open the configured frontend tool')
 
+    # server
+    server_parser = subparsers.add_parser('server', help='Start or manage Podarcis multi-user dynamic router server')
+    server_parser.add_argument('server_action', nargs='?', choices=['start', 'stop', 'status', 'install', 'uninstall'], help='Server action (start|stop|status|install|uninstall)')
+    server_parser.add_argument('--port', type=int, default=8080, help='Port to bind (default: 8080)')
+    server_parser.add_argument('--daemon', '-d', action='store_true', help='Run server as background daemon process')
+    server_parser.add_argument('--stop', action='store_true', help='Stop running server daemon')
+    server_parser.add_argument('--status', action='store_true', help='Check running server status')
+    server_parser.add_argument('--install', action='store_true', help='Install and enable systemd boot service')
+    server_parser.add_argument('--uninstall', action='store_true', help='Remove systemd boot service')
+    server_parser.add_argument('--json', action='store_true', help='Output status in JSON format')
+
+    # user
+    user_parser = subparsers.add_parser('user', help='Manage user containers and workspaces')
+    user_sub = user_parser.add_subparsers(dest='user_action', help='User action')
+    user_sub.add_parser('list', help='List user registry and container statuses')
+
+    user_create = user_sub.add_parser('create', help='Create user workspace & container')
+    user_create.add_argument('username', help='Username')
+    user_create.add_argument('--password', help='Initial user password')
+    user_create.add_argument('--role', choices=['user', 'admin'], default='user', help='User role')
+
+    user_pwd = user_sub.add_parser('password', help='Set or update a user password')
+    user_pwd.add_argument('username', help='Username')
+    user_pwd.add_argument('password', help='New password')
+
+    user_start = user_sub.add_parser('start', help='Start user container')
+    user_start.add_argument('username', help='Username')
+
+    user_stop = user_sub.add_parser('stop', help='Stop user container')
+    user_stop.add_argument('username', help='Username')
+
+    user_del = user_sub.add_parser('delete', help='Delete user workspace and container')
+    user_del.add_argument('username', help='Username')
+
     # reinstall
     reinstall_parser = subparsers.add_parser('reinstall', help='Re-run bootstrap installer')
     reinstall_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
@@ -740,6 +1044,10 @@ def main() -> None:
 
     if args.subcommand in ('job', 'cron'):
         sys.exit(cmd_job(args))
+    elif args.subcommand == 'server':
+        sys.exit(cmd_server(args))
+    elif args.subcommand == 'user':
+        sys.exit(cmd_user(args))
     elif args.subcommand == 'status':
         sys.exit(cmd_status(args))
     elif args.subcommand == 'ingest':
