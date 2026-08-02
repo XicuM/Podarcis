@@ -53,3 +53,9 @@ sources:
 ## Multi-Agent Verification Hand-off
 
 * After creating or editing a concept file in `wiki/`, report your changes and explicitly submit the updated file path to the `@auditor` subagent for machine verification.
+
+## Diagnostic Logging
+
+* If `diagnostics-mcp` is active and you encounter tool failures, API errors, missing sources, or user corrections during synthesis, invoke `log_pain_point` (`diagnostics-mcp`) to record the issue into `.podarcis/diagnostics/pain_points.jsonl`.
+
+

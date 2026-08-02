@@ -12,12 +12,12 @@ Use this skill when `sources_backend: gdrive` is set in `.podarcis/config.yaml`.
 
 ### Step 1 — Discover sources
 
-- Use `google-drive-mcp` to browse the shared GDrive folder(s) and identify relevant documents.
+- Use official remote `drive` MCP (`search_files`) to browse the shared GDrive folder(s) and identify relevant documents.
 - Use `research-mcp` (`search_literature`) to discover peer-reviewed papers by keyword or topic.
 
 ### Step 2 — Read content without copying
 
-- Use `google-drive-mcp` to read the full text of relevant GDrive documents.
+- Use official remote `drive` MCP (`read_file_content`) to read the full text of relevant GDrive documents.
 - Use `research-mcp` (`search_literature`) to retrieve paper abstracts and metadata.
 - **Do not download, copy, or commit any file locally.** GDrive documents stay on GDrive.
 
