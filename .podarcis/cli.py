@@ -413,6 +413,54 @@ def cmd_lint(args: argparse.Namespace) -> int:
     return subprocess.run([py_bin, str(check_links)] + targets).returncode
 
 
+def cmd_diagnose(args: argparse.Namespace) -> int:
+    '''Display platform pain points and current logged issues.'''
+    diag_script = root_dir / '.agents' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
+    if not diag_script.exists():
+        console.print('[bold red]Error:[/bold red] diagnose_session.py script not found.')
+        return 1
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('diagnose_session', diag_script)
+    if spec is None or spec.loader is None:
+        console.print('[bold red]Error:[/bold red] Could not load diagnose_session module.')
+        return 1
+    diag_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(diag_mod)
+
+    if getattr(args, 'clear', False):
+        cleared = diag_mod.clear_issues(base_dir=root_dir)
+        console.print(f'[bold green]Cleared {cleared} logged platform issue(s).[/bold green]')
+        return 0
+
+    log_sess = getattr(args, 'log_session', None)
+    if log_sess:
+        p = Path(log_sess)
+        points = diag_mod.parse_transcript(p)
+        diag_mod.log_pain_points(points, base_dir=root_dir)
+        console.print(f'[bold green]Parsed {p.name} and logged {len(points)} pain point(s).[/bold green]')
+
+    issues = diag_mod.get_active_issues(base_dir=root_dir)
+    if getattr(args, 'json', False):
+        print(json.dumps(issues, indent=2))
+        return 0
+
+    if not issues:
+        console.print('[bold green]No active platform pain points logged in .podarcis/diagnostics/[/bold green]')
+    else:
+        console.print(f'[bold #29b8db]Current Platform Pain Points ({len(issues)} active):[/bold #29b8db]\n')
+        for idx, issue in enumerate(issues, 1):
+            sev = issue.get('severity', 'medium')
+            cat = issue.get('category', 'issue')
+            summ = issue.get('summary', '')
+            ts = issue.get('timestamp', '')
+            color = 'red' if sev == 'high' else 'yellow'
+            console.print(f'{idx}. [{color}][{sev.upper()}][/{color}] [bold white][{cat}][/bold white] {summ} [dim]({ts})[/dim]')
+
+    return 0
+
+
+
 def cmd_open_tool(tool_type: str) -> int:
     '''Open the configured tool (backend or frontend) at the current directory.'''
     valid = BACKENDS if tool_type == 'backend' else FRONTENDS
@@ -524,6 +572,12 @@ def main() -> None:
     lint_parser = subparsers.add_parser('lint', help='Run link integrity check')
     lint_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
 
+    # diagnose
+    diag_parser = subparsers.add_parser('diagnose', help='Display current platform pain points and logged issues')
+    diag_parser.add_argument('--json', action='store_true', help='Output issues in JSON format')
+    diag_parser.add_argument('--clear', action='store_true', help='Clear or resolve current logged issues')
+    diag_parser.add_argument('--log-session', type=str, metavar='PATH', help='Parse and log pain points for a transcript file')
+
     args = parser.parse_args()
 
     if args.interactive:
@@ -549,11 +603,7 @@ def main() -> None:
         elif args.config_action == 'sync':
             sys.exit(cmd_config_sync(args))
         else:
-            if sys.stdin.isatty():
-                sys.exit(cmd_interactive(args))
-            else:
-                config_parser.print_help()
-                sys.exit(1)
+            sys.exit(cmd_interactive(args))
 
     elif args.subcommand == 'backend':
         sys.exit(cmd_backend(args))
@@ -567,8 +617,11 @@ def main() -> None:
         sys.exit(cmd_test(args))
     elif args.subcommand == 'lint':
         sys.exit(cmd_lint(args))
+    elif args.subcommand == 'diagnose':
+        sys.exit(cmd_diagnose(args))
     else:
-        sys.exit(cmd_frontend(args))
+        sys.exit(cmd_interactive(args))
+
 
 
 if __name__ == '__main__':

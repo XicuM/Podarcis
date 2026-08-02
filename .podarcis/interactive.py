@@ -18,6 +18,8 @@ def interactive_config(root: Path) -> None:
     '''Run main interactive menu for configuring MCP servers, skills, and
     repositories.'''
     custom_style = questionary.Style(QSTYLE)
+    yaml_path = root / '.podarcis' / 'config.yaml'
+    initial_content = yaml_path.read_text(encoding='utf-8') if yaml_path.exists() else ''
 
     while True:
         console.clear()
@@ -34,6 +36,9 @@ def interactive_config(root: Path) -> None:
 
         match action:
             case 'Exit' | None:
+                current_content = yaml_path.read_text(encoding='utf-8') if yaml_path.exists() else ''
+                if initial_content != current_content:
+                    console.print(f'[bold green]✓ .podarcis/config.yaml modified.[/bold green]')
                 console.print('[bold #29b8db]Exiting config.[/bold #29b8db]')
                 break
 

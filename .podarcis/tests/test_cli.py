@@ -119,3 +119,24 @@ def test_generate_opencode_json_preserves_custom_config(tmp_path, monkeypatch):
     assert 'sample-mcp' in data['mcp']
 
 
+def test_cli_diagnose(tmp_path, monkeypatch, capsys):
+    '''Test podarcis diagnose subcommand output.'''
+    import cli
+    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+
+    # Copy actual diagnose_session.py to tmp_path structure so import works in test
+    script_dir = tmp_path / '.agents' / 'skills' / 'self-improvement' / 'scripts'
+    script_dir.mkdir(parents=True)
+    real_script = Path(__file__).resolve().parent.parent.parent / '.agents' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
+    (script_dir / 'diagnose_session.py').write_text(real_script.read_text(encoding='utf-8'), encoding='utf-8')
+
+    # Run status check when no issues exist
+    args = Namespace(json=True, clear=False, log_session=None)
+    res = cli.cmd_diagnose(args)
+    assert res == 0
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == '[]'
+
+
+
