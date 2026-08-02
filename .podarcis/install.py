@@ -51,7 +51,9 @@ def _bootstrap_venv() -> None:
     if sys.executable == str(python):
         return  # already inside venv
 
-    if not venv_dir.exists():
+    if not venv_dir.exists() or not python.exists():
+        if venv_dir.exists():
+            shutil.rmtree(venv_dir, ignore_errors=True)
         _say('[green]✓ Creating Python virtual environment (.venv)...[/green]')
         run_command([sys.executable, '-m', 'venv', str(venv_dir)])
 

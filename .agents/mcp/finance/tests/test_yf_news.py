@@ -1,4 +1,5 @@
-import yfinance as yf
+import pytest
+yf = pytest.importorskip("yfinance")
 
 def test_yfinance_news():
     t = yf.Ticker("AAPL")

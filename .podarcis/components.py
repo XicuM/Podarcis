@@ -106,7 +106,11 @@ def run_mcp_setup(root: Path, name: str) -> bool:
     # smap is dir_name → key; build inverse (key → dir_name) to resolve path from key
     inv_smap = {v: k for k, v in smap.items()}
     dir_name = inv_smap.get(name) or smap.get(name) or name
-    if not (setup_script := MCPS(root)/dir_name/'setup.py').exists(): return True
+    mcp_dir = MCPS(root)/dir_name
+    if not (setup_script := mcp_dir/'setup.py').exists(): return True
+
+    if (req_file := mcp_dir / 'requirements.txt').exists():
+        install_deps(root, str(req_file), True, f'Verifying dependencies for {name}...')
 
     import importlib.util
     spec = importlib.util.spec_from_file_location(f'{dir_name}_setup', setup_script)

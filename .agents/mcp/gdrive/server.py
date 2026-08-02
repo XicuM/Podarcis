@@ -222,19 +222,26 @@ def _convert_media_to_markdown(request, suffix: str) -> str:
 if __name__ == "__main__":
     if "--auth" in sys.argv:
         from google_auth_oauthlib.flow import InstalledAppFlow
-        credentials_path = os.environ.get("GDRIVE_CREDENTIALS_PATH") or str(
-            ROOT / ".agents" / "mcp" / "gdrive" / "credentials.json"
-        )
+        cred_candidates = [
+            ROOT / ".agents" / "mcp" / "gdrive" / "credentials.json",
+            ROOT / "credentials.json",
+            ROOT / ".podarcis" / "credentials.json",
+        ]
+        if os.environ.get("GDRIVE_CREDENTIALS_PATH"):
+            cred_candidates.insert(0, Path(os.environ["GDRIVE_CREDENTIALS_PATH"]))
+
+        cred_path = next((p for p in cred_candidates if p.exists()), None)
         token_path = os.environ.get("GDRIVE_TOKEN_PATH") or str(
             ROOT / ".agents" / "mcp" / "gdrive" / "token.json"
         )
 
-        if not os.path.exists(credentials_path):
-            print("Credentials file not found. Using default application credentials...")
-            flow = InstalledAppFlow.from_client_config(DEFAULT_CLIENT_CONFIG, SCOPES)
-        else:
-            print("Using user-provided credentials.json...")
-            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
+        if not cred_path:
+            print("✕ OAuth credentials.json file not found.")
+            print(f"Please place your credentials.json at: {ROOT / '.agents' / 'mcp' / 'gdrive' / 'credentials.json'} or {ROOT / 'credentials.json'}")
+            sys.exit(1)
+
+        print(f"Using credentials file at '{cred_path}'...")
+        flow = InstalledAppFlow.from_client_secrets_file(str(cred_path), SCOPES)
 
         print("Starting OAuth interactive flow. Opening browser...")
         creds = flow.run_local_server(port=0)
