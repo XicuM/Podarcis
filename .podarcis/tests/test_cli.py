@@ -139,19 +139,28 @@ def test_cli_diagnose(tmp_path, monkeypatch, capsys):
     assert captured.out.strip() == '[]'
 
 
-def test_sync_claudian_plugin_dynamic_provisioning(tmp_path, monkeypatch):
-    '''Test dynamic provisioning of local .obsidian config when setting frontend to obsidian.'''
+def test_config_frontend_obsidian_opt_in(tmp_path, monkeypatch):
+    '''Test opt-in Obsidian plugin configuration via CLI flags.'''
     import cli
     monkeypatch.setattr(cli, 'root_dir', tmp_path)
 
-    cli._sync_claudian_plugin('opencode')
+    # 1. With --no-plugins: .obsidian/ should remain untouched
+    args_no = Namespace(frontend_name='obsidian', configure_plugins=False)
+    res = cli.cmd_config_frontend(args_no)
+    assert res == 0
+    assert not (tmp_path / '.obsidian').exists()
 
+    # 2. With --configure-plugins: Claudian plugin is configured for active backend
+    cli.cmd_config_backend(Namespace(backend_name='opencode'))
+    args_yes = Namespace(frontend_name='obsidian', configure_plugins=True)
+    res = cli.cmd_config_frontend(args_yes)
+    assert res == 0
     obsidian_dir = tmp_path / '.obsidian'
     assert obsidian_dir.exists()
-    assert (obsidian_dir / 'app.json').exists()
     assert (obsidian_dir / 'community-plugins.json').exists()
     plugins = json.loads((obsidian_dir / 'community-plugins.json').read_text())
     assert 'realclaudian' in plugins
+
 
 
 

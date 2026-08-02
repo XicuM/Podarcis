@@ -51,14 +51,17 @@ def _get_pytest_bin() -> str:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    '''List component and repository status.'''
+    '''List component, job, and repository status.'''
     mcp_servers, skills, agents = discover_components(root_dir)
     enabled_mcp = get_enabled_mcp_servers(root_dir)
+    from jobs import discover_jobs
+    jobs = discover_jobs(root_dir)
 
     status_data = {
         'mcp_servers': {},
         'skills': {},
         'agents': {},
+        'jobs': {},
         'repositories': {},
     }
 
@@ -80,6 +83,14 @@ def cmd_status(args: argparse.Namespace) -> int:
         status_data['agents'][key] = {
             'enabled': info.get('enabled', False),
             'tokens': info.get('tokens', 0),
+        }
+
+    for key, info in sorted(jobs.items()):
+        status_data['jobs'][key] = {
+            'enabled': info.get('enabled', False),
+            'schedule': info.get('schedule', ''),
+            'description': info.get('description', ''),
+            'last_run': info.get('last_run', ''),
         }
 
     for r_name in get_repo_names(root_dir):
@@ -109,6 +120,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     for k, v in status_data['agents'].items():
         st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
         console.print(f'  • {k:<20} [{st}] ({v["tokens"]} tokens)')
+
+    console.print('\n[bold white]Jobs:[/bold white]')
+    for k, v in status_data['jobs'].items():
+        st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
+        sched = f'[{v["schedule"]}]' if v["schedule"] else ''
+        console.print(f'  • {k:<20} [{st}] {sched}')
 
     console.print('\n[bold white]Repositories:[/bold white]')
     for k, v in status_data['repositories'].items():
@@ -253,9 +270,6 @@ def _sync_claudian_plugin(backend: str) -> None:
 
     if supported:
         obsidian_dir.mkdir(parents=True, exist_ok=True)
-        app_json = obsidian_dir / 'app.json'
-        if not app_json.exists():
-            app_json.write_text('{\n  "legacyEditor": false,\n  "livePreview": true\n}\n', encoding='utf-8')
 
     # --- community-plugins.json: add or remove the plugin entry ---
     plugins: list[str] = []
@@ -319,7 +333,8 @@ def cmd_config_backend(args: argparse.Namespace) -> int:
     from backends import generate_for_backend
     paths = generate_for_backend(root_dir, name)
     if paths:
-        console.print(f'[dim]Regenerated MCP config for {name}: {[str(p) for p in paths]}[/dim]')
+        path_list = paths if isinstance(paths, list) else [paths]
+        console.print(f'[dim]Regenerated MCP config for {name}: {[str(p) for p in path_list]}[/dim]')
     console.print(f'[bold green]✓ Backend set to {name}.[/bold green]')
     return 0
 
@@ -345,8 +360,22 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
     set_config_value(root_dir, name, 'frontend')
     if name == 'obsidian':
         backend = get_config_value(root_dir, 'backend', default='none')
-        _sync_claudian_plugin(backend)
-        console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green]')
+        cfg_plugins = getattr(args, 'configure_plugins', None)
+        if cfg_plugins is None and sys.stdin.isatty():
+            try:
+                import questionary
+                cfg_plugins = questionary.confirm(
+                    f'Configure Obsidian plugins for agentic knowledge base (Claudian for backend "{backend}")?',
+                    default=True,
+                ).ask()
+            except Exception:
+                cfg_plugins = False
+
+        if cfg_plugins:
+            _sync_claudian_plugin(backend)
+            console.print(f'[bold green]✓ Frontend set to obsidian with Claudian plugin configured.[/bold green]')
+        else:
+            console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green] [dim]Skipped Obsidian plugin configuration.[/dim]')
     elif name == 'none':
         console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.')
     else:
@@ -471,6 +500,60 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
 
 
 
+def cmd_job(args: argparse.Namespace) -> int:
+    '''Manage and execute modular Podarcis jobs (.agents/jobs/*.yaml).'''
+    from jobs import discover_jobs, set_job_status, run_job
+    action = getattr(args, 'job_action', None) or 'list'
+    name = getattr(args, 'name', None)
+
+    if action == 'list':
+        discovered = discover_jobs(root_dir)
+        if getattr(args, 'json', False):
+            print(json.dumps(discovered, indent=2, default=str))
+            return 0
+        console.print('[bold #29b8db]Registered Jobs (.agents/jobs/*.yaml):[/bold #29b8db]\n')
+        if not discovered:
+            console.print('[dim]No jobs found in .agents/jobs/[/dim]')
+            return 0
+        for k, v in discovered.items():
+            st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
+            sched = v['schedule']
+            last = f' [dim](last run: {v["last_run"]})[/dim]' if v['last_run'] else ''
+            console.print(f'  • {k:<20} [{st}] [{sched}]{last}\n    [dim]{v["description"]}[/dim]\n')
+        return 0
+
+    if action == 'enable':
+        if not name:
+            console.print('[bold red]Error:[/bold red] Specify job name to enable.')
+            return 1
+        ok, msg = set_job_status(root_dir, name, True)
+        if ok:
+            console.print(f'[bold green]✓ {msg}[/bold green]')
+            return 0
+        console.print(f'[bold red]Error:[/bold red] {msg}')
+        return 1
+
+    if action == 'disable':
+        if not name:
+            console.print('[bold red]Error:[/bold red] Specify job name to disable.')
+            return 1
+        ok, msg = set_job_status(root_dir, name, False)
+        if ok:
+            console.print(f'[yellow]✓ {msg}[/yellow]')
+            return 0
+        console.print(f'[bold red]Error:[/bold red] {msg}')
+        return 1
+
+    if action == 'run':
+        if not name:
+            console.print('[bold red]Error:[/bold red] Specify job name to run.')
+            return 1
+        res = run_job(root_dir, name, dry_run=getattr(args, 'dry_run', False))
+        return 0 if res.get('status') != 'error' else 1
+
+    return 0
+
+
 def cmd_open_tool(tool_type: str) -> int:
     '''Open the configured tool (backend or frontend) at the current directory.'''
     valid = BACKENDS if tool_type == 'backend' else FRONTENDS
@@ -514,8 +597,26 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest='subcommand', title='Subcommands', help='Action to perform')
 
     # status
-    status_parser = subparsers.add_parser('status', help='Display status of MCP servers, skills, agents, and repos')
+    status_parser = subparsers.add_parser('status', help='Display status of MCP servers, skills, agents, jobs, and repos')
     status_parser.add_argument('--json', action='store_true', help='Output status in JSON format')
+
+    # job / cron
+    for job_cmd in ('job', 'cron'):
+        j_parser = subparsers.add_parser(job_cmd, help='Manage and execute modular scheduled jobs (.agents/jobs/*.yaml)')
+        j_sub = j_parser.add_subparsers(dest='job_action', help='Job action')
+
+        jl = j_sub.add_parser('list', help='List discovered jobs, schedules, and status')
+        jl.add_argument('--json', action='store_true', help='Output status in JSON format')
+
+        jr = j_sub.add_parser('run', help='Execute job immediately by name')
+        jr.add_argument('name', nargs='?', help='Job name (e.g. gdrive_sync, audit_wiki)')
+        jr.add_argument('--dry-run', action='store_true', help='Preview execution without side effects')
+
+        je = j_sub.add_parser('enable', help='Enable job and install its schedule in crontab')
+        je.add_argument('name', help='Job name')
+
+        jd = j_sub.add_parser('disable', help='Disable job and remove its schedule from crontab')
+        jd.add_argument('name', help='Job name')
 
     # config
     config_parser = subparsers.add_parser('config', help='Configure components and repositories')
@@ -548,6 +649,8 @@ def main() -> None:
     # config frontend
     cfg_frontend = config_sub.add_parser('frontend', help='Set the frontend tool (vscode, obsidian, none)')
     cfg_frontend.add_argument('frontend_name', choices=list(FRONTENDS), metavar='{vscode,obsidian,none}', help='Frontend name')
+    cfg_frontend.add_argument('--configure-plugins', action='store_true', dest='configure_plugins', default=None, help='Configure Obsidian plugins (Claudian)')
+    cfg_frontend.add_argument('--no-plugins', action='store_false', dest='configure_plugins', help='Skip Obsidian plugin configuration')
 
     # config interactive
     config_sub.add_parser('interactive', help='Launch interactive TUI menu')
@@ -588,13 +691,24 @@ def main() -> None:
     diag_parser.add_argument('--clear', action='store_true', help='Clear or resolve current logged issues')
     diag_parser.add_argument('--log-session', type=str, metavar='PATH', help='Parse and log pain points for a transcript file')
 
+    # ingest
+    ingest_parser = subparsers.add_parser('ingest', help='Run automated source ingestion (GDrive API delta check)')
+    ingest_parser.add_argument('--gdrive', action='store_true', help='Run Google Drive API delta ingestion')
+    ingest_parser.add_argument('--dry-run', action='store_true', help='Scan deltas without modifying files')
+
     args = parser.parse_args()
 
     if args.interactive:
         sys.exit(cmd_interactive(args))
 
-    if args.subcommand == 'status':
+    if args.subcommand in ('job', 'cron'):
+        sys.exit(cmd_job(args))
+    elif args.subcommand == 'status':
         sys.exit(cmd_status(args))
+    elif args.subcommand == 'ingest':
+        from jobs import run_job
+        res = run_job(root_dir, 'gdrive_sync', dry_run=getattr(args, 'dry_run', False))
+        sys.exit(0 if res.get('status') != 'error' else 1)
     elif args.subcommand == 'config':
         if args.config_action == 'list':
             sys.exit(cmd_status(args))

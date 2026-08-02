@@ -30,7 +30,7 @@ def interactive_config(root: Path) -> None:
 
         action = questionary.select(
             'What would you like to configure?',
-            choices=['MCP Servers', 'Skills', 'Agents', 'Repositories', 'Backend', 'Frontend', 'Exit'],
+            choices=['MCP Servers', 'Skills', 'Agents', 'Jobs', 'Repositories', 'Backend', 'Frontend', 'Exit'],
             style=custom_style,
         ).ask()
 
@@ -130,6 +130,20 @@ def interactive_config(root: Path) -> None:
                         set_agent_status(root, k, k in s, info)
                     console.print('[bold green]✓ Agent configs updated.[/bold green]\n')
 
+            case 'Jobs':
+                from jobs import discover_jobs, set_job_status
+                jobs = discover_jobs(root)
+                choices = build_component_choices(root, 'job', jobs)
+                selected = questionary.checkbox(
+                    'Select Jobs to enable (automatically syncs crontab):',
+                    choices=choices, style=custom_style,
+                ).ask()
+                if selected is not None:
+                    s = set(selected)
+                    for k in jobs:
+                        set_job_status(root, k, k in s)
+                    console.print('[bold green]✓ Job configs and crontab updated.[/bold green]\n')
+
             case 'Repositories':
                 while True:
                     repo_choices = []
@@ -180,10 +194,19 @@ def interactive_config(root: Path) -> None:
                 if frontend:
                     set_config_value(root, frontend, 'frontend')
                     if frontend == 'obsidian':
-                        from cli import _sync_claudian_plugin
                         backend = get_config_value(root, 'backend', default='none')
-                        _sync_claudian_plugin(backend)
-                    if frontend == 'none':
+                        ans = questionary.confirm(
+                            f'Configure Obsidian plugins for agentic knowledge base (Claudian plugin for backend "{backend}")?',
+                            default=True,
+                            style=custom_style,
+                        ).ask()
+                        if ans:
+                            from cli import _sync_claudian_plugin
+                            _sync_claudian_plugin(backend)
+                            console.print(f'[bold green]✓ Claudian plugin configured for Obsidian.[/bold green]\n')
+                        else:
+                            console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green] [dim]Skipped plugin configuration.[/dim]\n')
+                    elif frontend == 'none':
                         console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.\n')
                     else:
                         console.print(f'[bold green]✓ Frontend set to {frontend}.[/bold green]\n')
