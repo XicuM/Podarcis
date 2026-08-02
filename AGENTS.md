@@ -28,11 +28,15 @@ The coordination is asynchronous, mediated by the file structure:
 *   **Sources (`sources/` repository, optional)**: Local git repository for committed source files. Only active when `sources_backend: local`. Configure remote via `repositories.sources` in `.podarcis/config.yaml`.
 *   **Wiki (`wiki/` repository)**: Objective knowledge base (anonymized, theory-focused) written in OKF v0.2 format.
 *   **Workspace (`workspace/` repository)**: Actionable deliverables (user profiles, feedback, protocols, reviews) written in OKF v0.2 format. Always holds per-user literature ingested via `research-mcp` in `workspace/literature/` when `sources_backend: gdrive`.
-*   **Podarcis Engine (`.podarcis/` package & `podarcis` CLI)**: Python package and unified CLI tool (`podarcis` / `./podarcis`) for non-interactive agent configuration management (`podarcis status --json`, `podarcis config enable/disable`), bootstrap installation (`podarcis install`), testing (`podarcis test`), link linting (`podarcis lint`), and interactive TUI (`podarcis config interactive`).
+*   **Podarcis Engine (`.podarcis/` package & `podarcis` CLI)**: Python package and unified CLI tool (`podarcis` / `./podarcis`) for configuration management (`podarcis status --json`, `podarcis config enable/disable`), automated Google Drive API delta ingestion (`podarcis ingest --gdrive`), crontab setup (`podarcis ingest --install-cron`), bootstrap installation (`podarcis install`), testing (`podarcis test`), link linting (`podarcis lint`), and interactive TUI (`podarcis config interactive`).
+
+### Configuration & State Separation
+*   **Static Configuration (`.podarcis/config.yaml`)**: Stores static settings such as `apis`, `remote_mcp`, and splash quotes (`oneliners`).
+*   **Runtime State (`.podarcis/state.yaml`)**: Stores dynamic state variables such as active `backend`, `frontend`, enabled `mcp_servers`, `engines`, `repositories`, and `gdrive_sync` (`last_sync` timestamp).
 
 ### Sources Backend Configuration
 
-Set `sources_backend` in `.podarcis/config.yaml` (or via `podarcis config interactive` → **Sources Backend**):
+Set `sources_backend` in `.podarcis/state.yaml` (or via `podarcis config interactive` → **Sources Backend**):
 
 | Value | GDrive role | Paper downloads | `sources[].resource` format |
 |---|---|---|---|

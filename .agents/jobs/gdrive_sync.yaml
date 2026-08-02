@@ -1,0 +1,6 @@
+name: gdrive_sync
+description: "Check Google Drive sources for updated documents and ingest into OKF wiki"
+schedule: "0 2 * * *"
+enabled: true
+type: python
+handler: gdrive_sync

@@ -103,6 +103,8 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
     version, date_str = load_version_info(root_dir)
     mcp_servers, skills, agents = discover_components(root_dir)
     enabled_mcp = get_enabled_mcp_servers(root_dir)
+    from jobs import discover_jobs
+    jobs = discover_jobs(root_dir)
 
     left_w, col_gap = 26, 4
     total_inner_w = left_w + col_gap + right_w
@@ -114,10 +116,12 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
     skill_tokens = sum(v.get('tokens', 0) for v in skills.values() if v.get('enabled'))
     agent_active = sum(1 for v in agents.values() if v.get('enabled'))
     agent_tokens = sum(v.get('tokens', 0) for v in agents.values() if v.get('enabled'))
+    job_active = sum(1 for v in jobs.values() if v.get('enabled'))
 
     mcp_hdr = f'MCP Servers ({mcp_active}/{len(mcp_servers)})'
     skill_hdr = f'Skills ({skill_active}/{len(skills)})'
     agent_hdr = f'Agents ({agent_active}/{len(agents)})'
+    job_hdr = f'Jobs ({job_active}/{len(jobs)})'
 
     # Components for the right column
     right_items = [
@@ -137,6 +141,12 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
         *[
             ('item', a, agents[a].get('tokens', 0), agents[a]['enabled'])
             for a in sorted(agents)
+        ],
+        ('empty', '', '', True),
+        ('header', job_hdr, None, True),
+        *[
+            ('item', j, None, jobs[j]['enabled'])
+            for j in sorted(jobs)
         ],
     ]
 

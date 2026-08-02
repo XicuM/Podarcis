@@ -1,4 +1,4 @@
-'''Shared system, process, and file utilities for TUI operations.'''
+'''Shared system, process, state, and configuration file utilities for Podarcis.'''
 
 import json, subprocess, sys
 from pathlib import Path
@@ -24,9 +24,12 @@ def load_json(path: Path) -> dict:
 
 def save_json(path: Path, data: dict) -> None:
     '''Persist dict to formatted JSON file.'''
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
-        f.write('\n')
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+            f.write('\n')
+    except Exception: pass
 
 
 def load_yaml(path: Path) -> dict:
@@ -44,13 +47,54 @@ def save_yaml(path: Path, data: dict) -> None:
     '''Persist dict to YAML file.'''
     try:
         import yaml
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
     except Exception: pass
 
 
+STATE_KEYS = {'backend', 'frontend', 'repositories', 'engines', 'mcp_servers', 'gdrive_sync', 'sources_backend'}
+
+
+def get_state_value(root_dir: Path, *keys: str, default: str = '') -> str:
+    '''Read a nested runtime state value from .podarcis/state.yaml (falling back to config.yaml).'''
+    st = load_yaml(root_dir / '.podarcis' / 'state.yaml')
+    val = st
+    for k in keys:
+        if isinstance(val, dict) and k in val:
+            val = val[k]
+        else:
+            val = None
+            break
+    if val is not None and isinstance(val, str):
+        return val
+
+    # Fallback to config.yaml
+    cfg = load_yaml(root_dir / '.podarcis' / 'config.yaml')
+    val = cfg
+    for k in keys:
+        if isinstance(val, dict):
+            val = val.get(k, {})
+        else:
+            return default
+    return val if isinstance(val, str) else default
+
+
+def set_state_value(root_dir: Path, value: str, *keys: str) -> None:
+    '''Write a nested runtime state value into .podarcis/state.yaml.'''
+    st_path = root_dir / '.podarcis' / 'state.yaml'
+    data = load_yaml(st_path)
+    target = data
+    for k in keys[:-1]:
+        target = target.setdefault(k, {})
+    target[keys[-1]] = value
+    save_yaml(st_path, data)
+
+
 def get_config_value(root_dir: Path, *keys: str, default: str = '') -> str:
-    '''Read a nested config value from .podarcis/config.yaml.'''
+    '''Read a nested value checking state.yaml first for state keys, then config.yaml.'''
+    if keys and keys[0] in STATE_KEYS:
+        return get_state_value(root_dir, *keys, default=default)
     cfg = load_yaml(root_dir / '.podarcis' / 'config.yaml')
     val = cfg
     for k in keys:
@@ -62,7 +106,10 @@ def get_config_value(root_dir: Path, *keys: str, default: str = '') -> str:
 
 
 def set_config_value(root_dir: Path, value: str, *keys: str) -> None:
-    '''Write a nested config value into .podarcis/config.yaml.'''
+    '''Write a value to state.yaml if it's state-related, or config.yaml otherwise.'''
+    if keys and keys[0] in STATE_KEYS:
+        set_state_value(root_dir, value, *keys)
+        return
     cfg_path = root_dir / '.podarcis' / 'config.yaml'
     data = load_yaml(cfg_path)
     target = data
@@ -73,12 +120,12 @@ def set_config_value(root_dir: Path, value: str, *keys: str) -> None:
 
 
 def set_engine_status(root_dir: Path, engine_name: str, enabled: bool) -> None:
-    '''Update engine status in .podarcis/config.yaml.'''
-    cfg_path = root_dir/'.podarcis'/'config.yaml'
-    data = load_yaml(cfg_path)
+    '''Update engine status in .podarcis/state.yaml.'''
+    st_path = root_dir / '.podarcis' / 'state.yaml'
+    data = load_yaml(st_path)
     engines = data.setdefault('engines', {})
     engines[engine_name] = enabled
-    save_yaml(cfg_path, data)
+    save_yaml(st_path, data)
 
 
 def load_version_info(root_dir: Path) -> tuple[str, str]:

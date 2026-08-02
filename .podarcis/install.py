@@ -100,17 +100,41 @@ def _bootstrap_venv() -> None:
 # ── .podarcis/config.yaml ──────────────────────────────────────────────────
 
 def _create_podarcis_yaml() -> None: 
-    if (yaml := root/'.podarcis'/'config.yaml').exists(): return
-    save_yaml(yaml, {
-        'apis': {}, 'repositories': {}, 'engines': {'qmd': False},
-        'oneliners': [
-        "Agile enough to catch a dangling reference.",
-        "Quick on its feet. Quicker on the audit.",
-        "Wall-crawling through the taxonomy tree, link by link.",
-        "Filesystem traversal at gecko speed.",
-        "Podarcis: endemic to knowledge graphs everywhere.",
-    ],
-    })
+    cfg_file = root / '.podarcis' / 'config.yaml'
+    st_file = root / '.podarcis' / 'state.yaml'
+
+    if not cfg_file.exists():
+        save_yaml(cfg_file, {
+            'apis': {'semantic_scholar_api_key': 'your_api_key_here'},
+            'remote_mcp': {
+                'drive': {
+                    'url': 'https://drivemcp.googleapis.com/mcp/v1',
+                    'transport': 'streamable-http',
+                    'oauth': {
+                        'client_id_env': 'GDRIVE_OAUTH_CLIENT_ID',
+                        'client_secret_env': 'GDRIVE_OAUTH_CLIENT_SECRET',
+                        'scope': 'https://www.googleapis.com/auth/drive.readonly',
+                    },
+                }
+            },
+            'oneliners': [
+                'Agile enough to catch a dangling reference.',
+                'Quick on its feet. Quicker on the audit.',
+                'Wall-crawling through the taxonomy tree, link by link.',
+                'Filesystem traversal at gecko speed.',
+                'Podarcis: endemic to knowledge graphs everywhere.',
+            ],
+        })
+
+    if not st_file.exists():
+        save_yaml(st_file, {
+            'backend': 'opencode',
+            'frontend': 'none',
+            'repositories': {'sources': 'gdrive', 'wiki': '', 'workspace': ''},
+            'engines': {'qmd': False},
+            'mcp_servers': {'finance-mcp': False, 'menumaker-mcp': False},
+            'gdrive_sync': {'last_sync': ''},
+        })
 
 def _configure_repos() -> None:
     from repos import get_repo_names, prompt_configure_repo

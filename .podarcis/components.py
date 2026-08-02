@@ -151,6 +151,9 @@ def build_component_choices(root: Path, comp_type: str, items: dict, enabled_set
         elif comp_type == 'agent':
             desc = get_agent_desc(root, k)
             checked = items[k].get('enabled', False)
+        elif comp_type == 'job':
+            desc = f"{items[k].get('description', '')} [{items[k].get('schedule', '')}]"
+            checked = items[k].get('enabled', False)
         else:
             desc = ''
             checked = False

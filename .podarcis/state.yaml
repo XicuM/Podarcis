@@ -1,0 +1,13 @@
+backend: opencode
+frontend: none
+repositories:
+  sources: gdrive
+  wiki: git@gitlab-internal.bsc.es:xmaripra/hpdsa-wiki-wiki.git
+  workspace: ''
+engines:
+  qmd: false
+mcp_servers:
+  finance-mcp: false
+  menumaker-mcp: false
+gdrive_sync:
+  last_sync: ''
