@@ -10,7 +10,6 @@
     "**/*.yaml": true,
     "**/*.yml": true,
     "**/Dockerfile": true,
-    "**/Makefile": true,
     "**/node_modules": true,
     "**/podarcis": true,
     "**/public": true,

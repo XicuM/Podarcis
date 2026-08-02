@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| <br>⠀⠀⠀⠀⠀⠀⠀⠀⠠⣽⣆⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠀⠀⠀⣤⣤⣤⣤⣄⡚⠻⣿⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠀⠀⠀⣿⣿⣿⣿⣿⣿ ⣸⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠀⢀⡀⠸⢿⣿⣿⣿⣿⣶⣿⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠐⠲⣿⣼⠂ ⣿⣿⣿⣿⣿⣆⠀⢀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br> ⠈⠙⠻⣶⣼⣿⢿⣿⣿⣿⣿⡆⠙⢿⣦⣄⣀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠀⠀⠀⠀⠀⠉⠁⢸⣿⣿⣿⣿⣿⠀⣀⣄⠉⠙⠛⠿⢷⣦⣀⠀⠀⠀<br>⠀⠀⠀⠀⢀⠰⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⡀⣠⠄⠀⠀⠈⠻⣿⡆⠀<br>⠀⠀⠠⠶⢮⣷⣿⡋⠋⠉⢹⣿⣿⠉⠀⠻⣷⣿⣿⡉⠓⠀⠀⢹⣿⠀<br>⠀⠀⠀⠋⠹⠉⠙⠁⠀⠀⠈⣿⣿⡇⠀⠀⠈⠉⠆⠁⠀⠀⠀⢸⣿⠇<br>⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢿⣿⣄⠀⠀⠀⠀⠀⠀⠀⢀⣾⣿⠁<br>⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣿⣦⣄⡀⡀⢀⣠⣴⣿⣿⠃⠀<br>⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠛⠿⠿⣿⣿⠿⠿⠋⠁⠀⠀<br> | **Podarcis**<br> *The Research and Wiki Builder Agent* <br><br>Installation:<br>```git clone https://github.com/XicuM/Podarcis.git```<br>```cd Podarcis```<br>```make install```<br> |
+| <br>⠀⠀⠀⠀⠀⠀⠀⠀⠠⣽⣆⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠀⠀⠀⣤⣤⣤⣤⣄⡚⠻⣿⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠀⠀⠀⣿⣿⣿⣿⣿⣿ ⣸⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠀⢀⡀⠸⢿⣿⣿⣿⣿⣶⣿⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠐⠲⣿⣼⠂ ⣿⣿⣿⣿⣿⣆⠀⢀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀<br> ⠈⠙⠻⣶⣼⣿⢿⣿⣿⣿⣿⡆⠙⢿⣦⣄⣀⠀⠀⠀⠀⠀⠀⠀⠀<br>⠀⠀⠀⠀⠀⠉⠁⢸⣿⣿⣿⣿⣿⠀⣀⣄⠉⠙⠛⠿⢷⣦⣀⠀⠀⠀<br>⠀⠀⠀⠀⢀⠰⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⡀⣠⠄⠀⠀⠈⠻⣿⡆⠀<br>⠀⠀⠠⠶⢮⣷⣿⡋⠋⠉⢹⣿⣿⠉⠀⠻⣷⣿⣿⡉⠓⠀⠀⢹⣿⠀<br>⠀⠀⠀⠋⠹⠉⠙⠁⠀⠀⠈⣿⣿⡇⠀⠀⠈⠉⠆⠁⠀⠀⠀⢸⣿⠇<br>⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢿⣿⣄⠀⠀⠀⠀⠀⠀⠀⢀⣾⣿⠁<br>⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣿⣦⣄⡀⡀⢀⣠⣴⣿⣿⠃⠀<br>⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠛⠿⠿⣿⣿⠿⠿⠋⠁⠀⠀<br> | **Podarcis**<br> *The Research and Wiki Builder Agent* <br><br>Installation:<br>```git clone https://github.com/XicuM/Podarcis.git```<br>```cd Podarcis```<br>```./podarcis install```<br> |
 
 ## 🚀 The Workflow Pipeline
 
@@ -29,16 +29,14 @@ graph TD
 │   └── skills/           # Action packages (ingest, fact-check, harness, build-protocol, ...)
 ├── .podarcis/            # Core Podarcis engine: install, config, repo sync, and console UI
 ├── wiki/                 # Decoupled Repository: Synthesized, objective knowledge base (anonymized)
-│                         #   → not present by default; cloned during `make install`
+│                         #   → not present by default; cloned during `./podarcis install`
 ├── workspace/            # Decoupled Repository: Personal profile, feedback, active protocols, and reviews
-│                         #   → not present by default; cloned during `make install`
+│                         #   → not present by default; cloned during `./podarcis install`
 ├── opencode.json         # Generated MCP server definitions for OpenCode / compatible IDE agents
-
-├── Makefile              # Developer workflow shortcuts
 └── pyproject.toml        # Python package metadata and pytest configuration
 ```
 
-> **Note:** `wiki/` and `workspace/` are independent git repositories that are not tracked by the main project's git index. They are cloned automatically during `make install` using the URLs defined in `.podarcis/config.yaml`.
+> **Note:** `wiki/` and `workspace/` are independent git repositories that are not tracked by the main project's git index. They are cloned automatically during `./podarcis install` using the URLs defined in `.podarcis/config.yaml`.
 
 ---
 
@@ -61,10 +59,10 @@ cd Podarcis
 ```
 
 ### 2. Run Automated Setup
-Run `make install` to automatically configure the Python virtual environment, install dependencies, create `.podarcis/config.yaml`, set up Google Drive credentials, install the `podarcis` CLI tool (and optionally link it to `~/.local/bin`), and clone workspace repositories:
+Run `./podarcis install` to automatically configure the Python virtual environment, install dependencies, create `.podarcis/config.yaml`, set up Google Drive credentials, install the `podarcis` CLI tool (and optionally link it to `~/.local/bin`), and clone workspace repositories:
 
 ```bash
-make install
+./podarcis install
 ```
 
 ### 3. Configure & Use `podarcis` CLI
@@ -87,16 +85,16 @@ podarcis test
 podarcis lint
 ```
 
-### 4. Build & Workflow Commands
+### 4. Workflow Commands
 
 | Command | Description |
 |---|---|
-| `make install` | Bootstrap venv, dependencies, credentials, and `podarcis` CLI |
+| `./podarcis install` | Bootstrap venv, dependencies, credentials, and `podarcis` CLI |
 | `podarcis status` | Display component, agent, skill, and repository status (`--json` supported) |
 | `podarcis config` | Non-interactive (`enable`/`disable`/`repo`) or interactive (`interactive`) config |
 | `podarcis test` | Run test suite across all MCP servers and skills |
 | `podarcis lint` | Run link integrity check across wiki markdown files |
-| `make clean` | Clean Python build artifacts and cache files |
+| `podarcis clean` | Clean Python build artifacts and cache files |
 
 ### 5. Connect MCP Servers to your Agent / IDE
 The project automatically generates `opencode.json` defining native MCP servers from `.agents/mcp/` and `.agents/mcp_config.json`. The servers auto-detect the project root (via `AGENTS.md`) and use relative Python paths via `.venv/bin/python`.

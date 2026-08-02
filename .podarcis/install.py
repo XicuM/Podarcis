@@ -326,9 +326,9 @@ def main() -> None:
             '[bold #29b8db]Quick Commands:[/bold #29b8db]\n'
             '  • Status:       [bold]podarcis status[/bold] (or [bold]podarcis status --json[/bold])\n'
             '  • CLI Config:   [bold]podarcis config enable/disable/repo[/bold]\n'
-            '  • Interactive:  [bold]podarcis config interactive[/bold] (or [bold]make config[/bold])\n'
-            '  • Test:         [bold]podarcis test[/bold] (or [bold]make test[/bold])\n'
-            '  • Lint:         [bold]podarcis lint[/bold] (or [bold]make lint[/bold])',
+            '  • Interactive:  [bold]podarcis config interactive[/bold]\n'
+            '  • Test:         [bold]podarcis test[/bold]\n'
+            '  • Lint:         [bold]podarcis lint[/bold]',
             border_style='green', width=72, expand=False,
         ))
 

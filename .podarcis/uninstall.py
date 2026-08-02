@@ -274,7 +274,7 @@ def main() -> None:
             '[bold green]✓ Uninstall complete.[/bold green]\n\n'
             'Tooling artefacts removed. Your research data (wiki/, workspace/) is intact.\n\n'
             '[dim]To reinstall at any time, run:[/dim]\n'
-            '  [bold]python .podarcis/install.py[/bold]  or  [bold]make install[/bold]',
+            '  [bold]./podarcis install[/bold]',
             border_style='green', width=72, expand=False,
         ))
 

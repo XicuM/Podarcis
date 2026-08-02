@@ -441,11 +441,40 @@ def cmd_interactive(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_reinstall(args: argparse.Namespace) -> int:
-    '''Re-run bootstrap installer.'''
+def cmd_install(args: argparse.Namespace) -> int:
+    '''Run bootstrap installer.'''
     install_script = root_dir / '.podarcis' / 'install.py'
     py_bin = sys.executable
     return subprocess.run([py_bin, str(install_script)] + args.remaining_args).returncode
+
+
+def cmd_reinstall(args: argparse.Namespace) -> int:
+    '''Alias for cmd_install.'''
+    return cmd_install(args)
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    '''Clean Python build artifacts and cache files.'''
+    import shutil
+    count = 0
+    for p in root_dir.rglob('__pycache__'):
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+            count += 1
+    for p in root_dir.rglob('*.pyc'):
+        if p.is_file():
+            p.unlink(missing_ok=True)
+            count += 1
+    for p in root_dir.glob('.pytest_cache'):
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+            count += 1
+    for p in root_dir.rglob('*.egg-info'):
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+            count += 1
+    console.print(f'[bold green]✓ Cleaned {count} build artifacts and cache directories.[/bold green]')
+    return 0
 
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
@@ -1005,9 +1034,15 @@ def main() -> None:
     user_del = user_sub.add_parser('delete', help='Delete user workspace and container')
     user_del.add_argument('username', help='Username')
 
-    # reinstall
-    reinstall_parser = subparsers.add_parser('reinstall', help='Re-run bootstrap installer')
+    # install & reinstall
+    install_parser = subparsers.add_parser('install', help='Run bootstrap installer')
+    install_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
+
+    reinstall_parser = subparsers.add_parser('reinstall', help='Alias for install')
     reinstall_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
+
+    # clean
+    clean_parser = subparsers.add_parser('clean', help='Clean Python build artifacts and cache files')
 
     # uninstall
     uninstall_parser = subparsers.add_parser(
@@ -1078,8 +1113,10 @@ def main() -> None:
         sys.exit(cmd_backend(args))
     elif args.subcommand == 'frontend':
         sys.exit(cmd_frontend(args))
-    elif args.subcommand == 'reinstall':
-        sys.exit(cmd_reinstall(args))
+    elif args.subcommand in ('install', 'reinstall'):
+        sys.exit(cmd_install(args))
+    elif args.subcommand == 'clean':
+        sys.exit(cmd_clean(args))
     elif args.subcommand == 'uninstall':
         sys.exit(cmd_uninstall(args))
     elif args.subcommand == 'test':

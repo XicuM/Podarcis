@@ -208,7 +208,7 @@ def setup_repo(root: Path | str, repo_name: str, url: str) -> None:
         console.print(f'[bold green]✓ Pushed initial commit for {repo_name}.[/bold green]')
     else:
         console.print(f'[bold red]⚠️ Push failed for {repo_name}: {push_result.stderr.strip()}[/bold red]')
-        console.print('[dim]You can retry later with: make sync[/dim]')
+        console.print('[dim]You can retry later with: podarcis config sync[/dim]')
 
 
 def sync_repos(root: Path | str | None = None, clone_missing: bool = True, update_remotes: bool = True) -> None:
