@@ -10,7 +10,7 @@ Agent workflows are configured as subagents under `.agents/agents/<agent_name>.m
 
 *   **Synthesizer (`@synthesizer`)**: ([synthesizer.md](.agents/agents/synthesizer.md))
     Actor string: `podarcis:synthesizer/gemini-3.6-flash`
-    Discovers peer-reviewed literature via `research-mcp` (Semantic Scholar) and scrapes relevant Google Drive documents via `google-drive-mcp`. Deconstructs materials into modular OKF concept pages in `wiki/`. Source ingestion behaviour is governed by the active skill (`synthesizer-gdrive` or `synthesizer-local`) set via `sources_backend` in `.podarcis/config.yaml`. Sets initial status to `status: draft`.
+    Discovers peer-reviewed literature via `research-mcp` (Semantic Scholar) and scrapes relevant Google Drive documents via official remote `drive` MCP (`search_files` / `read_file_content`). Deconstructs materials into modular OKF concept pages in `wiki/`. Source ingestion behaviour is governed by the active skill (`synthesizer-gdrive` or `synthesizer-local`) set via `sources_backend` in `.podarcis/config.yaml`. Sets initial status to `status: draft`.
 *   **Protocol Architect (`@protocol_architect`)**: ([protocol_architect.md](.agents/agents/protocol_architect.md))
     Actor string: `podarcis:protocol_architect/gemini-3.6-flash`
     Translates Wiki findings and user profile constraints into step-by-step actionable protocols and deliverables in `workspace/`.
@@ -24,7 +24,7 @@ Agent workflows are configured as subagents under `.agents/agents/<agent_name>.m
 
 The coordination is asynchronous, mediated by the file structure:
 *   **Literature (`research-mcp`)**: Queries Semantic Scholar for peer-reviewed publications, abstracts, and citation graphs. `download_paper` routes output to `sources/literature/` or `workspace/literature/` depending on `sources_backend`.
-*   **Google Drive (`google-drive-mcp`)**: Shared Google Drive directory for internal team documents and pre-prints. Used as a **scraper** — agents read and selectively copy relevant content; GDrive is never assumed to be the canonical store.
+*   **Google Drive (`drive`)**: Shared Google Drive directory for internal team documents and pre-prints accessed via the official Google Drive remote MCP server. Used as a **scraper** — agents read and selectively copy relevant content; GDrive is never assumed to be the canonical store.
 *   **Sources (`sources/` repository, optional)**: Local git repository for committed source files. Only active when `sources_backend: local`. Configure remote via `repositories.sources` in `.podarcis/config.yaml`.
 *   **Wiki (`wiki/` repository)**: Objective knowledge base (anonymized, theory-focused) written in OKF v0.2 format.
 *   **Workspace (`workspace/` repository)**: Actionable deliverables (user profiles, feedback, protocols, reviews) written in OKF v0.2 format. Always holds per-user literature ingested via `research-mcp` in `workspace/literature/` when `sources_backend: gdrive`.
@@ -83,9 +83,28 @@ verified:                             # Appended by @auditor upon machine verifi
 
 ---
 
-## 5. Behavioral Principles
+## 5. Engineering & Behavioral Principles
 
+### Engineering Philosophy
+Code, middle layers, and steps are liabilities. Elegance is deleting complexity while preserving correctness. Execute these steps in order:
+1. **Make Requirements Less Dumb**: Audit config, boilerplate, and prompt rules (e.g., AGENTS.md, custom skills). Question constraints regardless of origin. If a requirement seems speculative, outdated, or unnecessary, ask the user before removing or simplifying it.
+2. **Delete Parts & Logic (Best Part is No Part)**: Solve problems by deleting code or flattening data paths before writing new logic. Prune aggressively—if you don't occasionally add back ~10% of deleted logic, you aren't pruning hard enough. Chesterton's Fence: Study the codebase to understand why code exists before removing it.
+3. **Simplify and Optimize**: Keep code direct, linear, and inline using native primitives. Do not create helpers, wrappers, classes, or modular splits on your own. Only propose abstractions that would genuinely help. Ask the user before proceeding.
+4. **Accelerate Feedback Loops**: Minimize iteration cycle time. Verify changes immediately using the fastest targeted check (single-file tests, direct logs) rather than slow, full-suite builds.
+5. **Automate Last**: Never write custom scripts, meta-tooling, or automation pipelines to solve a task until you execute and verify the direct, manual solution first. Solve the problem directly before building tooling around it.
+
+### Core Behavioral Rules
 *   **Proactive Knowledge Architecture**: Proactively create new taxonomy categories when existing ones are too narrow. Break down dense sources into modular interconnected pages.
 *   **No Fabrication**: Do not invent sources, quotes, or metadata.
 *   **Surgical Edits**: Touch only the files and lines required for the task.
 *   **Goal-Driven Execution**: Define validation criteria before starting and verify iteratively until clean.
+
+---
+
+## 6. Self-Improvement & Diagnostic Logging Protocol
+
+* **Diagnostic Logging**: When `diagnostics-mcp` is active, agents log execution failures, command errors, or user corrections via `log_pain_point` (`diagnostics-mcp`) into `.podarcis/diagnostics/pain_points.jsonl`.
+* **Platform Self-Improvement**: When the user requests platform self-improvement ("improve the platform", "resolve logged issues", "self-improve"), agents follow the active `self-improvement` skill ([SKILL.md](.agents/skills/self-improvement/SKILL.md)) to inspect logged pain points, apply fixes, and verify platform health.
+
+
+

@@ -34,19 +34,8 @@ data.json
 # Runtime token cache
 .agents/token_cache.json
 
-# Obsidian personal workspace data
-.obsidian/workspace.json
-.obsidian/workspace-mobile.json
-.obsidian/workspace-*.json
-.obsidian/bookmarks.json
-.obsidian/starred.json
-.obsidian/recent-files.json
-.obsidian/backlink-cache.json
-.obsidian/appearance.json
-.obsidian/themes/
-.obsidian/snippets/
-.obsidian/graph.json
-.obsidian/canvas.json
+# Obsidian personal configuration and workspace data (managed locally/via .podarcis)
+.obsidian/
 .claudian
 
 # Workspace

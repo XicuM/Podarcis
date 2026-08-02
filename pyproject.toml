@@ -32,4 +32,3 @@ pythonpath = [
     ".agents/mcp/research",
     ".agents/skills/harness/scripts"
 ]
-
