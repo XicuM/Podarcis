@@ -1,0 +1,10 @@
+[
+  {
+    "key": "ctrl+alt+f",
+    "command": "editor.fold"
+  },
+  {
+    "key": "ctrl+alt+u",
+    "command": "editor.unfold"
+  }
+]

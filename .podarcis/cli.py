@@ -4,13 +4,14 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
 BACKENDS = {'opencode': 'opencode', 'codex': 'codex', 'agy': 'agy', 'claude': 'claude', 'openclaw': 'openclaw', 'hermes': 'hermes', 'none': None}
-FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'none': None}
+FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'code-server': 'code-server', 'none': None}
 
 # Ensure root and .podarcis directories are in sys.path
 root_dir = Path(__file__).resolve().parent.parent
@@ -351,6 +352,28 @@ def cmd_config_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ensure_vscode_config(root: Path) -> None:
+    '''Ensure .vscode and code-server user configuration directories are initialized from templates if missing.'''
+    template_dir = root / '.podarcis' / 'templates' / 'vscode'
+    target_dir = root / '.vscode'
+    if template_dir.exists():
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for item in template_dir.iterdir():
+            target_file = target_dir / item.name
+            if not target_file.exists():
+                shutil.copy2(item, target_file)
+                console.print(f'[dim]Initialized .vscode/{item.name} from template[/dim]')
+
+    # Also seed user settings for code-server / VSCode server if absent
+    code_user_dir = root / 'config' / 'code-config' / 'Code' / 'User'
+    code_user_dir.mkdir(parents=True, exist_ok=True)
+    code_user_settings = code_user_dir / 'settings.json'
+    template_settings = template_dir / 'settings.json'
+    if template_settings.exists() and not code_user_settings.exists():
+        shutil.copy2(template_settings, code_user_settings)
+        console.print('[dim]Initialized config/code-config/Code/User/settings.json from template[/dim]')
+
+
 def cmd_config_frontend(args: argparse.Namespace) -> int:
     '''Set or show the frontend name.'''
     name = args.frontend_name.lower()
@@ -358,7 +381,9 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
         console.print(f'[bold red]Error:[/bold red] Unknown frontend "{name}". Choose from: {", ".join(sorted(FRONTENDS))}')
         return 1
     set_config_value(root_dir, name, 'frontend')
-    if name == 'obsidian':
+    if name in ('vscode', 'code-server'):
+        _ensure_vscode_config(root_dir)
+    elif name == 'obsidian':
         backend = get_config_value(root_dir, 'backend', default='none')
         cfg_plugins = getattr(args, 'configure_plugins', None)
         if cfg_plugins is None and sys.stdin.isatty():
@@ -376,7 +401,7 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
             console.print(f'[bold green]✓ Frontend set to obsidian with Claudian plugin configured.[/bold green]')
         else:
             console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green] [dim]Skipped Obsidian plugin configuration.[/dim]')
-    elif name == 'none':
+    if name == 'none':
         console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.')
     else:
         console.print(f'[bold green]✓ Frontend set to {name}.[/bold green]')
@@ -560,6 +585,18 @@ def cmd_open_tool(tool_type: str) -> int:
     name = get_config_value(root_dir, tool_type, default='vscode' if tool_type == 'frontend' else 'opencode')
     command = valid.get(name.lower(), name)
     cwd = str(root_dir)
+
+    if tool_type == 'frontend' and name.lower() in ('vscode', 'code-server', 'vscode-web'):
+        _ensure_vscode_config(root_dir)
+
+    if tool_type == 'frontend' and name.lower() in ('code-server', 'vscode-web'):
+        port = os.environ.get('CODE_SERVER_PORT', '8080')
+        console.print('[bold #29b8db]Starting Code-Server Web Workspace container...[/bold #29b8db]')
+        subprocess.run(['docker', 'compose', 'up', '-d', '--build', '--remove-orphans'], cwd=cwd)
+        console.print(f'[bold green]✓ Code-Server Web Workspace live at http://localhost:{port}[/bold green]')
+        console.print('[dim]Password: change_this_password (configured in docker-compose.yml)[/dim]')
+        return 0
+
     try:
         if tool_type == 'backend':
             # CLI tools: exec replacing current process to take over terminal
@@ -648,7 +685,7 @@ def main() -> None:
 
     # config frontend
     cfg_frontend = config_sub.add_parser('frontend', help='Set the frontend tool (vscode, obsidian, none)')
-    cfg_frontend.add_argument('frontend_name', choices=list(FRONTENDS), metavar='{vscode,obsidian,none}', help='Frontend name')
+    cfg_frontend.add_argument('frontend_name', choices=list(FRONTENDS), metavar='{vscode,obsidian,code-server,none}', help='Frontend name')
     cfg_frontend.add_argument('--configure-plugins', action='store_true', dest='configure_plugins', default=None, help='Configure Obsidian plugins (Claudian)')
     cfg_frontend.add_argument('--no-plugins', action='store_false', dest='configure_plugins', help='Skip Obsidian plugin configuration')
 
