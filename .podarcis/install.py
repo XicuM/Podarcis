@@ -128,7 +128,6 @@ def _create_podarcis_yaml() -> None:
 
     if not st_file.exists():
         save_yaml(st_file, {
-            'repositories': {'sources': 'gdrive', 'wiki': '', 'workspace': ''},
             'engines': {'qmd': False},
             'mcp_servers': {'finance-mcp': False, 'menumaker-mcp': False},
             'gdrive_sync': {'last_sync': ''},
