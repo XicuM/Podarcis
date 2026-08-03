@@ -7,39 +7,12 @@ from pathlib import Path
 # Local imports
 from common import load_json, save_json
 from console import console
+from backends import _server_name_map
 
 
 SKILLS = lambda root: root/'.agents'/'skills'
 MCPS = lambda root: root/'.agents'/'mcp'
 AGENTS = lambda root: root/'.agents'/'agents'
-
-
-def _server_name_map(root: Path) -> dict[str, str]:
-    '''Derive dir_name → mcp_key from mcp_config.json or opencode.json command paths.'''
-    mapping: dict[str, str] = {}
-
-    mcp_cfg = load_json(root/'.agents'/'mcp_config.json')
-    for key, cfg in mcp_cfg.get('mcpServers', {}).items():
-        args = cfg.get('args', [])
-        if args and '/mcp/' in args[0].replace('\\', '/'):
-            parts = args[0].replace('\\', '/').split('/')
-            try: mapping[parts[parts.index('mcp') + 1]] = key
-            except (ValueError, IndexError): pass
-                
-    opencode_cfg = load_json(root / 'opencode.json')
-    for key, cfg in opencode_cfg.get('mcp', {}).items():
-        cmd = cfg.get('command', [])
-        if len(cmd) >= 2 and '/mcp/' in cmd[1]:
-            parts = cmd[1].replace('\\', '/').split('/')
-            try: mapping[parts[parts.index('mcp') + 1]] = key
-            except (ValueError, IndexError): pass
-
-    if (mcp_dir := root/'.agents'/'mcp').exists():
-        for d in mcp_dir.iterdir():
-            if d.is_dir() and d.name not in mapping:
-                mapping[d.name] = f'{d.name}-mcp'
-
-    return mapping
 
 
 def get_skill_desc(root_dir: Path, name: str) -> str:
