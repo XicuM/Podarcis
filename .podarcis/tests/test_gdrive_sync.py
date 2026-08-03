@@ -12,7 +12,6 @@ from gdrive_sync import (
     get_last_sync,
     update_last_sync,
     build_gdrive_query,
-    get_crontab_entry,
     run_gdrive_ingestion,
 )
 
@@ -41,9 +40,3 @@ def test_gdrive_dry_run(tmp_path):
     res = run_gdrive_ingestion(tmp_path, dry_run=True)
     assert res['status'] == 'dry_run'
     assert res['processed_files'] == 0
-
-
-def test_crontab_entry_generation(tmp_path):
-    entry = get_crontab_entry(tmp_path, cron_schedule='0 3 * * *')
-    assert '0 3 * * *' in entry
-    assert 'podarcis ingest --gdrive' in entry

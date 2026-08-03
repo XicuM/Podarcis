@@ -8,12 +8,6 @@ from common import load_json, load_yaml, save_yaml
 from console import console
 
 DEFAULT_REPO_NAMES = ['sources', 'wiki', 'workspace']
-REPO_NAMES = DEFAULT_REPO_NAMES
-
-
-def get_active_repo_names(root: Path) -> list[str]:
-    '''Return all managed repo names.'''
-    return list(DEFAULT_REPO_NAMES)
 
 
 def load_repos_config(root: Path) -> dict:
@@ -41,7 +35,7 @@ def get_repo_names(root: Path | str | None = None) -> list[str]:
     repos = config.get('repositories', {})
     if isinstance(repos, dict) and repos:
         return list(repos.keys())
-    return list(REPO_NAMES)
+    return list(DEFAULT_REPO_NAMES)
 
 
 def save_repos_config(root: Path, config: dict) -> None:
@@ -220,7 +214,7 @@ def sync_repos(root: Path | str | None = None, clone_missing: bool = True, updat
 
     config = load_repos_config(root_path)
 
-    for repo_name in get_active_repo_names(root_path):
+    for repo_name in get_repo_names(root_path):
         repo_dir = root_path / repo_name
         url = config.get('repositories', {}).get(repo_name, '')
 

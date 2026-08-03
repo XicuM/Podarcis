@@ -136,8 +136,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_config_enable(args: argparse.Namespace) -> int:
-    '''Enable a component (mcp, skill, agent).'''
+def _cmd_config_set_status(args: argparse.Namespace, enable: bool) -> int:
+    '''Enable or disable a component (mcp, skill, agent).'''
     backend = get_config_value(root_dir, 'backend', default='none')
     if backend == 'none':
         console.print(
@@ -152,68 +152,41 @@ def cmd_config_enable(args: argparse.Namespace) -> int:
         if name not in mcp_servers:
             console.print(f'[bold red]Error:[/bold red] MCP server "{name}" not found. Available: {", ".join(mcp_servers.keys())}')
             return 1
-        set_mcp_server_status(root_dir, name, True, mcp_servers[name])
-        console.print(f'[bold green]✓ Enabled MCP server "{name}".[/bold green]')
+        set_mcp_server_status(root_dir, name, enable, mcp_servers[name])
+        msg = f'[bold green]✓ Enabled[/bold green]' if enable else '[yellow]Disabled[/yellow]'
+        console.print(f'{msg} MCP server "{name}".')
 
     elif ctype == 'skill':
         if name not in skills:
             console.print(f'[bold red]Error:[/bold red] Skill "{name}" not found. Available: {", ".join(skills.keys())}')
             return 1
-        set_skill_status(root_dir, name, True, skills[name])
-        console.print(f'[bold green]✓ Enabled skill "{name}".[/bold green]')
+        set_skill_status(root_dir, name, enable, skills[name])
+        msg = f'[bold green]✓ Enabled[/bold green]' if enable else '[yellow]Disabled[/yellow]'
+        console.print(f'{msg} skill "{name}".')
 
     elif ctype == 'agent':
         if name not in agents:
             console.print(f'[bold red]Error:[/bold red] Agent "{name}" not found. Available: {", ".join(agents.keys())}')
             return 1
-        set_agent_status(root_dir, name, True, agents[name])
-        console.print(f'[bold green]✓ Enabled agent "{name}".[/bold green]')
+        set_agent_status(root_dir, name, enable, agents[name])
+        msg = f'[bold green]✓ Enabled[/bold green]' if enable else '[yellow]Disabled[/yellow]'
+        console.print(f'{msg} agent "{name}".')
 
     else:
         console.print(f'[bold red]Error:[/bold red] Unknown component type "{ctype}". Must be one of: mcp, skill, agent')
         return 1
 
     return 0
+
+
+def cmd_config_enable(args: argparse.Namespace) -> int:
+    '''Enable a component (mcp, skill, agent).'''
+    return _cmd_config_set_status(args, True)
 
 
 def cmd_config_disable(args: argparse.Namespace) -> int:
     '''Disable a component (mcp, skill, agent).'''
-    backend = get_config_value(root_dir, 'backend', default='none')
-    if backend == 'none':
-        console.print(
-            '[bold yellow]Warning:[/bold yellow] No backend selected — MCP config changes will have no effect.\n'
-            'Change it with: [bold]podarcis config backend <name>[/bold] or [bold]podarcis config interactive[/bold]'
-        )
-    ctype = args.type.lower()
-    name = args.name
-    mcp_servers, skills, agents = discover_components(root_dir)
-
-    if ctype == 'mcp':
-        if name not in mcp_servers:
-            console.print(f'[bold red]Error:[/bold red] MCP server "{name}" not found. Available: {", ".join(mcp_servers.keys())}')
-            return 1
-        set_mcp_server_status(root_dir, name, False, mcp_servers[name])
-        console.print(f'[yellow]Disabled MCP server "{name}".[/yellow]')
-
-    elif ctype == 'skill':
-        if name not in skills:
-            console.print(f'[bold red]Error:[/bold red] Skill "{name}" not found. Available: {", ".join(skills.keys())}')
-            return 1
-        set_skill_status(root_dir, name, False, skills[name])
-        console.print(f'[yellow]Disabled skill "{name}".[/yellow]')
-
-    elif ctype == 'agent':
-        if name not in agents:
-            console.print(f'[bold red]Error:[/bold red] Agent "{name}" not found. Available: {", ".join(agents.keys())}')
-            return 1
-        set_agent_status(root_dir, name, False, agents[name])
-        console.print(f'[yellow]Disabled agent "{name}".[/yellow]')
-
-    else:
-        console.print(f'[bold red]Error:[/bold red] Unknown component type "{ctype}". Must be one of: mcp, skill, agent')
-        return 1
-
-    return 0
+    return _cmd_config_set_status(args, False)
 
 
 def cmd_config_repo(args: argparse.Namespace) -> int:
@@ -276,8 +249,7 @@ def _sync_claudian_plugin(backend: str) -> None:
     plugins: list[str] = []
     if community_plugins_path.exists():
         try:
-            import json as _json
-            plugins = _json.loads(community_plugins_path.read_text(encoding='utf-8'))
+            plugins = json.loads(community_plugins_path.read_text(encoding='utf-8'))
             if not isinstance(plugins, list):
                 plugins = []
         except Exception:
@@ -286,13 +258,13 @@ def _sync_claudian_plugin(backend: str) -> None:
     if supported and _CLAUDIAN_PLUGIN_ID not in plugins:
         plugins.append(_CLAUDIAN_PLUGIN_ID)
         community_plugins_path.write_text(
-            __import__('json').dumps(plugins, indent=2) + '\n', encoding='utf-8'
+            json.dumps(plugins, indent=2) + '\n', encoding='utf-8'
         )
         console.print(f'[dim]Claudian: enabled in community-plugins.json[/dim]')
     elif not supported and _CLAUDIAN_PLUGIN_ID in plugins:
         plugins.remove(_CLAUDIAN_PLUGIN_ID)
         community_plugins_path.write_text(
-            __import__('json').dumps(plugins, indent=2) + '\n', encoding='utf-8'
+            json.dumps(plugins, indent=2) + '\n', encoding='utf-8'
         )
         console.print(f'[dim]Claudian: disabled in community-plugins.json (backend "{backend}" not supported)[/dim]')
 
@@ -304,8 +276,7 @@ def _sync_claudian_plugin(backend: str) -> None:
     data: dict = {}
     if plugin_data_path.exists():
         try:
-            import json as _json
-            data = _json.loads(plugin_data_path.read_text(encoding='utf-8'))
+            data = json.loads(plugin_data_path.read_text(encoding='utf-8'))
             if not isinstance(data, dict):
                 data = {}
         except Exception:
@@ -313,7 +284,7 @@ def _sync_claudian_plugin(backend: str) -> None:
 
     data['settingsProvider'] = provider
     plugin_data_path.write_text(
-        __import__('json').dumps(data, indent=2) + '\n', encoding='utf-8'
+        json.dumps(data, indent=2) + '\n', encoding='utf-8'
     )
     console.print(f'[dim]Claudian: settingsProvider set to "{provider}"[/dim]')
 

@@ -232,9 +232,10 @@ def discover_components(root: Path) -> tuple[dict, dict]:
 
     mcp_servers = {}
     if (mcp_dir := root/'.agents'/'mcp').exists():
+        smap = _server_name_map(root)
         for d in mcp_dir.iterdir():
             if d.is_dir():
-                key = _server_name_map(root).get(d.name, d.name)
+                key = smap.get(d.name, d.name)
                 req_file = d / 'requirements.txt'
                 server_py = d / 'server.py'
                 mtime = server_py.stat().st_mtime if server_py.exists() else 0

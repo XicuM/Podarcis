@@ -1,8 +1,8 @@
 '''Google Drive API Delta Ingestion Engine & State Sync for Podarcis.'''
 
-import datetime, subprocess
+import datetime
 from pathlib import Path
-from common import get_state_value, set_state_value, load_yaml
+from common import set_state_value, load_yaml
 from console import console
 
 
@@ -22,12 +22,12 @@ def update_last_sync(root_dir: Path, timestamp: str | None = None) -> str:
 
 def build_gdrive_query(last_sync: str, folder_id: str = '') -> str:
     '''Construct Google Drive API filter query for single-request delta retrieval.'''
-    query_parts = ["trashed = false"]
+    query_parts = ['trashed = false']
     if last_sync:
         query_parts.append(f"modifiedTime > '{last_sync}'")
     if folder_id:
         query_parts.append(f"'{folder_id}' in parents")
-    return " and ".join(query_parts)
+    return ' and '.join(query_parts)
 
 
 def run_gdrive_ingestion(root_dir: Path, dry_run: bool = False) -> dict:
@@ -65,63 +65,3 @@ def run_gdrive_ingestion(root_dir: Path, dry_run: bool = False) -> dict:
         'processed_files': 0,
     }
 
-
-def get_crontab_entry(root_dir: Path, cron_schedule: str = '0 2 * * *') -> str:
-    '''Generate standard crontab command string for nightly automated execution.'''
-    py_bin = root_dir / '.venv' / 'bin' / 'python'
-    cli_bin = root_dir / 'podarcis'
-    cmd = f'{py_bin} {cli_bin} ingest --gdrive' if py_bin.exists() else f'{cli_bin} ingest --gdrive'
-    return f'{cron_schedule} cd {root_dir} && {cmd} >> {root_dir}/.podarcis/gdrive_cron.log 2>&1'
-
-
-def install_crontab_entry(root_dir: Path, cron_schedule: str = '0 2 * * *') -> tuple[bool, str]:
-    '''Automatically install or update the nightly GDrive sync cron job in user crontab.'''
-    entry = get_crontab_entry(root_dir, cron_schedule)
-    marker = f"# podarcis-gdrive-sync:{root_dir}"
-    marked_entry = f"{entry} {marker}"
-
-    try:
-        proc = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
-        current = proc.stdout if proc.returncode == 0 else ""
-    except Exception as e:
-        return False, f"Failed to access crontab: {e}"
-
-    lines = [line for line in current.splitlines() if marker not in line and 'podarcis ingest --gdrive' not in line and line.strip()]
-    lines.append(marked_entry)
-    new_crontab = "\n".join(lines) + "\n"
-
-    try:
-        proc = subprocess.run(['crontab', '-'], input=new_crontab, text=True, capture_output=True)
-        if proc.returncode == 0:
-            return True, f"Automated nightly cron job installed (schedule: '{cron_schedule}')."
-        else:
-            return False, f"Failed to write crontab: {proc.stderr.strip()}"
-    except Exception as e:
-        return False, str(e)
-
-
-def uninstall_crontab_entry(root_dir: Path) -> tuple[bool, str]:
-    '''Remove the Podarcis GDrive sync cron job from user crontab.'''
-    marker = f"# podarcis-gdrive-sync:{root_dir}"
-    try:
-        proc = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
-        if proc.returncode != 0:
-            return True, "No active crontab entry found."
-        current = proc.stdout
-    except Exception as e:
-        return False, str(e)
-
-    lines = [line for line in current.splitlines() if marker not in line and 'podarcis ingest --gdrive' not in line and line.strip()]
-    new_crontab = "\n".join(lines) + "\n" if lines else ""
-
-    try:
-        if new_crontab:
-            proc = subprocess.run(['crontab', '-'], input=new_crontab, text=True, capture_output=True)
-        else:
-            proc = subprocess.run(['crontab', '-r'], capture_output=True, text=True)
-        if proc.returncode == 0:
-            return True, "Removed GDrive sync cron job from crontab."
-        else:
-            return False, f"Failed to update crontab: {proc.stderr.strip()}"
-    except Exception as e:
-        return False, str(e)

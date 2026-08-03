@@ -12,6 +12,7 @@ from components import (
     set_agent_status, set_mcp_server_status, set_skill_status,
 )
 from console import console, QSTYLE
+from repos import get_repo_names, get_repo_url, prompt_configure_repo
 
 _BACKEND_CHOICES = ['opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none']
 _FRONTEND_CHOICES = ['vscode', 'code-server', 'obsidian', 'none']
@@ -116,7 +117,7 @@ def configure_repositories(root: Path, style=None, title=None, description=None)
     _header(title, description)
     st = _style(style)
     while True:
-        choices = [f'{rn} ({get_repo_url(root, rn) or "local"})' for rn in get_active_repo_names(root)] + ['Done']
+        choices = [f'{rn} ({get_repo_url(root, rn) or "local"})' for rn in get_repo_names(root)] + ['Done']
         sub = questionary.select('Workspace Repository Configuration:', choices=choices, style=st).ask()
         if sub in (None, 'Done'):
             break
