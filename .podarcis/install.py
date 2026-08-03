@@ -71,22 +71,18 @@ _bootstrap_venv()
 from banner import display_install_banner
 from common import load_yaml, run_command, save_yaml
 from console import console, QSTYLE
-from rich.panel import Panel
+
+import questionary
 
 def _say(*args: str) -> None:
     console.print(''.join(args))
 
-def _box(title: str, text: str, border_style: str = '#29b8db') -> None:
-    console.print(Panel(text.strip(), title=f'[bold {border_style}]{title}[/bold {border_style}]', border_style=border_style, width=72, expand=False))
-
 def _hr() -> None:
     _say('[dim]' + '─' * 72 + '[/dim]')
 
-def _select(prompt: str, choices: list[str], default: str | None = None, qmark: str = '?') -> str:
-    '''Arrow-key select prompt.'''
-    import questionary
+def _select(prompt: str, choices: list[str], default: str | None = None) -> str:
     ans = questionary.select(
-        prompt, choices=choices, default=default, qmark=qmark,
+        prompt, choices=choices, default=default, qmark='?',
         style=questionary.Style(QSTYLE),
     ).ask()
     if ans is None:
@@ -133,234 +129,32 @@ def _create_podarcis_yaml() -> None:
             'gdrive_sync': {'last_sync': ''},
         })
 
-def _configure_repos() -> None:
-    from repos import get_repo_names, prompt_configure_repo
-    import questionary
-
-    _box(
-        'Workspace Repositories',
-        'Podarcis manages knowledge across two Open Knowledge Format (OKF v0.2) repositories:\n'
-        '  • wiki: Objective knowledge base (anonymized concepts & references)\n'
-        '  • workspace: Actionable deliverables (user profiles, protocols, reviews)',
-    )
-
-    style = questionary.Style(QSTYLE)
-    for name in get_repo_names(root):
-        prompt_configure_repo(root, name, style=style)
-    _say()
-
-def _configure_mcp_servers() -> set[str]:
-    import questionary
-    from components import (
-        discover_components, build_component_choices,
-        get_enabled_mcp_servers, set_mcp_server_status, run_mcp_setup
-    )
-
-    servers, _, _ = discover_components(root)
-    if not servers:
-        _say('[dim]No MCP servers discovered.[/dim]')
-        return set()
-
-    _box(
-        'MCP Servers Configuration',
-        'Model Context Protocol (MCP) servers equip Podarcis subagents with external tool capabilities and data source integrations.',
-    )
-
-    enabled = get_enabled_mcp_servers(root)
-    style = questionary.Style(QSTYLE)
-    choices = build_component_choices(root, 'mcp', servers, enabled_set=enabled)
-    selected = (
-        questionary.checkbox(
-            'Select MCP servers to activate:',
-            choices=choices, style=style)
-        .ask()
-    )
-    if selected is None:
-        raise SystemExit(1)
-
-    s = set(selected)
-
-    for k in sorted(s):
-        _hr()
-        run_mcp_setup(root, k)
-
-    for k, info in servers.items():
-        set_mcp_server_status(root, k, k in s, info)
-    _say('[bold green]✓ MCP server configurations updated.[/bold green]\n')
-    return s
-
-# ── skills ─────────────────────────────────────────────────────────────────
-
-def _configure_skills() -> None:
-    import questionary
-    from components import discover_components, build_component_choices, set_skill_status
-
-    _, skills, _ = discover_components(root)
-    if not skills:
-        _say('[dim]No skills discovered.[/dim]')
-        return
-
-    _box(
-        'Agent Skills Configuration',
-        'Skills extend subagents with specialized workflows, Python code execution tools, context compaction strategies, and runtime harnesses.',
-    )
-
-    style = questionary.Style(QSTYLE)
-    choices = build_component_choices(root, 'skill', skills)
-    selected = (
-        questionary.checkbox(
-            'Select skills to enable:', choices=choices, style=style)
-        .ask()
-    )
-    if selected is None:
-        raise SystemExit(1)
-
-    s = set(selected)
-    for k, info in skills.items():
-        set_skill_status(root, k, k in s, info)
-    _say('[bold green]✓ Skill configurations updated.[/bold green]\n')
-
-# ── agents ─────────────────────────────────────────────────────────────────
-
-def _configure_agents() -> None:
-    import questionary
-    from components import discover_components, build_component_choices, set_agent_status
-
-    _, _, agents = discover_components(root)
-    if not agents:
-        _say('[dim]No agents discovered.[/dim]')
-        return
-
-    _box(
-        'Subagent Personas Configuration',
-        'Personas configure autonomous subagents defined under .agents/agents/ for multi-agent\n'
-        'literature discovery, protocol architecture, and OKF concept verification.',
-    )
-
-    style = questionary.Style(QSTYLE)
-    choices = build_component_choices(root, 'agent', agents)
-    selected = (
-        questionary.checkbox(
-            'Select agents to enable:', choices=choices, style=style)
-        .ask()
-    )
-    if selected is None:
-        raise SystemExit(1)
-
-    s = set(selected)
-    for k, info in agents.items():
-        set_agent_status(root, k, k in s, info)
-    _say('[bold green]✓ Agent configurations updated.[/bold green]\n')
-
-
-# ── backend ────────────────────────────────────────────────────────────────
-
-def _configure_backend() -> None:
-    from common import get_config_value, set_config_value
-
-    _box(
-        'Agent Backend',
-        'The backend is the AI coding tool Podarcis subagents run inside.\n'
-        'Choosing a backend writes the MCP server configuration to its native config file.',
-    )
-
-    current = get_config_value(root, 'backend', default='none')
-    choices = ['opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none']
-    backend = _select(
-        'Select agent backend:',
-        choices,
-        default=current if current in choices else 'none',
-    )
-
-    set_config_value(root, backend, 'backend')
-    if backend != 'none':
-        from backends import generate_for_backend
-        generate_for_backend(root, backend)
-        _say(f'[bold green]✓ Backend set to {backend}.[/bold green]\n')
-    else:
-        _say('[bold yellow]✓ Backend set to none.[/bold yellow] MCP configuration will be skipped.\n')
-
-
-# ── frontend ───────────────────────────────────────────────────────────────
-
-def _configure_frontend() -> None:
-    from common import get_config_value, set_config_value
-
-    _box(
-        'Frontend Tool',
-        'The frontend is the editor or knowledge-base viewer used to browse wiki and workspace files.\n'
-        'Obsidian: markdown vault viewer. VSCode / code-server: full IDE.',
-    )
-
-    current = get_config_value(root, 'frontend', default='none')
-    choices = ['vscode', 'obsidian', 'code-server', 'none']
-    frontend = _select(
-        'Select frontend tool:',
-        choices,
-        default=current if current in choices else 'none',
-    )
-
-    set_config_value(root, frontend, 'frontend')
-    if frontend == 'obsidian':
-        backend = get_config_value(root, 'backend', default='none')
-        ans = _select(
-            f'Configure Obsidian Claudian plugin for backend "{backend}"?',
-            ['yes', 'no'],
-            default='yes',
-        )
-        if ans == 'yes':
-            try:
-                import sys as _sys
-                _sys.path.insert(0, str(root / '.podarcis'))
-                from cli import _sync_claudian_plugin
-                _sync_claudian_plugin(backend)
-                _say('[bold green]✓ Claudian plugin configured for Obsidian.[/bold green]\n')
-            except Exception as exc:
-                _say(f'[yellow]Could not configure Claudian plugin: {exc}[/yellow]\n')
-        else:
-            _say('[bold green]✓ Frontend set to obsidian.[/bold green] [dim]Skipped plugin configuration.[/dim]\n')
-    elif frontend == 'none':
-        _say('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.\n')
-    else:
-        _say(f'[bold green]✓ Frontend set to {frontend}.[/bold green]\n')
-
 # ── global command ────────────────────────────────────────────────────────
 
 def _configure_global_command() -> None:
-    _box(
-        'Global Executable Setup',
-        'Optionally installs the "podarcis" CLI executable into ~/.local/bin '
-        'allowing you to run status, config, test, and lint commands directly from any shell prompt.',
-    )
-    ans = _select('Install command globally in ~/.local/bin?', ['yes', 'no'], default='yes')
-    if ans == 'yes':
-        import questionary
-        name = questionary.text(
-            'Command name (Enter for "podarcis"):',
-            default='podarcis',
-            style=questionary.Style(QSTYLE),
-        ).ask()
-        if not name:
-            name = 'podarcis'
-        local_bin = Path.home() / '.local' / 'bin'
-        local_bin.mkdir(parents=True, exist_ok=True)
-        symlink_target = local_bin / name
-        source_target = root / 'podarcis'
-        try:
-            if symlink_target.is_symlink() or symlink_target.exists():
-                symlink_target.unlink()
-            symlink_target.symlink_to(source_target)
-            _say(f'[bold green]✓ Symlinked {symlink_target} → {source_target}[/bold green]')
-
-            path_env = os.environ.get('PATH', '')
-            if str(local_bin) not in path_env.split(os.pathsep):
-                _say(f'[bold yellow]⚠️ Note: {local_bin} is not currently in your PATH.[/bold yellow]')
-                _say(f'[dim]Add `export PATH="$HOME/.local/bin:$PATH"` to your ~/.bashrc or ~/.zshrc.[/dim]')
-        except Exception as err:
-            _say(f'[bold red]Failed to create symlink: {err}[/bold red]')
-    else:
-        _say('[dim]Skipped global command installation. You can run `./podarcis` from project root.[/dim]')
+    _say('Optionally installs the "podarcis" CLI executable into ~/.local/bin '
+         'allowing you to run status, config, test, and lint commands from any shell prompt.')
+    if _select('Install command globally in ~/.local/bin?', ['yes', 'no'], default='yes') == 'no':
+        return _say('[dim]Skipped global command installation. You can run `./podarcis` from project root.[/dim]\n')
+    name = questionary.text(
+        'Command name (Enter for "podarcis"):', default='podarcis',
+        style=questionary.Style(QSTYLE),
+    ).ask() or 'podarcis'
+    local_bin = Path.home() / '.local' / 'bin'
+    local_bin.mkdir(parents=True, exist_ok=True)
+    target = local_bin / name
+    source = root / 'podarcis'
+    try:
+        target.unlink(missing_ok=True)
+        target.symlink_to(source)
+        _say(f'[bold green]✓ Symlinked {target} → {source}[/bold green]')
+        if str(local_bin) not in os.environ.get('PATH', '').split(os.pathsep):
+            _say(f'[bold yellow]⚠️ Note: {local_bin} is not currently in your PATH.[/bold yellow]')
+            _say('[dim]Add `export PATH="$HOME/.local/bin:$PATH"` to your ~/.bashrc or ~/.zshrc.[/dim]')
+    except Exception as err:
+        _say(f'[bold red]Failed to create symlink: {err}[/bold red]')
     _say()
+
 
 # ── main ───────────────────────────────────────────────────────────────────
 
@@ -373,17 +167,31 @@ def main() -> None:
     _create_podarcis_yaml()
     _hr()
 
-    enabled = _configure_mcp_servers()
+    from config_wizard import (
+        configure_mcp_servers, configure_skills, configure_agents, configure_jobs,
+        configure_backend, configure_frontend, configure_repositories,
+    )
+
+    configure_mcp_servers(root, title='MCP Servers Configuration',
+        description='Model Context Protocol (MCP) servers equip Podarcis subagents with external tool capabilities and data source integrations.')
     _hr()
-    _configure_skills()
+    configure_skills(root, title='Agent Skills Configuration',
+        description='Skills extend subagents with specialized workflows, Python code execution, context compaction, and runtime harnesses.')
     _hr()
-    _configure_agents()
+    configure_agents(root, title='Subagent Personas Configuration',
+        description='Personas configure autonomous subagents under .agents/agents/ for multi-agent literature discovery, protocol architecture, and OKF concept verification.')
     _hr()
-    _configure_backend()
+    configure_backend(root, title='Agent Backend',
+        description='The backend is the AI coding tool Podarcis subagents run inside. Choosing a backend writes MCP server configuration to its native config file.')
     _hr()
-    _configure_frontend()
+    configure_frontend(root, title='Frontend Tool',
+        description='The frontend is the editor or knowledge-base viewer for wiki and workspace files.\nObsidian: markdown vault viewer. VSCode / code-server: full IDE.')
     _hr()
-    _configure_repos()
+    configure_repositories(root, title='Workspace Repositories',
+        description='Podarcis manages knowledge across Open Knowledge Format (OKF v0.2) repositories:\n  • wiki: Objective knowledge base (anonymized concepts & references)\n  • workspace: Actionable deliverables (user profiles, protocols, reviews)')
+    _hr()
+    configure_jobs(root, title='Scheduled Jobs',
+        description='Jobs automate periodic tasks like GDrive sync and wiki audits. Enable them to schedule automatic background execution via cron.')
     _hr()
     _configure_global_command()
     _hr()
@@ -394,6 +202,7 @@ def main() -> None:
         sync_repos(root, clone_missing=True, update_remotes=True)
         _say()
 
+    from rich.panel import Panel
     console.print(Panel(
             '[bold green]✓ Bootstrap & Setup Complete![/bold green]\n\n'
             '- Virtual environment configured, deps in .venv/\n'
