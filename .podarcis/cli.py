@@ -374,6 +374,50 @@ def _ensure_vscode_config(root: Path) -> None:
         console.print('[dim]Initialized config/code-config/Code/User/settings.json from template[/dim]')
 
 
+def _ensure_docker_image() -> bool:
+    '''Build podarcis-user:latest from the repo Dockerfile. Returns True on success.'''
+    dockerfile = root_dir / 'Dockerfile'
+    if not dockerfile.exists():
+        console.print('[bold red]Error:[/bold red] Dockerfile not found at project root.')
+        return False
+    console.print('[dim]Building podarcis-user:latest Docker image...[/dim]')
+    rc = subprocess.run(
+        ['docker', 'build', '-t', 'podarcis-user:latest', '-f', str(dockerfile), '.'],
+        cwd=str(root_dir),
+    ).returncode
+    if rc != 0:
+        console.print('[bold red]Error:[/bold red] Docker build failed.')
+        return False
+    console.print('[dim]Docker image podarcis-user:latest built successfully.[/dim]')
+    return True
+
+
+def _launch_code_server(port: int | None = None) -> int:
+    '''Start a code-server Docker container mounting the project root. Returns the port.'''
+    import socket
+    container_name = 'podarcis-code-server'
+    subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, check=False)
+
+    if port is None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            port = s.getsockname()[1]
+
+    cmd = [
+        'docker', 'run', '-d', '--name', container_name, '--rm',
+        '-v', f'{root_dir}:/home/podarcis/workspace',
+        '-p', f'127.0.0.1:{port}:8080',
+        'podarcis-user:latest',
+        'code-server', '--bind-addr', '0.0.0.0:8080', '--auth', 'none', '/home/podarcis/workspace',
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True, cwd=str(root_dir))
+    if res.returncode != 0:
+        console.print(f'[bold red]Error:[/bold red] Failed to start code-server container:\n{res.stderr}')
+        return -1
+    console.print(f'[bold green]✓ code-server running at [link=http://127.0.0.1:{port}]http://127.0.0.1:{port}[/link][/bold green]')
+    return port
+
+
 def cmd_config_frontend(args: argparse.Namespace) -> int:
     '''Set or show the frontend name.'''
     name = args.frontend_name.lower()
@@ -381,8 +425,10 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
         console.print(f'[bold red]Error:[/bold red] Unknown frontend "{name}". Choose from: {", ".join(sorted(FRONTENDS))}')
         return 1
     set_config_value(root_dir, name, 'frontend')
-    if name in ('vscode', 'code-server'):
+    if name in ('vscode', 'code-server', 'vscode-web'):
         _ensure_vscode_config(root_dir)
+        if name in ('code-server', 'vscode-web'):
+            _ensure_docker_image()
     elif name == 'obsidian':
         backend = get_config_value(root_dir, 'backend', default='none')
         cfg_plugins = getattr(args, 'configure_plugins', None)
@@ -446,11 +492,6 @@ def cmd_install(args: argparse.Namespace) -> int:
     install_script = root_dir / '.podarcis' / 'install.py'
     py_bin = sys.executable
     return subprocess.run([py_bin, str(install_script)] + args.remaining_args).returncode
-
-
-def cmd_reinstall(args: argparse.Namespace) -> int:
-    '''Alias for cmd_install.'''
-    return cmd_install(args)
 
 
 def cmd_clean(args: argparse.Namespace) -> int:
@@ -693,6 +734,8 @@ def cmd_server(args: argparse.Namespace) -> int:
         return 0
 
     elif action_name == 'install':
+        if not _ensure_docker_image():
+            return 1
         py_bin = _get_python_bin()
         cli_path = root_dir / '.podarcis' / 'cli.py'
         user_service_dir = Path.home() / '.config' / 'systemd' / 'user'
@@ -890,18 +933,25 @@ def cmd_open_tool(tool_type: str) -> int:
     '''Open the configured tool (backend or frontend) at the current directory.'''
     valid = BACKENDS if tool_type == 'backend' else FRONTENDS
     name = get_config_value(root_dir, tool_type, default='vscode' if tool_type == 'frontend' else 'opencode')
-    command = valid.get(name.lower(), name)
     cwd = str(root_dir)
 
-    if tool_type == 'frontend' and name.lower() in ('vscode', 'vscode-web'):
+    if tool_type == 'frontend' and name.lower() in ('vscode', 'code-server', 'vscode-web'):
         _ensure_vscode_config(root_dir)
+
+    if tool_type == 'frontend' and name.lower() in ('code-server', 'vscode-web'):
+        if not _ensure_docker_image():
+            return 1
+        port = _launch_code_server()
+        if port < 0:
+            return 1
+        return 0
+
+    command = valid.get(name.lower(), name)
 
     try:
         if tool_type == 'backend':
-            # CLI tools: exec replacing current process to take over terminal
             os.execvp(command, [command, cwd])
         else:
-            # GUI tools: detach in background
             subprocess.Popen([command, cwd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             console.print(f'[bold green]✓ Opened {name} at {cwd}[/bold green]')
     except FileNotFoundError:
@@ -936,23 +986,22 @@ def main() -> None:
     status_parser = subparsers.add_parser('status', help='Display status of MCP servers, skills, agents, jobs, and repos')
     status_parser.add_argument('--json', action='store_true', help='Output status in JSON format')
 
-    # job / cron
-    for job_cmd in ('job', 'cron'):
-        j_parser = subparsers.add_parser(job_cmd, help='Manage and execute modular scheduled jobs (.agents/jobs/*.yaml)')
-        j_sub = j_parser.add_subparsers(dest='job_action', help='Job action')
+    # job
+    j_parser = subparsers.add_parser('job', help='Manage and execute modular scheduled jobs (.agents/jobs/*.yaml)')
+    j_sub = j_parser.add_subparsers(dest='job_action', help='Job action')
 
-        jl = j_sub.add_parser('list', help='List discovered jobs, schedules, and status')
-        jl.add_argument('--json', action='store_true', help='Output status in JSON format')
+    jl = j_sub.add_parser('list', help='List discovered jobs, schedules, and status')
+    jl.add_argument('--json', action='store_true', help='Output status in JSON format')
 
-        jr = j_sub.add_parser('run', help='Execute job immediately by name')
-        jr.add_argument('name', nargs='?', help='Job name (e.g. gdrive_sync, audit_wiki)')
-        jr.add_argument('--dry-run', action='store_true', help='Preview execution without side effects')
+    jr = j_sub.add_parser('run', help='Execute job immediately by name')
+    jr.add_argument('name', nargs='?', help='Job name (e.g. gdrive_sync, audit_wiki)')
+    jr.add_argument('--dry-run', action='store_true', help='Preview execution without side effects')
 
-        je = j_sub.add_parser('enable', help='Enable job and install its schedule in crontab')
-        je.add_argument('name', help='Job name')
+    je = j_sub.add_parser('enable', help='Enable job and install its schedule in crontab')
+    je.add_argument('name', help='Job name')
 
-        jd = j_sub.add_parser('disable', help='Disable job and remove its schedule from crontab')
-        jd.add_argument('name', help='Job name')
+    jd = j_sub.add_parser('disable', help='Disable job and remove its schedule from crontab')
+    jd.add_argument('name', help='Job name')
 
     # config
     config_parser = subparsers.add_parser('config', help='Configure components and repositories')
@@ -1038,9 +1087,6 @@ def main() -> None:
     install_parser = subparsers.add_parser('install', help='Run bootstrap installer')
     install_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
 
-    reinstall_parser = subparsers.add_parser('reinstall', help='Alias for install')
-    reinstall_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
-
     # clean
     clean_parser = subparsers.add_parser('clean', help='Clean Python build artifacts and cache files')
 
@@ -1077,7 +1123,7 @@ def main() -> None:
     if args.interactive:
         sys.exit(cmd_interactive(args))
 
-    if args.subcommand in ('job', 'cron'):
+    if args.subcommand in ('job',):
         sys.exit(cmd_job(args))
     elif args.subcommand == 'server':
         sys.exit(cmd_server(args))
@@ -1113,7 +1159,7 @@ def main() -> None:
         sys.exit(cmd_backend(args))
     elif args.subcommand == 'frontend':
         sys.exit(cmd_frontend(args))
-    elif args.subcommand in ('install', 'reinstall'):
+    elif args.subcommand == 'install':
         sys.exit(cmd_install(args))
     elif args.subcommand == 'clean':
         sys.exit(cmd_clean(args))
