@@ -1,4 +1,4 @@
-# 🦎 Podarcis - The Research and Wiki Builder Agent
+# 🦎 Podarcis - The Research and LLM Wiki Agent
 
 | | |
 | --- | --- |
