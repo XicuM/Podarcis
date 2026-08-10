@@ -23,14 +23,12 @@ service_account.json
 logs/
 
 # Agentic backend configs — managed by `podarcis`, not tracked in git
-# opencode
 opencode-sync/
 opencode.json
 data.json
-# claude code / agy
 .mcp.json
-# codex
 .codex/
+
 # Runtime token cache
 .agents/token_cache.json
 
@@ -41,9 +39,11 @@ uv.lock
 .obsidian/
 .claudian
 
-# Workspace
+# Workspace & Decoupled Repositories
 workspace/
 wiki/
+sources/
+user/
 config/
 open-code-data/
 
@@ -53,3 +53,4 @@ open-code-data/
 # Server runtime data & container build artifacts
 data/
 *.tar
+

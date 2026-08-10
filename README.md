@@ -1,4 +1,4 @@
-# 🦎 Podarcis - The Research and LLM Wiki Agent
+# 🦎 Podarcis — The Research and LLM Wiki Agent
 
 | | |
 | --- | --- |
@@ -10,43 +10,48 @@ Evidence progresses through a strict pipeline with a formal **Hierarchy of Evide
 
 ```mermaid
 graph TD
-    Lit[1a. Literature / research-mcp] -->|Ingested by Synthesizer| Wiki[2. Wiki / Objective Knowledge]
-    GDrive[1b. Shared Google Drive / google-drive-mcp] -->|Ingested by Synthesizer| Wiki
-    Wiki -->|Tailored by Protocol Architect| Workspace[3. Workspace / Protocols & Deliverables]
+    Researcher[Researcher Subagent @researcher] -->|Stages raw sources| Sources[sources/ + state.json]
+    Sources -->|Ingested by| Synthesizer[Synthesizer Subagent @synthesizer]
+    Synthesizer -->|Writes to| Wiki[wiki/ Objective Knowledge]
+    Wiki -->|Tailored by| Architect[Protocol Architect @protocol-architect]
+    Architect -->|Writes to| Protocols[user/protocols/ Personalized Actions]
+    Auditor[Auditor Subagent @auditor] -.->|Validates| Wiki
+    Auditor -.->|Validates| Protocols
 ```
 
-1. **Research & Data Access:** Discovers peer-reviewed literature via `research-mcp` (Semantic Scholar) and accesses shared internal documents and raw data via `google-drive-mcp`. Literature reviews and code reviews are stored in `workspace/`.
-2. **Ingest (Synthesis):** Compiles and resolves evidence from both `research-mcp` search results and Google Drive documents into the objective, anonymized `wiki/` knowledge base.
-3. **Build Protocol & Deliverables (Actionable Output):** Adapts objective Wiki knowledge to specific goals, constraints, and parameters in `workspace/` (protocols, literature reviews, code reviews).
+1. **Research (`@researcher`)**: Discovers literature via `research-mcp` (Semantic Scholar), scrapes Google Drive, downloads PDFs, extracts text with markitdown, and enqueues items in `sources/state.json`.
+2. **Synthesis (`@synthesizer`)**: Reads pending items from the queue or drive, ingests raw sources, and compiles objective, anonymized knowledge into `wiki/`.
+3. **Protocol Architect (`@protocol-architect`)**: Reads `user/profile.md`, adapts Wiki findings into step-by-step personalized protocols in `user/protocols/` (loading `menumaker` for nutritional protocols).
+4. **Audit (`@auditor`)**: Runs continuous machine validation — link integrity (`podarcis lint`), OKF v0.2 frontmatter audits, citation verification, and fact-checking.
 
 ---
 
 ## 📁 Repository Structure
 
 ```text
-├── .agents/              # Agent scripts, tools, and execution packages (skills)
-│   ├── mcp/              # MCP servers (wiki, research, gdrive, finance, menumaker-mcp)
-│   └── skills/           # Action packages (ingest, fact-check, harness, build-protocol, ...)
-├── .podarcis/            # Core Podarcis engine: install, config, repo sync, and console UI
-├── wiki/                 # Decoupled Repository: Synthesized, objective knowledge base (anonymized)
-│                         #   → not present by default; cloned during `./podarcis install`
-├── workspace/            # Decoupled Repository: Personal profile, feedback, active protocols, and reviews
-│                         #   → not present by default; cloned during `./podarcis install`
-├── opencode.json         # Generated MCP server definitions for OpenCode / compatible IDE agents
-└── pyproject.toml        # Python package metadata and pytest configuration
+├── .agents/                 # Core agent personas, MCP servers, and skills
+│   ├── agents/              # Subagent personas (researcher, synthesizer, protocol-architect, auditor)
+│   ├── mcp/                 # MCP servers (wiki, research, finance, menumaker, gdrive, diagnostics, zoom2okf-mcp)
+│   └── skills/              # Domain knowledge (menumaker, harness, self-improvement, python-skill)
+├── .opencode/               # OpenCode adapter configuration
+│   └── agents -> ../.agents/agents  # Relative symlink for OpenCode subagent integration
+├── .podarcis/               # Podarcis runtime engine, TUI CLI, jobs runner, and web server
+├── sources/                 # Decoupled Repository: Staging area for raw inputs & ingestion queue
+├── wiki/                    # Decoupled Repository: Objective knowledge base (anonymized)
+├── user/                    # Decoupled Repository: Personal profile, feedback, protocols
+├── tmp/                     # Temporary scratchpad workspace
+├── pyproject.toml           # Python packaging and pytest configuration
+└── AGENTS.md                # Agent architecture, conventions, and rules of engagement
 ```
-
-> **Note:** `wiki/` and `workspace/` are independent git repositories that are not tracked by the main project's git index. They are cloned automatically during `./podarcis install` using the URLs defined in `.podarcis/config.yaml`.
 
 ---
 
 ## 🛠 Features & Capabilities
 
-* **Literature Search**: `research-mcp` queries Semantic Scholar for peer-reviewed publications, abstracts, and citation graphs — the primary tool for evidence discovery.
-* **Direct Google Drive Access**: `google-drive-mcp` provides access to internal team documents, raw data, and pre-prints not indexed in public databases, without staging files in the git repo.
-* **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `finance-mcp`, `google-drive-mcp`, `menumaker-mcp`) allow LLMs to search literature, query databases, read drive files, and interact with menus.
-* **Hermetic Repositories**: The `wiki/` and `workspace/` directories are decoupled git repositories to ensure clear boundaries between objective knowledge and private context.
-* **Modular Podarcis Engine**: The `.podarcis/` Python package provides interactive setup, configuration, and repository management tools, separating bootstrap from day-to-day configuration.
+* **Subagent Architecture**: Four specialized subagents (`Researcher`, `Synthesizer`, `Protocol Architect`, `Auditor`) auto-invoked by the primary agent based on task context.
+* **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `finance-mcp`, `menumaker`, `gdrive`, `diagnostics`, `zoom2okf-mcp`) enable literature search, knowledge base queries, nutritional math, and video processing.
+* **Modular Podarcis Engine**: The `.podarcis/` Python package provides interactive setup, CLI tools (`podarcis status`, `podarcis test`, `podarcis lint`), background jobs engine, and a multi-user containerized web server.
+* **Hermetic Repositories**: `wiki/`, `user/`, and `sources/` are decoupled git repositories ensuring clear separation between objective knowledge and user privacy.
 
 ---
 
@@ -59,60 +64,36 @@ cd Podarcis
 ```
 
 ### 2. Run Automated Setup
-Run `./podarcis install` to automatically configure the Python virtual environment, install dependencies, create `.podarcis/config.yaml`, set up Google Drive credentials, install the `podarcis` CLI tool (and optionally link it to `~/.local/bin`), and clone workspace repositories:
-
 ```bash
 ./podarcis install
 ```
+This automatically configures the virtual environment, installs dependencies, sets up credentials, links the `podarcis` CLI tool, and clones sub-repositories.
 
-### 3. Configure & Use `podarcis` CLI
-After setup, use the `podarcis` CLI tool for agentic and user configuration, testing, and status inspection:
-
-```bash
-# View status of MCP servers, skills, agents, and repos (human or JSON format for agents)
-podarcis status
-podarcis status --json
-
-# Non-interactive configuration changes
-podarcis config enable skill harness
-podarcis config disable mcp finance-mcp
-
-# Launch interactive TUI configuration menu
-podarcis config interactive
-
-# Run tests or linting
-podarcis test
-podarcis lint
-```
-
-### 4. Workflow Commands
+### 3. CLI Quick Reference
 
 | Command | Description |
 |---|---|
 | `./podarcis install` | Bootstrap venv, dependencies, credentials, and `podarcis` CLI |
-| `podarcis status` | Display component, agent, skill, and repository status (`--json` supported) |
-| `podarcis config` | Non-interactive (`enable`/`disable`/`repo`) or interactive (`interactive`) config |
+| `podarcis status` | Display status of MCP servers, skills, agents, jobs, and repos (`--json` supported) |
+| `podarcis config interactive` | Launch interactive TUI configuration menu |
 | `podarcis test` | Run test suite across all MCP servers and skills |
 | `podarcis lint` | Run link integrity check across wiki markdown files |
-| `podarcis clean` | Clean Python build artifacts and cache files |
+| `podarcis server` | Launch multi-user containerized web server |
 
-### 5. Connect MCP Servers to your Agent / IDE
-The project automatically generates `opencode.json` defining native MCP servers from `.agents/mcp/` and `.agents/mcp_config.json`. The servers auto-detect the project root (via `AGENTS.md`) and use relative Python paths via `.venv/bin/python`.
+### 4. Subagent Quick Reference
 
-If using Claude Desktop or another MCP client, reference `.venv/bin/python` and `.agents/mcp/*/server.py`.
-
----
-
-## Agentic installation
-
-This workspace can be integrated with mobile-friendly agent frontends like **OpenClaw** (e.g., via Telegram). Send this prompt to your OpenClaw or Hermes-backed agent:
-> "Replace current workspace with this repository: `git clone https://github.com/XicuM/Podarcis.git .`. Run installation steps and configure following the user needs.
+| Command | What it does |
+|---|---|
+| `@researcher <query>` | Searches literature, downloads papers, stages in `sources/` |
+| `@synthesizer` | Ingests pending sources into `wiki/` (+ lint, update index) |
+| `@protocol-architect <topic>` | Builds personalized protocol in `user/protocols/` from wiki + profile |
+| `@auditor` | Lint checks, citation audits, cross-reference validation, fact-checking |
 
 ---
 
 ## 🦎 Save *Podarcis pityusensis*
 
-This project takes its name from *Podarcis*, the genus of wall lizards native to the Mediterranean basin, which means "agile-footed" in greek. In particular, the **Ibiza wall lizard** (*Podarcis pityusensis*), endemic to the islands of Ibiza and Formentera, is facing severe threats of extinction due to invasive alien snake species. If you find this project useful, please consider learning more about and supporting active conservation efforts:
+This project takes its name from *Podarcis*, the genus of wall lizards native to the Mediterranean basin ("agile-footed" in Greek). In particular, the **Ibiza wall lizard** (*Podarcis pityusensis*), endemic to the islands of Ibiza and Formentera, is facing severe threats of extinction due to invasive alien snake species. If you find this project useful, please consider learning more about and supporting active conservation efforts:
 
 👉 **[Protegim ses Sargantanes — Learn & Support *Podarcis pityusensis* Conservation](https://protegimsessargantanes.org/en/home-english/)**
 
