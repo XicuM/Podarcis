@@ -2,90 +2,101 @@
 
 A modular, evidence-based system that automates the transformation of raw information (such as scientific literature, data, and documents) into a structured knowledge base (Wiki) and translates it into personalized, actionable guidelines (Protocols).
 
-The architecture is entirely **filesystem-driven** and framework-agnostic. Multiple agents (or a single agent playing multiple roles) coordinate asynchronously by writing state changes to the filesystem and decoupled git repositories.
+The architecture is **filesystem-driven** and **agentic**: four specialized OpenCode subagents (defined in `.opencode/agents/`) coordinate asynchronously by writing state changes to the filesystem and decoupled git repositories. The primary agent (Build or Plan) automatically invokes the right subagent based on its description.
 
 ---
 
-## 🚀 The Workflow Pipeline
+## The Workflow Pipeline
 
 Evidence progresses through a strict pipeline with a formal **Hierarchy of Evidence**:
 
 ```mermaid
 graph TD
-    Sources[1. Sources / Raw Literature] -->|Ingested by Synthesizer| Wiki[2. Wiki / Objective Knowledge]
-    Wiki -->|Tailored by Protocol Architect| Protocols[3. Protocols / Personalized Actions]
+    Researcher[Researcher Subagent] -->|Stages raw sources| Sources[sources/ + state.json]
+    Sources -->|Ingested by| Synthesizer[Synthesizer Subagent]
+    Synthesizer -->|Writes to| Wiki[wiki/ Objective Knowledge]
+    Wiki -->|Tailored by| Architect[Protocol Architect Subagent]
+    Architect -->|Writes to| Protocols[user/protocols/ Personalized Actions]
+    Auditor[Auditor Subagent] -.->|Validates| Wiki
+    Auditor -.->|Validates| Protocols
 ```
 
-1. **Research (Source Discovery):** Discovers literature or internal data, stages files in `sources/`, and logs items in `sources/state.json`.
-2. **Ingest (Synthesis):** Compiles and resolves raw source material into the objective, anonymized `wiki/` knowledge base.
-3. **Build Protocol (Actionable Output):** Adapts objective Wiki knowledge to a user's specific goals, constraints, and physiological parameters in `user/protocols/`.
+1. **Research**: The Researcher subagent discovers literature via `research-mcp`, downloads PDFs, extracts text with markitdown, and enqueues items in `sources/state.json`.
+2. **Synthesis**: The Synthesizer subagent reads pending items from the queue, ingests raw sources, and compiles objective knowledge into the `wiki/`.
+3. **Build Protocol**: The Protocol Architect subagent reads `user/profile.md`, adapts Wiki findings into step-by-step personalized protocols in `user/protocols/`.
+4. **Audit**: The Auditor subagent runs continuous validation — lint checks, citation integrity, cross-reference audits, and fact-checking.
+
+Subagents can be invoked automatically (based on their descriptions) or manually via `@mention` (e.g., `@researcher find papers on...`).
 
 ---
 
-## 📁 Repository Structure
-
+## Repository Structure
 
 ```text
-├── .agents/          # Agent scripts, tools, and execution packages (skills)
-│   ├── mcp/          # Model Context Protocol (MCP) servers (wiki, research, finance)
-│   └── skills/       # Action packages (ingest, build-protocol, fact-check)
-├── sources/          # Unified staging area for all raw inputs (literature, code, docs)
-├── tmp/              # Temporary workspace for temporal edits, user additions, and scratchpads
-├── wiki/             # Decoupled Repository: Synthesized, objective knowledge base (anonymized)
-├── user/             # Decoupled Repository: Personal profile, feedback, and active protocols
-└── sources/state.json # Central execution manifest & ingestion queue
+├── .agents/                 # MCP servers, skills, and shared infrastructure
+│   ├── mcp/                 # MCP servers (wiki, research, finance, menumaker, gdrive)
+│   └── skills/              # Domain knowledge (menumaker, harness) — loaded via skill tool
+├── .opencode/               # OpenCode configuration
+│   └── agents/              # Subagent markdown definitions (researcher, synthesizer, protocol-architect, auditor)
+├── sources/                 # Unified staging area for all raw inputs
+├── tmp/                     # Temporary workspace for edits and scratchpads
+├── wiki/                    # Decoupled Repository: Objective knowledge base (anonymized)
+├── user/                    # Decoupled Repository: Personal profile, feedback, protocols
+├── opencode.json            # MCP server registrations + agent config
+├── AGENTS.md                # Agent architecture, conventions, and rules of engagement
+└── sources/state.json       # Central ingestion queue manifest
 ```
 
 ---
 
-## 🛠 Features & Capabilities
-* **Asynchronous Handoffs**: Coordination mediated completely by `sources/state.json` and index updates. No active runtime orchestration is required.
-* **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `finance-mcp`) allow LLMs to query databases, search literature, and run portfolio math.
-* **Hermetic Repositories**: The `wiki/` and `user/` directories are decoupled git repositories to ensure clear boundaries between objective knowledge and user-private context.
+## Features & Capabilities
+
+* **Subagent Architecture**: Four specialized subagents (Researcher, Synthesizer, Protocol Architect, Auditor) auto-invoked by the primary agent based on task context. Each has tailored system prompts, permissions, and tool access defined in `.opencode/agents/`.
+* **Asynchronous Handoffs**: Coordination mediated completely by `sources/state.json` and index updates. No active runtime orchestration required.
+* **Model Context Protocol (MCP)**: Five native servers (`research-mcp`, `wiki-mcp`, `finance-mcp`, `menumaker`, `google-drive-mcp`) provide tool access for literature search, knowledge base queries, financial math, nutritional optimization, and Google Drive access.
+* **Hermetic Repositories**: The `wiki/`, `user/`, and `sources/` directories are decoupled git repositories ensuring clear boundaries between objective knowledge and user-private context.
 
 ---
 
-## ⚙️ Installation & Setup
-
-Follow these steps to set up the project locally:
+## Installation & Setup
 
 ### 1. Clone the Repository
-Clone the repository and initialize the workspaces:
 ```bash
 git clone --recursive https://github.com/XicuM/agentic-wiki-builder.git
 cd agentic-wiki-builder
 ```
 
 ### 2. Configure Environment & Dependencies
-Create a virtual environment and install the required dependencies:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-Set up your environment variables by copying the template file:
-```bash
 cp .example.env .env
 ```
 Open `.env` and fill in your API credentials (e.g., `SEMANTIC_SCHOLAR_API_KEY`).
 
-### 3. Connect MCP Servers to your Agent / IDE
-The project defines three MCP servers in `opencode.json`. The servers auto-detect the project root (via `AGENTS.md`) and use relative Python paths — no manual path editing required if you use opencode.
+### 3. MCP Servers & Subagents
+The project defines five MCP servers and four subagents in `opencode.json` and `.opencode/agents/`. These auto-detect the project root (via `AGENTS.md`) — no manual configuration needed when using OpenCode.
 
-If using Claude Desktop, create equivalent entries referencing your local `.venv/bin/python` and `.agents/mcp/*/server.py` paths.
+To verify the setup, open a session here and try invoking a subagent:
+```
+@auditor lint the wiki
+```
 
 ### 4. Run the Test Suite
-Ensure the dependencies and local MCP servers are working correctly by running the tests:
 ```bash
 pytest
 ```
 
 ---
 
-## 📱 Mobile Integration (OpenClaw)
+## Subagent Quick Reference
 
-This workspace can be integrated with mobile-friendly agent frontends like **OpenClaw** (e.g., via Telegram). 
+| Command | What it does |
+|---|---|
+| `@researcher <query>` | Searches literature, downloads papers, stages in `sources/` |
+| `@synthesizer` | Ingests pending sources into `wiki/` (+ lint, update index) |
+| `@protocol-architect <topic>` | Builds personalized protocol in `user/protocols/` from wiki + profile |
+| `@auditor` | Lint checks, citation audits, cross-reference validation, fact-checking |
 
-To install this workspace as an autonomous skill, send this prompt to your OpenClaw-backed agent:
-> "Clone this repository: `https://github.com/XicuM/agentic-wiki-builder.git`. Keep the work for this project scoped to this workspace only. Install the skills in your main workspace. After install, inspect the project structure and help me finish setup. Ask before making any broader changes."
+For full subagent workflows and conventions, see each `.opencode/agents/*.md` file and `AGENTS.md`.

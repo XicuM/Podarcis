@@ -9,7 +9,7 @@ Choose **one** of the authentication methods:
 ### Method 1: Automatic OAuth 2.0 Client (Recommended & Easiest)
 1. Run the interactive setup helper:
    ```bash
-   python setup.py
+   python scripts/setup.py
    ```
    Or run the authentication script directly:
    ```bash

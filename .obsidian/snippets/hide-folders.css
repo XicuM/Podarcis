@@ -1,4 +1,0 @@
-.nav-folder:has([data-path="__pycache__"]),
-.nav-folder:has([data-path="opencode-sync"]) {
-  display: none;
-}

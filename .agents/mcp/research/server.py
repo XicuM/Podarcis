@@ -81,7 +81,7 @@ def _make_client(**kwargs) -> httpx.AsyncClient:
     headers = {"User-Agent": "Mozilla/5.0 (agentic-wiki research-mcp/1.0)"}
     if _API_KEY:
         headers["x-api-key"] = _API_KEY
-    return httpx.AsyncClient(transport=transport, headers=headers, timeout=30, follow_redirects=True, **kwargs)
+    return httpx.AsyncClient(transport=transport, headers=headers, timeout=60, follow_redirects=True, **kwargs)
 
 
 def _check_domain(url: str) -> None:
@@ -460,28 +460,124 @@ async def _resolve_metadata(paper_id: str) -> PaperMetadata:
 # Core ingestion logic
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _download_pdf(url: str, dest: Path) -> None:
-    """Stream a PDF to disk with retries."""
+def _publisher_oa_url(doi: str) -> str | None:
+    """Try to construct a publisher-native open-access PDF URL from a DOI."""
+    if not doi:
+        return None
+    doi = doi.removeprefix("DOI:").removeprefix("doi:")
+    article_id = doi.split("/", 1)[-1] if "/" in doi else doi
+    # Nature family journals — https://www.nature.com/articles/<id>.pdf
+    if any(d in doi.lower() for d in ("10.1038/", "10.1037/")):
+        return f"https://www.nature.com/articles/{article_id}.pdf"
+    # Science journals — https://www.science.org/doi/pdf/<doi>
+    if doi.startswith("10.1126/"):
+        return f"https://www.science.org/doi/pdf/{doi}"
+    # PNAS — https://www.pnas.org/doi/pdf/<doi>
+    if doi.startswith("10.1073/"):
+        return f"https://www.pnas.org/doi/pdf/{doi}"
+    # Cell Press (open-access)
+    if "10.1016/j.cell" in doi.lower() or "10.1016/j.celrep" in doi.lower():
+        return f"https://www.cell.com/article/{''.join(doi.split('/', 1)[1:])}/pdf"
+    # Frontiers — fully OA
+    if "10.3389/" in doi:
+        return f"https://www.frontiersin.org/articles/{doi}/pdf"
+    # PLOS — fully OA
+    if "10.1371/" in doi:
+        return f"https://journals.plos.org/plosone/article/file?id={doi}&type=printable"
+    return None
+
+
+async def _download_pdf_playwright(url: str, dest: Path) -> bool:
+    """Attempt PDF download via headless browser (handles Cloudflare challenges)."""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        return False
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            )
+            page = await context.new_page()
+            # Navigate to the PDF URL; Cloudflare will auto-redirect through JS challenge
+            response = await page.goto(url, wait_until="networkidle", timeout=30000)
+            if response is None:
+                return False
+            content_type = response.headers.get("content-type", "")
+            if "application/pdf" in content_type:
+                pdf_bytes = await response.body()
+                dest.write_bytes(pdf_bytes)
+                return True
+            # If not a direct PDF, try to get page content as PDF
+            # Some publishers render the PDF inline
+            await page.wait_for_timeout(2000)
+            body = await page.content()
+            if "cf-mitigated" in body or "Checking your browser" in body:
+                # Cloudflare challenge still active - try waiting longer
+                await page.wait_for_timeout(5000)
+                body = await page.content()
+                if len(body) < 2000:
+                    return False
+            page_pdf = await page.pdf()
+            dest.write_bytes(page_pdf)
+            return True
+        finally:
+            await browser.close()
+    return False
+
+
+async def _download_pdf(url: str, dest: Path, doi: str | None = None) -> None:
+    """Stream a PDF to disk with retries. Falls back to Playwright on 403/bot-block."""
     _check_domain(url)
+    publisher_url = _publisher_oa_url(doi) if doi else None
+    urls_to_try: list[str] = [url]
+    if publisher_url and "europepmc.org" in url:
+        urls_to_try = [publisher_url, url]
+    elif publisher_url:
+        urls_to_try = [publisher_url, url]
+
+    last_error = None
     async with _make_client() as client:
-        for attempt in range(5):
-            try:
-                async with client.stream("GET", url, headers={"Accept": "application/pdf"}) as resp:
-                    if resp.status_code == 429 or resp.status_code >= 500:
-                        await asyncio.sleep(2 ** attempt + 1)
-                        continue
-                    resp.raise_for_status()
-                    with dest.open("wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size=65536):
-                            f.write(chunk)
+        for try_url in urls_to_try:
+            for attempt in range(3):
+                try:
+                    _check_domain(try_url)
+                    async with client.stream(
+                        "GET", try_url,
+                        headers={
+                            "Accept": "application/pdf",
+                            "Referer": "https://scholar.google.com/",
+                        },
+                    ) as resp:
+                        if resp.status_code in (403, 404):
+                            break  # try next URL
+                        if resp.status_code == 429 or resp.status_code >= 500:
+                            await asyncio.sleep(2 ** attempt + 1)
+                            continue
+                        resp.raise_for_status()
+                        with dest.open("wb") as f:
+                            async for chunk in resp.aiter_bytes(chunk_size=65536):
+                                f.write(chunk)
+                    return  # success
+                except httpx.HTTPStatusError as exc:
+                    last_error = exc
+                    if exc.response.status_code not in (429,) and exc.response.status_code < 500:
+                        break
+                    await asyncio.sleep(2 ** attempt + 1)
+                except httpx.TransportError as exc:
+                    last_error = exc
+                    await asyncio.sleep(2 ** attempt)
+
+    # ── httpx failed on all URLs → try Playwright fallback ───────────────────
+    for try_url in urls_to_try:
+        try:
+            if await _download_pdf_playwright(try_url, dest):
                 return
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code not in (429,) and exc.response.status_code < 500:
-                    raise
-                await asyncio.sleep(2 ** attempt + 1)
-            except httpx.TransportError:
-                await asyncio.sleep(2 ** attempt)
-    raise RuntimeError(f"Failed to download PDF after 5 attempts: {url}")
+        except Exception:
+            pass
+
+    raise RuntimeError(f"Failed to download PDF after trying {urls_to_try}: {last_error}")
 
 
 async def _ingest_paper(
@@ -523,7 +619,7 @@ async def _ingest_paper(
                 "No open-access PDF found via any provider. "
                 "Please supply the PDF manually and use a local: paper_id."
             )
-        await _download_pdf(meta.pdf_url, pdf_path)
+        await _download_pdf(meta.pdf_url, pdf_path, doi=meta.doi)
         pdf_source_url = meta.pdf_url
 
     # ── Step 2: extract text ─────────────────────────────────────────────────

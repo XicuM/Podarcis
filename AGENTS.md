@@ -4,7 +4,36 @@ The Agentic Wiki Builder is designed around a **filesystem-driven, evidence-base
 
 ---
 
-## 1. Core Agent Personas
+## 1. Subagent Workflow
+
+The four core personas are implemented as **OpenCode markdown subagents** defined in `.opencode/agents/`. Each subagent has a dedicated system prompt, tool permissions, and a description that tells the primary agent when to invoke it automatically via the Task tool.
+
+### Invocation
+
+- **Automatic**: The primary agent (Build or Plan) reads each subagent's `description` frontmatter and invokes the appropriate subagent via the Task tool when its expertise is needed.
+- **Manual**: You can invoke any subagent directly by `@ mentioning` it (e.g., `@researcher find papers on creatine metabolism`).
+- **Pipeline**: Subagents can delegate to each other — e.g., the Protocol Architect can invoke the Researcher when wiki data is missing.
+
+### Subagent Definitions
+
+| Subagent | File | Responsibility |
+|---|---|---|
+| **Researcher** | `.opencode/agents/researcher.md` | Discovers peer-reviewed literature, downloads PDFs, extracts text via markitdown, and stages raw sources in `sources/` + `sources/state.json`. |
+| **Synthesizer** | `.opencode/agents/synthesizer.md` | Reads pending items from `sources/state.json`, ingests raw sources, and compiles objective knowledge into `wiki/`. |
+| **Protocol Architect** | `.opencode/agents/protocol-architect.md` | Reads `user/profile.md`, adapts Wiki findings into step-by-step personalized protocols in `user/protocols/`. Loads the menumaker skill for nutritional protocols. |
+| **Auditor** | `.opencode/agents/auditor.md` | Runs automated validation, audits citation integrity, checks link structures, and fact-checks claims against wiki and literature. |
+
+### Skills (Domain Knowledge)
+
+Skills (`.agents/skills/`) are loaded via the `skill` tool to inject specialized domain knowledge into the current context. They complement subagents but do not replace them:
+
+- **menumaker**: Nutritional reasoning, USDA food data, and menu optimization heuristics (loaded by the Protocol Architect).
+- **harness**: Runtime state, context compaction, and permission gating utilities.
+
+---
+
+## 2. Core Agent Personas
+
 Agents operate as functional layers of the evidence-to-action pipeline:
 
 *   **Researcher**: Discovers peer-reviewed literature and stages raw sources.
@@ -14,8 +43,10 @@ Agents operate as functional layers of the evidence-to-action pipeline:
 
 ---
 
-## 2. Filesystem-Driven Handoff Model
+## 3. Filesystem-Driven Handoff Model
+
 The coordination is asynchronous, mediated by the file structure:
+
 *   **Staging (`sources/`)**: Ground for raw evidence and metadata.
 *   **Manifest (`sources/state.json`)**: Orchestration queue for pending ingestion.
 *   **Wiki (`wiki/` repository)**: Objective knowledge base (anonymized, theory-focused).
@@ -24,7 +55,7 @@ The coordination is asynchronous, mediated by the file structure:
 
 ---
 
-## 3. Strict Conventions & Rules of Engagement
+## 4. Strict Conventions & Rules of Engagement
 
 ### Hierarchy of Evidence & Citation
 *   **Citations**: Protocols cite the Wiki (`wiki/`); the Wiki cites Sources (`sources/`).
@@ -51,9 +82,10 @@ The coordination is asynchronous, mediated by the file structure:
 
 ---
 
-## 4. Behavioral Principles
+## 5. Behavioral Principles
 
 *   **Verify Before Synthesis**: Confirm source extraction is successful and contains content before citing. State assumptions explicitly.
 *   **Simplicity and Conciseness**: Synthesize the minimum required text. Protocols must contain only the necessary actionable steps. Avoid speculative padding.
 *   **Surgical Edits**: Touch only the files and lines required for the task. Do not make cosmetic edits to adjacent sections. Clean up orphaned links or footnotes created by your changes.
+*   **No Manual Line Wrapping**: Write each paragraph as a single line. Do not insert hard line breaks (newlines) mid-paragraph. Obsidian handles visual wrapping automatically. Only use newlines to separate paragraphs, list items, or structural elements.
 *   **Goal-Driven Execution**: Define validation criteria (e.g., link integrity, index updates) before starting a task and verify them iteratively until they pass.
