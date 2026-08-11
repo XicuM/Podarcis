@@ -63,9 +63,9 @@ The coordination is asynchronous, mediated by the file structure:
 ## 4. Strict Conventions & Rules of Engagement
 
 ### Hierarchy of Evidence & Citation
-* **Citations**: Protocols cite the Wiki (`wiki/`); the Wiki cites Sources (`sources/`).
-* **OKF Frontmatter**: Every non-index markdown file in `wiki/` and `user/` must begin with standardized YAML frontmatter containing `type`, `title`, `category`, `rationale`, `generated`, and `sources`.
-* **Footnote Formatting**: Body footnotes MUST be keyed to frontmatter source IDs (e.g. `[^smith2024]`). Numeric positional footnotes (`[^1]`) are forbidden.
+* **Strict Citation Chain**: Workspace files and protocols (`workspace/`) MUST cite the Wiki (`wiki/`); the Wiki (`wiki/`) MUST cite Sources (`sources/`). Under no circumstances should `workspace/` files bypass `wiki/` to cite `sources/` directly.
+* **OKF Frontmatter**: Every non-index markdown file in `wiki/` and `workspace/` must begin with standardized YAML frontmatter containing `type`, `title`, `category`, `rationale`, `generated`, and `sources` (or `related`).
+* **Footnote Formatting**: Body footnotes MUST be keyed to frontmatter source/wiki IDs. Numeric positional footnotes (`[^1]`) are forbidden.
 * **Cross-References**: Use relative markdown links (`[Text](../path.md)`). Unlinked mentions or `[[wikilinks]]` are forbidden.
 * **Folder Bloat Limit**: Maximum of 15 content files per directory (excluding `_index.md`). Restructure into subdirectories when exceeded.
 
