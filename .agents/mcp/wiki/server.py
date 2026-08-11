@@ -145,13 +145,13 @@ async def _qmd(
     *args: str,
     json_output: bool = False,
 ) -> str:
-    """Run a qmd command from the wiki MCP directory (where qmd.yml lives) and return stdout."""
+    """Run a qmd command from the project root and return stdout."""
     cmd = ["qmd", *args]
     if json_output:
         cmd.append("--json")
     proc = await asyncio.create_subprocess_exec(
         *cmd,
-        cwd=str(_WIKI_DIR),
+        cwd=str(ROOT),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -184,7 +184,7 @@ async def _run_script(script: str, *args: str) -> str:
 async def wiki_search(
     query: Annotated[str, "The search query (natural language, keyword, or grep pattern)"],
     collection: Annotated[
-        Literal["wiki", "protocols", "all"],
+        Literal["wiki", "protocols", "sources", "all"],
         "Restrict to a specific collection (default: all)",
     ] = "all",
     method: Annotated[
@@ -193,15 +193,17 @@ async def wiki_search(
     ] = "hybrid",
     limit: Annotated[int, "Maximum number of results to return (default 5)"] = 5,
     min_score: Annotated[float, "Minimum relevance score threshold (0-1, default 0.0)"] = 0.0,
+    hyde: Annotated[str | None, "Hypothetical document passage to search against (HyDE)"] = None,
+    explain: Annotated[bool, "Whether to include retrieval score traces and rank breakdowns"] = False,
+    no_rerank: Annotated[bool, "Skip LLM reranking for fast RRF/vector results"] = False,
 ) -> str:
-    """Consolidated search tool: supports keyword (grep), semantic (vector), and hybrid strategies."""
+    """Consolidated search tool: supports keyword (grep), semantic (vector), hybrid, and HyDE search strategies."""
     status, info = get_qmd_status()
 
     if status == "enabled_broken":
         warning = (
             "⚠️ WARNING: QMD Vector DB Engine is explicitly ENABLED in podarcis.yaml, "
             f"but QMD is unavailable ({info}).\n"
-            "Please install @tobilu/qmd via npm or run 'python tui/setup.py'.\n"
             "Falling back to Native Keyword Search mode.\n\n"
         )
         native_res = await _native_search(query, collection=collection, limit=limit)
@@ -209,25 +211,33 @@ async def wiki_search(
 
     if status == "disabled":
         prefix = ""
-        if method in ("semantic", "hybrid"):
+        if method in ("semantic", "hybrid") or hyde:
             prefix = "[Notice: QMD Vector DB engine is disabled in podarcis.yaml. Operating in Native Keyword Search mode.]\n\n"
         native_res = await _native_search(query, collection=collection, limit=limit)
         return prefix + native_res
 
-    if method == "keyword":
+    if hyde:
+        query_doc = f"intent: {query}\nhyde: {hyde}\nlex: {query}"
+        args = ["query", query_doc]
+    elif method == "keyword":
         args = ["search", query]
-        if collection != "all":
-            args += ["-c", collection]
     elif method == "semantic":
         args = ["vsearch", query, "-n", str(limit)]
-        if collection != "all":
-            args += ["-c", collection]
     else:  # hybrid
         args = ["query", query]
-        if collection != "all":
-            args += ["-c", collection]
+
+    if collection != "all":
+        args += ["-c", collection]
+
+    if method == "hybrid" or hyde:
         if min_score > 0:
             args += ["--min-score", str(min_score)]
+
+    if explain:
+        args.append("--explain")
+    if no_rerank:
+        args.append("--no-rerank")
+
     try:
         return await _qmd(*args)
     except Exception as e:
@@ -273,8 +283,10 @@ async def wiki_get(
         str,
         "Relative path or filename (e.g. 'sargantana_core.md' or 'wiki/riscv_cores/sargantana_core.md').",
     ],
+    start_line: Annotated[int | None, "1-indexed starting line number for slicing content"] = None,
+    num_lines: Annotated[int | None, "Maximum number of lines to retrieve starting from start_line"] = None,
 ) -> str:
-    """Retrieve the full content of a specific document by its relative path or filename. Auto-resolves basenames if unique."""
+    """Retrieve content of a document by its relative path or filename, with optional line range slicing."""
     resolved_path = Path(path)
     if resolved_path.is_absolute():
         try:
@@ -283,37 +295,85 @@ async def wiki_get(
             pass
 
     full_target = ROOT / resolved_path
+    target_file = None
+
     if full_target.is_file():
-        try:
-            return full_target.read_text(encoding="utf-8")
-        except Exception as e:
-            return f"Error reading file '{path}': {e}"
-
-    # Search under wiki/, user/protocols/, workspace/protocols/, sources/literature/
-    name_query = resolved_path.name
-    matches = []
-    for search_dir in ["wiki", "workspace/protocols", "user/protocols", "sources/literature"]:
-        dir_path = ROOT / search_dir
-        if dir_path.exists():
-            matches.extend(list(dir_path.rglob(f"*{name_query}*")))
-
-    matches = sorted(list(set([m for m in matches if m.is_file()])))
-
-    if len(matches) == 1:
-        try:
-            return matches[0].read_text(encoding="utf-8")
-        except Exception as e:
-            return f"Error reading file '{matches[0].relative_to(ROOT)}': {e}"
-    elif len(matches) > 1:
-        options = "\n".join([f"- {m.relative_to(ROOT)}" for m in matches])
-        return f"Error: Multiple files matched '{path}'. Please specify the exact path:\n{options}"
+        target_file = full_target
     else:
-        return f"Error: File '{path}' not found."
+        name_query = resolved_path.name
+        matches = []
+        for search_dir in ["wiki", "workspace/protocols", "user/protocols", "sources/literature"]:
+            dir_path = ROOT / search_dir
+            if dir_path.exists():
+                matches.extend(list(dir_path.rglob(f"*{name_query}*")))
+
+        matches = sorted(list(set([m for m in matches if m.is_file()])))
+        if len(matches) == 1:
+            target_file = matches[0]
+        elif len(matches) > 1:
+            options = "\n".join([f"- {m.relative_to(ROOT)}" for m in matches])
+            return f"Error: Multiple files matched '{path}'. Please specify the exact path:\n{options}"
+        else:
+            return f"Error: File '{path}' not found."
+
+    try:
+        content = target_file.read_text(encoding="utf-8")
+        if start_line is not None or num_lines is not None:
+            lines = content.splitlines()
+            total_lines = len(lines)
+            s_idx = max(0, (start_line or 1) - 1)
+            n_len = num_lines if num_lines is not None else (total_lines - s_idx)
+            e_idx = min(total_lines, s_idx + n_len)
+            sliced = lines[s_idx:e_idx]
+            header = f"<!-- {target_file.relative_to(ROOT)} [Lines {s_idx+1}-{e_idx} of {total_lines}] -->\n"
+            return header + "\n".join(sliced)
+        return content
+    except Exception as e:
+        return f"Error reading file '{target_file.relative_to(ROOT)}': {e}"
+
+
+@mcp.tool()
+async def wiki_multi_get(
+    pattern: Annotated[
+        str,
+        "Glob pattern (e.g. 'wiki/nutrition/*.md') or relative file path pattern to batch fetch.",
+    ],
+    max_lines: Annotated[int, "Maximum lines to read per file (default 50)"] = 50,
+    max_bytes: Annotated[int, "Skip files larger than N bytes (default 10240)"] = 10240,
+) -> str:
+    """Batch retrieve content snippets from multiple matching files across wiki, workspace, or sources."""
+    status, _ = get_qmd_status()
+    if status == "enabled_ok":
+        try:
+            return await _qmd("multi-get", pattern, "-l", str(max_lines), "--max-bytes", str(max_bytes))
+        except Exception:
+            pass
+
+    # Native fallback for multi-get
+    matches = list(ROOT.glob(pattern)) if "*" in pattern or "?" in pattern else [ROOT / pattern]
+    matches = [m for m in matches if m.is_file()]
+    if not matches:
+        return f"No files matched pattern: {pattern}"
+
+    outputs = []
+    for f in matches[:20]:  # Limit to 20 matching files max
+        try:
+            size = f.stat().st_size
+            if size > max_bytes:
+                outputs.append(f"=== File: {f.relative_to(ROOT)} (Skipped: {size} bytes > max {max_bytes}) ===")
+                continue
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+            snippet = "\n".join(lines[:max_lines])
+            trunc = f"\n[... truncated {len(lines) - max_lines} more lines]" if len(lines) > max_lines else ""
+            outputs.append(f"=== File: {f.relative_to(ROOT)} ===\n{snippet}{trunc}")
+        except Exception as e:
+            outputs.append(f"=== File: {f.relative_to(ROOT)} (Error: {e}) ===")
+    return "\n\n".join(outputs)
 
 
 @mcp.tool()
 async def wiki_update_index() -> str:
-    """Rebuild the qmd semantic index after adding or modifying wiki/source files."""
+    """Rebuild the qmd semantic index and refresh collection context summaries."""
     status, info = get_qmd_status()
     if status == "disabled":
         return "[Notice: QMD Vector DB engine is disabled in podarcis.yaml. Index update skipped.]"
@@ -323,7 +383,33 @@ async def wiki_update_index() -> str:
             f"but QMD is unavailable ({info}). Index update skipped."
         )
     try:
-        return await _qmd("update")
+        out = await _qmd("update")
+
+        ctx_count = 0
+        for search_dir in ["wiki", "workspace/protocols", "sources/literature"]:
+            dir_path = ROOT / search_dir
+            if not dir_path.exists():
+                continue
+            for index_file in dir_path.rglob("_index.md"):
+                rel_dir = index_file.parent.relative_to(ROOT)
+                try:
+                    txt = index_file.read_text(encoding="utf-8")
+                    summary_line = ""
+                    for line in txt.splitlines():
+                        if line.startswith("rationale:") or line.startswith("title:"):
+                            summary_line = line.split(":", 1)[1].strip(" \"'")
+                            break
+                        elif line.startswith("# "):
+                            summary_line = line[2:].strip()
+                            break
+                    if summary_line:
+                        await _qmd("context", "add", str(rel_dir), summary_line)
+                        ctx_count += 1
+                except Exception:
+                    continue
+        if ctx_count > 0:
+            out += f"\n✓ Synced context summaries for {ctx_count} folder(s)."
+        return out
     except Exception as e:
         return f"⚠️ WARNING: QMD Index update failed ({e})."
 
@@ -436,10 +522,17 @@ async def lint_check_links(
         str,
         "Directory or file to audit (relative to PROJECT_ROOT, e.g. 'wiki/' or 'wiki/nutrition/').",
     ],
+    fix: Annotated[
+        bool,
+        "Whether to automatically repair fixable YAML syntax errors (such as unquoted colons in frontmatter).",
+    ] = False,
 ) -> str:
-    """Check for broken links, missing/unused footnotes, directory bloat, and page length."""
+    """Check for broken links, missing/unused footnotes, YAML/frontmatter syntax & schema errors, directory bloat, and page length."""
     path = ROOT / scope_path
-    return await _run_script("check_links.py", str(path))
+    args = [str(path)]
+    if fix:
+        args.append("--fix")
+    return await _run_script("check_links.py", *args)
 
 
 

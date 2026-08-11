@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-TOOLS = ['wiki_search', 'wiki_get', 'wiki_update_index', 'complete_source_synthesis', 'lint_check_links']
+TOOLS = ['wiki_search', 'wiki_get', 'wiki_multi_get', 'wiki_update_index', 'complete_source_synthesis', 'lint_check_links']
 
 def register(mcp, root: Path) -> None:
     '''Register wiki tools and resources with the FastMCP instance.'''
@@ -16,6 +16,7 @@ def register(mcp, root: Path) -> None:
 
     mcp.add_tool(wiki_server.wiki_search)
     mcp.add_tool(wiki_server.wiki_get)
+    mcp.add_tool(wiki_server.wiki_multi_get)
     mcp.add_tool(wiki_server.wiki_update_index)
     mcp.add_tool(wiki_server.complete_source_synthesis)
     mcp.add_tool(wiki_server.lint_check_links)

@@ -72,9 +72,12 @@ Add the following to your MCP host configuration (e.g., `~/.config/claude/claude
 ### wiki-mcp
 
 **Tools**
-- `wiki_search`, `wiki_vsearch`, `wiki_query`, `wiki_get` - Search and retrieve wiki content.
-- `wiki_update_index` - Rebuild the semantic index.
-- `lint_check_links`, `lint_backup_sources` - Audit broken links and snapshot sources.
+- `wiki_search` - Consolidated search (hybrid, semantic vector, keyword BM25, HyDE passage search, `--explain` score traces).
+- `wiki_get` - Retrieve document content by path with optional line slicing (`start_line`, `num_lines`).
+- `wiki_multi_get` - Batch pattern snippet retrieval across wiki, protocols, or sources.
+- `wiki_update_index` - Rebuild QMD semantic index and auto-sync folder context summaries.
+- `complete_source_synthesis` - Atomic synthesis transaction (frontmatter format, queue done status, index rebuild, link audit).
+- `lint_check_links` - Audit broken links, YAML frontmatter schemas, directory bloat, and footnotes.
 
 **Resources**
 - `wiki://collections/wiki` - Directory listing of the wiki.

@@ -26,6 +26,7 @@ podarcis-mcp = "podarcis.gateway.server:main"
 podarcis = ".podarcis"
 
 [tool.pytest.ini_options]
+norecursedirs = [".git", ".venv", ".obsidian", "__pycache__", "node_modules"]
 testpaths = [
     ".agents/mcp",
     ".agents/skills",

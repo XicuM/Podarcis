@@ -35,10 +35,12 @@ def load_server_mcp(root: Path, rel_path: str) -> Any | None:
         return None
 
     module_name = f'podarcis_mod_{p.parent.name}'
-    if module_name in sys.modules:
-        return getattr(sys.modules[module_name], 'mcp', None)
-
     try:
+        if module_name in sys.modules:
+            mod = sys.modules[module_name]
+            importlib.reload(mod)
+            return getattr(mod, 'mcp', None)
+
         spec = importlib.util.spec_from_file_location(module_name, p)
         if not spec or not spec.loader:
             return None

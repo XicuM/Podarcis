@@ -54,3 +54,7 @@ open-code-data/
 data/
 *.tar
 
+# QMD local index
+.qmd/
+
+
