@@ -63,40 +63,24 @@ def _server_name_map(root: Path) -> dict[str, str]:
     return mapping
 
 
+def _venv_podarcis_mcp(root: Path) -> str:
+    bin_name = 'Scripts/podarcis-mcp.exe' if sys.platform == 'win32' else 'bin/podarcis-mcp'
+    venv_bin = root / '.venv' / bin_name
+    if venv_bin.exists():
+        return str(venv_bin)
+    return 'podarcis-mcp'
+
+
 def discover_server_definitions(root: Path) -> list[dict]:
-    '''Discover MCP server definitions from filesystem.
-
-    Returns server list with command/env info but NO enabled state —
-    each backend adapter determines enabled state from its own config.
-    '''
-    mcp_dir = root / '.agents' / 'mcp'
-    smap = _server_name_map(root)
-    mcp_cfg_data = load_json(root / '.agents' / 'mcp_config.json')
-    mcp_servers_cfg = mcp_cfg_data.get('mcpServers', {})
-
-    servers = []
-    if mcp_dir.exists():
-        for d in sorted(mcp_dir.iterdir()):
-            if d.is_dir() and (d / 'server.py').exists():
-                dir_name = d.name
-                key = smap.get(dir_name, f'{dir_name}-mcp')
-                server_script = f'.agents/mcp/{dir_name}/server.py'
-
-                env = {'PROJECT_ROOT': str(root)}
-                if key in mcp_servers_cfg:
-                    env |= mcp_servers_cfg[key].get('env', {})
-
-                if key == 'research-mcp' and 'SEMANTIC_SCHOLAR_API_KEY' not in env:
-                    env['SEMANTIC_SCHOLAR_API_KEY'] = ''
-
-                servers.append({
-                    'key': key,
-                    'dir_name': dir_name,
-                    'command': [_venv_python(root), server_script],
-                    'env': env,
-                })
-
-    return servers
+    '''Discover MCP server definitions. Returns single Podarcis Gateway entry.'''
+    mcp_bin = _venv_podarcis_mcp(root)
+    cfg_file = str(root / '.podarcis' / 'config.yaml')
+    return [{
+        'key': 'podarcis',
+        'dir_name': 'gateway',
+        'command': [mcp_bin, '--config', cfg_file],
+        'env': {'PROJECT_ROOT': str(root)},
+    }]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -148,6 +132,9 @@ class OpenCodeAdapter(BaseAdapter):
 
         existing_mcp = existing.get('mcp', {})
         enabled_map = self.read_enabled(root)
+        LEGACY_KEYS = {'wiki-mcp', 'research-mcp', 'finance-mcp', 'menumaker-mcp', 'diagnostics-mcp', 'zoom2okf-mcp'}
+        for k in LEGACY_KEYS:
+            existing_mcp.pop(k, None)
 
         for srv in discover_server_definitions(root):
             key = srv['key']
@@ -201,6 +188,10 @@ class ClaudeCodeAdapter(BaseAdapter):
         existing = load_json(path) if path.exists() else {}
         existing_servers = existing.get('mcpServers', {})
         enabled_map = self.read_enabled(root)
+
+        LEGACY_KEYS = {'wiki-mcp', 'research-mcp', 'finance-mcp', 'menumaker-mcp', 'diagnostics-mcp', 'zoom2okf-mcp'}
+        for k in LEGACY_KEYS:
+            existing_servers.pop(k, None)
 
         for srv in discover_server_definitions(root):
             key = srv['key']

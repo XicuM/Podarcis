@@ -1,43 +1,14 @@
 {
   "mcpServers": {
-    "finance-mcp": {
-      "command": ".venv/bin/python",
+    "podarcis": {
+      "command": ".venv/bin/podarcis-mcp",
       "args": [
-        ".agents/mcp/finance/server.py"
-      ],
-      "env": {
-        "PROJECT_ROOT": "."
-      },
-      "disabled": true
-    },
-    "wiki-mcp": {
-      "command": ".venv/bin/python",
-      "args": [
-        ".agents/mcp/wiki/server.py"
+        "--config",
+        ".podarcis/config.yaml"
       ],
       "env": {
         "PROJECT_ROOT": "."
       }
-    },
-    "research-mcp": {
-      "command": ".venv/bin/python",
-      "args": [
-        ".agents/mcp/research/server.py"
-      ],
-      "env": {
-        "PROJECT_ROOT": ".",
-        "SEMANTIC_SCHOLAR_API_KEY": "REDACTED"
-      }
-    },
-    "menumaker-mcp": {
-      "command": ".venv/bin/python",
-      "args": [
-        ".agents/mcp/menumaker/server.py"
-      ],
-      "env": {
-        "PROJECT_ROOT": "."
-      },
-      "disabled": true
-    },
+    }
   }
 }

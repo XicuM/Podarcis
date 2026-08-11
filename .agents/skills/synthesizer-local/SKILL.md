@@ -2,9 +2,6 @@
 name: synthesizer-local
 description: Synthesizer ingestion behaviour when sources_backend is local. Scrape relevant GDrive files into sources/, download papers via research-mcp into sources/literature/, commit, then cite by relative path.
 metadata: { "openclaw": { "emoji": "🗂️" } }
-disable-model-invocation: true
-user-invocable: false
-disabled: true
 ---
 
 # Skill: Synthesizer — Local Git Backend

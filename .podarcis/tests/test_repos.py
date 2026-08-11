@@ -34,5 +34,11 @@ def test_set_repo_url_and_get(tmp_path: Path):
 def test_get_repo_names(tmp_path: Path):
     assert get_repo_names(tmp_path) == DEFAULT_REPO_NAMES
     set_repo_url(tmp_path, 'custom_repo', 'https://example.com/custom.git', update_remote=False)
-    assert get_repo_names(tmp_path) == ['custom_repo']
+    names = get_repo_names(tmp_path)
+    assert 'custom_repo' in names
+    assert 'wiki' in names
+    assert 'workspace' in names
+    assert 'sources' in names
+
+
 

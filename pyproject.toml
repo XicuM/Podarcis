@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 podarcis = "podarcis.cli:main"
+podarcis-mcp = "podarcis.gateway.server:main"
 
 [tool.setuptools.package-dir]
 podarcis = ".podarcis"

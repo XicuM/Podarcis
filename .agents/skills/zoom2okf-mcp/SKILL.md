@@ -1,6 +1,9 @@
 ---
 name: zoom2okf-mcp
 description: "Instructions for agents (like @synthesizer) on how to use the zoom2okf-mcp server to transcribe and synthesize video meetings into the OKF v0.2 knowledge base."
+disable-model-invocation: true
+user-invocable: false
+disabled: true
 ---
 
 # Zoom2OKF MCP Server Skill

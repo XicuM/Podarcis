@@ -2,6 +2,9 @@
 name: synthesizer-gdrive
 description: Synthesizer ingestion behaviour when sources_backend is gdrive. Browse GDrive via google-drive-mcp, cite by HTTPS URL — no local copy committed.
 metadata: { "openclaw": { "emoji": "☁️" } }
+disable-model-invocation: true
+user-invocable: false
+disabled: true
 ---
 
 # Skill: Synthesizer — GDrive Backend

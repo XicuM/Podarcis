@@ -190,21 +190,32 @@ def cmd_config_disable(args: argparse.Namespace) -> int:
 
 
 def cmd_config_repo(args: argparse.Namespace) -> int:
-    '''Update repository remote configuration.'''
-    repo_name = args.repo_name
+    '''Update repository remote or local path configuration.'''
+    from repos import ensure_local_git_repo
+    repo_name = getattr(args, 'repo_name', None)
     known_repos = get_repo_names(root_dir)
-    if repo_name not in known_repos:
-        console.print(f'[bold red]Error:[/bold red] Repository "{repo_name}" not found. Known repositories: {", ".join(known_repos)}')
-        return 1
 
-    if args.local:
+    if not repo_name:
+        console.print('[bold #29b8db]Configured Podarcis Repositories:[/bold #29b8db]\n')
+        for r_name in known_repos:
+            url = get_repo_url(root_dir, r_name)
+            url_str = url if url else 'local-only'
+            console.print(f'  • [bold white]{r_name:<15}[/bold white] {url_str}')
+        return 0
+
+    target_val = (getattr(args, 'url', None) or getattr(args, 'path', None) or '')
+    if target_val is not None:
+        target_val = target_val.strip()
+
+    if getattr(args, 'local', False):
         set_repo_url(root_dir, repo_name, '')
+        ensure_local_git_repo(root_dir, repo_name)
         console.print(f'[bold green]✓ Set {repo_name} to local-only.[/bold green]')
-    elif args.url is not None:
-        url_val = args.url.strip()
-        set_repo_url(root_dir, repo_name, url_val)
-        if url_val:
-            console.print(f'[bold green]✓ Set remote for {repo_name} to {url_val}[/bold green]')
+    elif getattr(args, 'url', None) is not None or getattr(args, 'path', None) is not None:
+        set_repo_url(root_dir, repo_name, target_val)
+        ensure_local_git_repo(root_dir, repo_name)
+        if target_val:
+            console.print(f'[bold green]✓ Set remote/path for {repo_name} to {target_val}[/bold green]')
         else:
             console.print(f'[bold green]✓ Set {repo_name} to local-only.[/bold green]')
     else:
@@ -213,6 +224,7 @@ def cmd_config_repo(args: argparse.Namespace) -> int:
         console.print(f'Repository "{repo_name}": {remote_label}')
 
     return 0
+
 
 
 # Claudian Obsidian plugin ID
@@ -923,7 +935,12 @@ def cmd_open_tool(tool_type: str) -> int:
         if tool_type == 'backend':
             os.execvp(command, [command, cwd])
         else:
-            subprocess.Popen([command, cwd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if name.lower() == 'obsidian':
+                import urllib.parse
+                uri = f"obsidian://open?path={urllib.parse.quote(cwd)}"
+                subprocess.Popen([command, uri], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.Popen([command, cwd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             console.print(f'[bold green]✓ Opened {name} at {cwd}[/bold green]')
     except FileNotFoundError:
         console.print(f'[bold red]Error:[/bold red] "{command}" not found on PATH.')
@@ -993,10 +1010,12 @@ def main() -> None:
     cfg_disable.add_argument('name', help='Component name')
 
     # config repo
-    cfg_repo = config_sub.add_parser('repo', help='Configure repository Git remotes')
-    cfg_repo.add_argument('repo_name', help='Repository name (wiki or workspace)')
-    cfg_repo.add_argument('--url', help='Remote Git URL')
+    cfg_repo = config_sub.add_parser('repo', help='Configure repository Git remotes or local paths')
+    cfg_repo.add_argument('repo_name', nargs='?', help='Repository name (wiki, workspace, user, sources, etc.)')
+    cfg_repo.add_argument('--url', help='Remote Git URL or repository path')
+    cfg_repo.add_argument('--path', help='Local directory path or target path')
     cfg_repo.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
+
 
     # config backend
     cfg_backend = config_sub.add_parser('backend', help='Set the agent backend (opencode, codex, agy, claude, none, …)')
@@ -1143,7 +1162,8 @@ def main() -> None:
     elif args.subcommand == 'diagnose':
         sys.exit(cmd_diagnose(args))
     else:
-        sys.exit(cmd_interactive(args))
+        sys.exit(cmd_frontend(args))
+
 
 
 

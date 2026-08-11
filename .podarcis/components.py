@@ -339,36 +339,47 @@ def generate_opencode_json(root: Path) -> Path:
 
 
 def get_enabled_mcp_servers(root: Path) -> set[str]:
-    '''Retrieve set of active MCP server identifiers from the active backend's config.'''
-    from common import get_config_value
-    from backends import read_enabled
-
-    backend = get_config_value(root, 'backend', default='opencode')
-    enabled_map = read_enabled(root, backend)
-
-    smap = _server_name_map(root)
+    '''Retrieve set of active MCP module identifiers from .podarcis/config.yaml.'''
+    from common import load_yaml
+    cfg = load_yaml(root / '.podarcis' / 'config.yaml')
+    mcp_mods = cfg.get('mcp_modules', {})
     enabled = set()
-    for key, is_on in enabled_map.items():
+    smap = _server_name_map(root)
+
+    for k, v in mcp_mods.items():
+        is_on = v.get('enabled', True) if isinstance(v, dict) else bool(v)
         if is_on:
-            enabled.add(key)
+            enabled.add(k)
+            enabled.add(f'{k}-mcp')
             for dir_name, mapped in smap.items():
-                if mapped == key:
+                if mapped == k or mapped == f'{k}-mcp':
                     enabled.add(dir_name)
-                elif dir_name == key:
-                    enabled.add(mapped)
+
+    # Defaults if config empty
+    if not enabled:
+        enabled = {'wiki', 'wiki-mcp', 'research', 'research-mcp', 'diagnostics', 'diagnostics-mcp'}
+
     return enabled
 
 
 def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: dict) -> None:
-    '''Persist enabled state for specified MCP server in the active backend's config.'''
-    from common import get_config_value
+    '''Persist enabled state for specified MCP module in .podarcis/config.yaml.'''
+    from common import get_config_value, load_yaml, save_yaml
     from backends import write_enabled, generate_for_backend
 
-    # Write enable/disable to the ACTIVE backend's native config
-    backend = get_config_value(root, 'backend', default='opencode')
-    write_enabled(root, backend, server_key, enable)
+    clean_key = server_key.removesuffix('-mcp')
+    cfg_path = root / '.podarcis' / 'config.yaml'
+    data = load_yaml(cfg_path)
+    mcp_mods = data.setdefault('mcp_modules', {})
+    mod_entry = mcp_mods.setdefault(clean_key, {})
+    if isinstance(mod_entry, dict):
+        mod_entry['enabled'] = enable
+    else:
+        mcp_mods[clean_key] = {'enabled': enable}
+    save_yaml(cfg_path, data)
 
     # Regenerate the active backend's config file
+    backend = get_config_value(root, 'backend', default='opencode')
     generate_for_backend(root, backend)
 
     if enable and mcp_info.get('req'):
@@ -376,10 +387,20 @@ def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: d
         console.print(f'[green]✓ Dependencies verified for {server_key}.[/green]')
 
 
-
 def set_skill_status(root: Path, skill_name: str, enable: bool, skill_info: dict) -> None:
-    '''Update SKILL.md frontmatter flags to enable or disable model invocation.'''
-    
+    '''Update SKILL.md frontmatter flags and .podarcis/config.yaml.'''
+    from common import load_yaml, save_yaml
+
+    cfg_path = root / '.podarcis' / 'config.yaml'
+    data = load_yaml(cfg_path)
+    skills_cfg = data.setdefault('skills', {})
+    skill_entry = skills_cfg.setdefault(skill_name, {})
+    if isinstance(skill_entry, dict):
+        skill_entry['enabled'] = enable
+    else:
+        skills_cfg[skill_name] = {'enabled': enable}
+    save_yaml(cfg_path, data)
+
     if not (skill_file := skill_info['path']/'SKILL.md').exists(): return
 
     content = skill_file.read_text(encoding='utf-8')
@@ -407,7 +428,19 @@ def set_skill_status(root: Path, skill_name: str, enable: bool, skill_info: dict
 
 
 def set_agent_status(root: Path, agent_name: str, enable: bool, agent_info: dict) -> None:
-    '''Update agent frontmatter flags to enable or disable model invocation.'''
+    '''Update agent frontmatter flags and .podarcis/config.yaml.'''
+    from common import load_yaml, save_yaml
+
+    cfg_path = root / '.podarcis' / 'config.yaml'
+    data = load_yaml(cfg_path)
+    agents_cfg = data.setdefault('agents', {})
+    agent_entry = agents_cfg.setdefault(agent_name, {})
+    if isinstance(agent_entry, dict):
+        agent_entry['enabled'] = enable
+    else:
+        agents_cfg[agent_name] = {'enabled': enable}
+    save_yaml(cfg_path, data)
+
     agent_file = agent_info['path']
     if not agent_file.exists():
         return
@@ -428,6 +461,7 @@ def set_agent_status(root: Path, agent_name: str, enable: bool, agent_info: dict
             ]
             if not enable:
                 new_fm.extend(['disable-model-invocation: true', 'user-invocable: false', 'disabled: true'])
+
             body = parts[2].lstrip('\r\n')
             content = f'---\n{"\n".join(new_fm)}\n---\n\n{body}'
 

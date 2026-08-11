@@ -10,6 +10,7 @@ from console import console
 DEFAULT_REPO_NAMES = ['sources', 'wiki', 'workspace']
 
 
+
 def load_repos_config(root: Path) -> dict:
     '''Load repository URLs from .podarcis/config.yaml.'''
     pod_cfg = load_yaml(root/'.podarcis'/'config.yaml')
@@ -33,9 +34,13 @@ def get_repo_names(root: Path | str | None = None) -> list[str]:
         root_path = Path(root)
     config = load_repos_config(root_path)
     repos = config.get('repositories', {})
-    if isinstance(repos, dict) and repos:
-        return list(repos.keys())
-    return list(DEFAULT_REPO_NAMES)
+    names = list(DEFAULT_REPO_NAMES)
+    if isinstance(repos, dict):
+        for k in repos.keys():
+            if k not in names:
+                names.append(k)
+    return names
+
 
 
 def save_repos_config(root: Path, config: dict) -> None:

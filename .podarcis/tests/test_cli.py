@@ -46,22 +46,31 @@ def test_cli_config_enable_disable_skill(tmp_path, monkeypatch):
 
 
 def test_cli_config_repo(tmp_path, monkeypatch):
-    '''Test repo configuration CLI command.'''
+    '''Test repo configuration CLI command for wiki, user, workspace, and custom paths.'''
     import cli
     monkeypatch.setattr(cli, 'root_dir', tmp_path)
 
-    args_repo = Namespace(repo_name='wiki', url='https://github.com/example/wiki.git', local=False)
+    # Configure wiki
+    args_repo = Namespace(repo_name='wiki', url='https://github.com/example/wiki.git', path=None, local=False)
     res = cmd_config_repo(args_repo)
     assert res == 0
 
     from repos import get_repo_url
     assert get_repo_url(tmp_path, 'wiki') == 'https://github.com/example/wiki.git'
 
+    # Configure workspace repository via path or url
+    args_ws = Namespace(repo_name='workspace', url='https://github.com/example/workspace.git', path=None, local=False)
+    res_w = cmd_config_repo(args_ws)
+    assert res_w == 0
+    assert get_repo_url(tmp_path, 'workspace') == 'https://github.com/example/workspace.git'
+
+
     # Set to local
-    args_local = Namespace(repo_name='wiki', url=None, local=True)
+    args_local = Namespace(repo_name='wiki', url=None, path=None, local=True)
     res_loc = cmd_config_repo(args_local)
     assert res_loc == 0
     assert get_repo_url(tmp_path, 'wiki') == ''
+
 
 
 def test_generate_opencode_json(tmp_path, monkeypatch):
@@ -201,6 +210,24 @@ def test_cli_server_install_uninstall(tmp_path, monkeypatch):
     res_uninst = cli.cmd_server(args_uninst)
     assert res_uninst == 0
     assert not service_file.exists()
+
+
+def test_cli_default_opens_frontend(tmp_path, monkeypatch):
+    '''Verify that running podarcis without subcommands opens frontend directly.'''
+    import cli
+    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+
+    opened = []
+    monkeypatch.setattr(cli, 'cmd_frontend', lambda args: opened.append(True) or 0)
+    monkeypatch.setattr('sys.argv', ['podarcis'])
+
+    try:
+        cli.main()
+    except SystemExit as e:
+        assert e.code == 0
+
+    assert len(opened) == 1
+
 
 
 
