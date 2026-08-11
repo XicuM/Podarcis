@@ -72,7 +72,9 @@ The coordination is asynchronous, mediated by the file structure:
 ### Evidence & Anonymization
 * **No Fabrication**: Do not invent sources, quotes, or metadata.
 * **No Stubs**: Skip sources with `status: stub` or failed extraction. A source is **not** ingested until both `original.pdf` and `raw.md` (full text extracted via markitdown) exist in its directory. If the download tool returns "No open-access PDF found" or a network error, the source is dead — do not create a metadata stub from the abstract and treat it as evidence. Abstracts returned by literature search are discovery tools, not citable evidence.
-* **Web Sources**: Public web pages retrieved in full via webfetch (e.g., IEA reports, industry analyses, government publications) are valid sources and may be cited by URL in footnotes. They do not require a `sources/` directory entry. Verify that full content was retrieved — a websearch snippet is not a webfetch.
+* **Strict Source Separation**:
+  - **Wiki (`wiki/`)**: MUST ONLY cite peer-reviewed academic literature stored in `sources/literature/`. Web sources (URLs, news articles, industry blogs) are **NEVER** allowed in the Wiki.
+  - **Workspace (`workspace/`)**: May cite public web sources (e.g. government reports, financial filings, corporate press releases) ONLY when filling temporal gaps where peer-reviewed literature is not available.
 * **Wiki (Objective)**: Must remain anonymous and objective. Present competing hypotheses with confidence markers (`> ⚠️`). Never include user-specific data in `wiki/`.
 * **User Profile**: Persist only structural, recurring traits (goals, constraints, physiology). Never save anecdotal one-off events.
 
