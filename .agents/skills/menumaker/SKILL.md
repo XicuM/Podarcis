@@ -45,4 +45,6 @@ As the **Protocol Architect**, you must translate these raw outputs into edible,
 1. **Cooking Considerations**: Rice absorbs water (weight increases), meat loses water (weight decreases).
 2. **Practicality**: 400g of dry lentils per day is technically cheap, but unrealistic to consume. Distribute these into varied meals.
 3. **Fats and Staples**: The optimizer often includes oils (for fat requirements) and cheap grains (for caloric baselines). Structure the meals around these staples.
-4. **Validation**: Ensure that your final actionable protocol approximately matches the total macros prescribed by the optimizer.
+4. **Meal Timing & Fasting Calibration**: Always ask or check for Time-Restricted Eating (TRE) or Intermittent Fasting schedules (e.g. 16:8 no morning breakfast) before structuring daily meal options.
+5. **Validation**: Ensure that your final actionable protocol approximately matches the total macros prescribed by the optimizer.
+6. **Diagnostic Logging**: If tool paths, inputs, or user corrections reveal friction during menu design, immediately log the issue using `log_pain_point` (`diagnostics-mcp`).

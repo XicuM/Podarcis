@@ -16,9 +16,32 @@ from scipy.optimize import linprog
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = os.environ.get("MENUMAKER_DATA_DIR", str(Path(__file__).parent.parent.parent / "data"))
-DEFAULT_FOOD_DATA_PATH = os.path.join(DATA_DIR, "food_data", "food_data.csv")
-DEFAULT_PRICES_PATH = os.path.join(DATA_DIR, "mercadona.csv")
+MENUMAKER_DIR = Path(__file__).resolve().parent
+DATA_DIR = os.environ.get("MENUMAKER_DATA_DIR", str(MENUMAKER_DIR / "data"))
+
+def _resolve_file_path(primary: str, fallback_candidates: list[Path]) -> str:
+    if os.path.exists(primary):
+        return primary
+    for candidate in fallback_candidates:
+        if candidate.exists():
+            return str(candidate)
+    return primary
+
+DEFAULT_FOOD_DATA_PATH = _resolve_file_path(
+    os.path.join(DATA_DIR, "food_data", "food_data.csv"),
+    [
+        MENUMAKER_DIR / "data" / "food_data" / "food_data.csv",
+        MENUMAKER_DIR / "food_data.csv",
+    ],
+)
+
+DEFAULT_PRICES_PATH = _resolve_file_path(
+    os.path.join(DATA_DIR, "mercadona.csv"),
+    [
+        MENUMAKER_DIR / "data" / "mercadona.csv",
+        MENUMAKER_DIR / "mercadona.csv",
+    ],
+)
 
 
 def _load_optimization_data(
@@ -27,6 +50,14 @@ def _load_optimization_data(
     prices_path: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Load the three inputs for optimization: food nutrients, intake targets, and prices."""
+    food_data_path = _resolve_file_path(
+        food_data_path,
+        [MENUMAKER_DIR / "data" / "food_data" / "food_data.csv", MENUMAKER_DIR / "food_data.csv"],
+    )
+    prices_path = _resolve_file_path(
+        prices_path,
+        [MENUMAKER_DIR / "data" / "mercadona.csv", MENUMAKER_DIR / "mercadona.csv"],
+    )
     nutrients = pd.read_csv(food_data_path, index_col=0)
 
     # Convert intake targets dict to DataFrame
