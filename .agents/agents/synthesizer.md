@@ -42,4 +42,6 @@ Before starting synthesis, check `.podarcis/state.yaml` or `.podarcis/config.yam
 5. **Multi-Agent Hand-off**:
    - Explicitly submit updated file paths to the `@auditor` subagent for machine verification.
    - Commit in the `wiki/` and `sources/` decoupled repositories with a descriptive commit message.
+6. **Diagnostic Logging**:
+   - If `diagnostics-mcp` is active and you encounter tool failures, schema errors, user corrections, or synthesis outputs that fail to meet user expectations, invoke `log_pain_point` (`diagnostics-mcp`) to log the issue into `.podarcis/diagnostics/pain_points.jsonl`.
 

@@ -96,8 +96,6 @@ async def _native_search(
         search_dirs.append(ROOT / "wiki")
     if collection in ("protocols", "all"):
         search_dirs.append(ROOT / "workspace" / "protocols")
-        if not (ROOT / "workspace" / "protocols").exists():
-            search_dirs.append(ROOT / "user" / "protocols")
     if collection in ("sources", "all"):
         search_dirs.append(ROOT / "sources" / "literature")
 
@@ -513,6 +511,54 @@ async def complete_source_synthesis(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Workspace Synchronization & Repository Tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_workspace_status() -> str:
+    """Get detailed Git and synchronization status across all decoupled workspace repositories (workspace, wiki, sources)."""
+    podarcis_dir = ROOT / ".podarcis"
+    if str(podarcis_dir) not in sys.path:
+        sys.path.insert(0, str(podarcis_dir))
+    from repos import get_repo_status
+    statuses = get_repo_status(ROOT)
+    return json.dumps(statuses, indent=2)
+
+
+@mcp.tool()
+async def sync_workspaces(
+    action: Annotated[
+        str,
+        "Action to perform: 'pull' (sync/pull remotes and gdrive), 'push' (push local commits to remotes), or 'all'.",
+    ] = "pull",
+    auto_commit: Annotated[
+        bool,
+        "Automatically commit uncommitted local changes before pushing (only applicable for action='push' or 'all').",
+    ] = False,
+    message: Annotated[
+        str,
+        "Commit message for auto_commit.",
+    ] = "chore: sync workspace changes",
+) -> str:
+    """Synchronize all configured workspace repositories (clones missing repos, pulls remote origins, ingests Google Drive deltas, and updates backend configs)."""
+    podarcis_dir = ROOT / ".podarcis"
+    if str(podarcis_dir) not in sys.path:
+        sys.path.insert(0, str(podarcis_dir))
+    from repos import sync_repos_full, push_repos, get_repo_status
+    from components import sync_all_backends
+
+    results = {}
+    if action in ("pull", "all"):
+        sync_all_backends(ROOT)
+        results["pull"] = sync_repos_full(ROOT)
+    if action in ("push", "all"):
+        results["push"] = push_repos(ROOT, auto_commit=auto_commit, message=message)
+
+    results["status"] = get_repo_status(ROOT)
+    return json.dumps(results, indent=2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Lint / Audit Tools
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -556,7 +602,7 @@ def resource_wiki_index() -> str:
 @mcp.resource("wiki://collections/protocols")
 def resource_protocols_index() -> str:
     """Directory listing of all pages in the protocols collection."""
-    proto_dir = ROOT / "user" / "protocols"
+    proto_dir = ROOT / "workspace" / "protocols"
     files = sorted(proto_dir.rglob("*.md")) if proto_dir.exists() else []
     lines = [f"# Protocols Collection ({len(files)} pages)\n"]
     for f in files:

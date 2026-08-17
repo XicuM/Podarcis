@@ -31,14 +31,30 @@ def test_set_repo_url_and_get(tmp_path: Path):
     assert get_repo_url(tmp_path, 'wiki') == url
 
 
-def test_get_repo_names(tmp_path: Path):
-    assert get_repo_names(tmp_path) == DEFAULT_REPO_NAMES
-    set_repo_url(tmp_path, 'custom_repo', 'https://example.com/custom.git', update_remote=False)
-    names = get_repo_names(tmp_path)
-    assert 'custom_repo' in names
-    assert 'wiki' in names
-    assert 'workspace' in names
-    assert 'sources' in names
+def test_get_repo_status_and_sync(tmp_path: Path):
+    from repos import ensure_local_git_repo, get_repo_status, sync_repos_full, push_repos
+
+    set_repo_url(tmp_path, 'sources', 'gdrive', update_remote=False)
+    set_repo_url(tmp_path, 'wiki', 'local', update_remote=False)
+    ensure_local_git_repo(tmp_path, 'wiki')
+
+    statuses = get_repo_status(tmp_path)
+    status_dict = {s['repo']: s for s in statuses}
+
+    assert status_dict['sources']['type'] == 'gdrive'
+    assert status_dict['sources']['status'] == 'gdrive_managed'
+    assert status_dict['wiki']['type'] == 'git'
+    assert status_dict['wiki']['is_git'] is True
+
+    # Test sync repos full
+    sync_res = sync_repos_full(tmp_path)
+    assert 'wiki' in sync_res
+    assert 'sources' in sync_res
+
+    # Test push repos
+    push_res = push_repos(tmp_path, auto_commit=True)
+    assert 'wiki' in push_res
+
 
 
 

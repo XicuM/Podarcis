@@ -40,7 +40,7 @@ mcp = FastMCP(
     "diagnostics-mcp",
     instructions=(
         "Platform diagnostic logger and issue inspector. "
-        "Call log_pain_point whenever you encounter tool errors, execution failures, or user corrections. "
+        "Call log_pain_point whenever you encounter tool errors, execution failures, user corrections, or results that fail to meet user expectations. "
         "Call get_pain_points to retrieve active issues when instructed to improve the platform."
     ),
 )
@@ -50,11 +50,11 @@ mcp = FastMCP(
 @mcp.tool()
 def log_pain_point(
     category: Annotated[str, "Issue category: command_failure, execution_error, user_correction, or friction"],
-    summary: Annotated[str, "Single-line summary of the pain point or failure"],
+    summary: Annotated[str, "Single-line summary of the pain point, user correction, or unmet expectation"],
     details: Annotated[str, "Optional detailed error traceback, output context, or user guidance"] = "",
     severity: Annotated[Literal["low", "medium", "high"], "Issue severity rating"] = "medium",
 ) -> str:
-    """Log a runtime friction point or execution error to .podarcis/diagnostics/pain_points.jsonl."""
+    """Log a runtime friction point, execution error, user correction, or unmet expectation to .podarcis/diagnostics/pain_points.jsonl."""
     _ensure_dirs()
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     issue_id = f"diag-{int(datetime.datetime.now(datetime.timezone.utc).timestamp())}"

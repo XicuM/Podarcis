@@ -265,3 +265,182 @@ def sync_repos(root: Path | str | None = None, clone_missing: bool = True, updat
                 console.print(f'[bold green]✓ {repo_name}: synced with remote origin.[/bold green]')
             else:
                 console.print(f'[bold green]✓ {repo_name}: remote origin configured ({url}).[/bold green]')
+
+
+def get_repo_status(root: Path | str | None = None) -> list[dict]:
+    '''Get detailed sync/git status for all configured workspace repositories.'''
+    if root is None:
+        root_path = Path(__file__).resolve().parent.parent
+    else:
+        root_path = Path(root)
+
+    config = load_repos_config(root_path)
+    repo_names = get_repo_names(root_path)
+    status_list = []
+
+    for name in repo_names:
+        repo_dir = root_path / name
+        url = config.get('repositories', {}).get(name, '')
+
+        info = {
+            'repo': name,
+            'path': str(repo_dir),
+            'url': url or 'local',
+            'type': 'gdrive' if url == 'gdrive' else 'git',
+            'exists': repo_dir.exists(),
+            'is_git': (repo_dir / '.git').exists() if repo_dir.exists() else False,
+            'branch': None,
+            'clean': True,
+            'ahead': 0,
+            'behind': 0,
+            'changes': 0,
+            'status': 'ready',
+        }
+
+        if info['type'] == 'gdrive':
+            info['status'] = 'gdrive_managed'
+            status_list.append(info)
+            continue
+
+        if not info['exists'] or not info['is_git']:
+            info['status'] = 'missing'
+            status_list.append(info)
+            continue
+
+        # Get branch
+        res_branch = subprocess.run(
+            ['git', 'branch', '--show-current'],
+            cwd=repo_dir, capture_output=True, text=True, check=False,
+        )
+        info['branch'] = res_branch.stdout.strip() or 'HEAD'
+
+        # Get dirty state
+        res_status = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            cwd=repo_dir, capture_output=True, text=True, check=False,
+        )
+        status_lines = [l for l in res_status.stdout.splitlines() if l.strip()]
+        info['changes'] = len(status_lines)
+        info['clean'] = len(status_lines) == 0
+
+        # Get ahead/behind count relative to upstream if tracking
+        res_rev = subprocess.run(
+            ['git', 'rev-list', '--left-right', '--count', 'HEAD...@{u}'],
+            cwd=repo_dir, capture_output=True, text=True, check=False,
+        )
+        if res_rev.returncode == 0 and res_rev.stdout.strip():
+            parts = res_rev.stdout.strip().split()
+            if len(parts) == 2:
+                info['ahead'] = int(parts[0])
+                info['behind'] = int(parts[1])
+
+        if not info['clean']:
+            info['status'] = 'modified'
+        elif info['ahead'] > 0:
+            info['status'] = 'ahead'
+        elif info['behind'] > 0:
+            info['status'] = 'behind'
+        else:
+            info['status'] = 'synced'
+
+        status_list.append(info)
+
+    return status_list
+
+
+def sync_repos_full(root: Path | str | None = None) -> dict:
+    '''Synchronize all workspace repos (clones missing, pulls git remotes, ingests gdrive deltas).'''
+    if root is None:
+        root_path = Path(__file__).resolve().parent.parent
+    else:
+        root_path = Path(root)
+
+    sync_repos(root_path, clone_missing=True, update_remotes=True)
+    results = {}
+
+    config = load_repos_config(root_path)
+    for name in get_repo_names(root_path):
+        repo_dir = root_path / name
+        url = config.get('repositories', {}).get(name, '')
+
+        if url == 'gdrive':
+            try:
+                from jobs import run_job
+                job_res = run_job(root_path, 'gdrive_sync', dry_run=False)
+                results[name] = {'status': 'ok', 'message': f'GDrive sync completed ({job_res.get("status", "ok")})'}
+            except Exception as e:
+                results[name] = {'status': 'error', 'message': f'GDrive sync error: {e}'}
+            continue
+
+        if not repo_dir.exists() or not (repo_dir / '.git').exists():
+            results[name] = {'status': 'warning', 'message': 'Repo directory or .git missing'}
+            continue
+
+        if url and url != 'local':
+            pull_res = subprocess.run(
+                ['git', 'pull', '--rebase', 'origin', 'HEAD'],
+                cwd=repo_dir, capture_output=True, text=True, check=False,
+            )
+            if pull_res.returncode == 0:
+                results[name] = {'status': 'ok', 'message': 'Synced with remote origin'}
+            else:
+                results[name] = {'status': 'error', 'message': pull_res.stderr.strip() or 'Git pull failed'}
+        else:
+            results[name] = {'status': 'ok', 'message': 'Local repository ready'}
+
+    return results
+
+
+def push_repos(root: Path | str | None = None, auto_commit: bool = False, message: str = "chore: sync workspace changes") -> dict:
+    '''Push local changes across all configured Git workspace repositories.'''
+    if root is None:
+        root_path = Path(__file__).resolve().parent.parent
+    else:
+        root_path = Path(root)
+
+    config = load_repos_config(root_path)
+    results = {}
+
+    for name in get_repo_names(root_path):
+        repo_dir = root_path / name
+        url = config.get('repositories', {}).get(name, '')
+
+        if url == 'gdrive':
+            results[name] = {'status': 'skipped', 'message': 'Managed via Google Drive'}
+            continue
+
+        if not repo_dir.exists() or not (repo_dir / '.git').exists():
+            results[name] = {'status': 'error', 'message': 'Local repository missing'}
+            continue
+
+        if not url or url == 'local':
+            results[name] = {'status': 'skipped', 'message': 'No remote origin configured'}
+            continue
+
+        # Check for uncommitted changes
+        if auto_commit:
+            st = subprocess.run(['git', 'status', '--porcelain'], cwd=repo_dir, capture_output=True, text=True, check=False)
+            if st.stdout.strip():
+                subprocess.run(['git', 'add', '-A'], cwd=repo_dir, check=False)
+                subprocess.run(['git', 'commit', '-m', message], cwd=repo_dir, check=False)
+
+        # Push to origin
+        push_res = subprocess.run(
+            ['git', 'push', 'origin', 'HEAD'],
+            cwd=repo_dir, capture_output=True, text=True, check=False,
+        )
+        if push_res.returncode == 0:
+            results[name] = {'status': 'ok', 'message': 'Pushed to origin'}
+        else:
+            # Fall back to -u origin HEAD if upstream is not set
+            push_u = subprocess.run(
+                ['git', 'push', '-u', 'origin', 'HEAD'],
+                cwd=repo_dir, capture_output=True, text=True, check=False,
+            )
+            if push_u.returncode == 0:
+                results[name] = {'status': 'ok', 'message': 'Pushed and set upstream on origin'}
+            else:
+                results[name] = {'status': 'error', 'message': push_u.stderr.strip() or 'Push failed'}
+
+    return results
+

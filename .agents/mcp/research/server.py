@@ -93,6 +93,16 @@ _ALLOWED_DOMAINS = {
     "googleapis.com",
     "api.unpaywall.org",
     "arxiv.org",
+    "upenn.edu",
+    "nature.com",
+    "science.org",
+    "pnas.org",
+    "cell.com",
+    "frontiersin.org",
+    "plos.org",
+    "biorxiv.org",
+    "medrxiv.org",
+    "sciencedirect.com",
 }
 
 # ── Server ────────────────────────────────────────────────────────────────────
@@ -772,6 +782,93 @@ def _update_domain_index(filename_base, domain, title, abstract_summary, year):
 # MCP Tools — Literature Search
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def _search_semanticscholar_direct(query: str, limit: int = 5) -> list[dict]:
+    url = (
+        f"https://api.semanticscholar.org/graph/v1/paper/search"
+        f"?query={query}&limit={limit}"
+        f"&fields=paperId,title,authors,year,abstract,openAccessPdf,externalIds"
+    )
+    _check_domain(url)
+    async with _make_client() as client:
+        for attempt in range(3):
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 429:
+                    await asyncio.sleep(2 ** attempt + 1)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                return data.get("data", []) or []
+            except Exception:
+                await asyncio.sleep(1)
+    return []
+
+
+async def _search_openalex_direct(query: str, limit: int = 5) -> list[dict]:
+    url = f"https://api.openalex.org/works?search={query}&per-page={limit}"
+    _check_domain(url)
+    async with _make_client() as client:
+        try:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+            results = []
+            for item in data.get("results", []):
+                inv = item.get("abstract_inverted_index") or {}
+                abstract = ""
+                if inv:
+                    pos_word = {pos: w for w, positions in inv.items() for pos in positions}
+                    abstract = " ".join(pos_word.get(i, "") for i in range(max(pos_word) + 1))
+                authors = [
+                    {"name": a.get("author", {}).get("display_name")}
+                    for a in item.get("authorships", [])
+                    if a.get("author", {}).get("display_name")
+                ]
+                doi_url = item.get("doi") or ""
+                doi = doi_url.replace("https://doi.org/", "").lower() or None
+                work_id = item.get("id", "").split("/")[-1]
+                results.append({
+                    "paperId": f"openalex:{work_id}",
+                    "title": item.get("title") or "Unknown Title",
+                    "abstract": abstract or "No abstract available.",
+                    "authors": authors,
+                    "year": item.get("publication_year") or "Unknown",
+                    "openAccessPdf": (item.get("primary_location") or {}).get("pdf_url"),
+                    "externalIds": {"DOI": doi, "OpenAlex": item.get("id")},
+                })
+            return results
+        except Exception:
+            return []
+
+
+async def _search_pubmed_direct(query: str, limit: int = 5) -> list[dict]:
+    search_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={query}&retmode=json&retmax={limit}"
+    _check_domain(search_url)
+    async with _make_client() as client:
+        try:
+            resp = await client.get(search_url)
+            resp.raise_for_status()
+            id_list = (resp.json().get("esearchresult") or {}).get("idlist", [])
+            if not id_list:
+                return []
+            results = []
+            for pmid in id_list:
+                meta = await _fetch_pubmed(pmid)
+                if meta:
+                    results.append({
+                        "paperId": f"pmid:{pmid}",
+                        "title": meta.title,
+                        "abstract": meta.abstract,
+                        "authors": meta.authors,
+                        "year": meta.year,
+                        "openAccessPdf": meta.pdf_url,
+                        "externalIds": {"PubMed": pmid, "DOI": meta.doi},
+                    })
+            return results
+        except Exception:
+            return []
+
+
 @mcp.tool()
 async def search_literature(
     query: Annotated[str, "Search query (title keywords, topic, author name, etc.)"],
@@ -784,7 +881,7 @@ async def search_literature(
         "Restrict search to a single provider (default: all)",
     ] = "all",
 ) -> list[dict]:
-    """Search academic literature across multiple providers via academic-mcp.
+    """Search academic literature across multiple providers via academic-mcp or native API fallbacks.
 
     Returns a list of papers with title, authors, year, abstract, and provider IDs.
     Never fabricates results — if no papers are found, returns an empty list.
@@ -795,19 +892,27 @@ async def search_literature(
         if provider != "all":
             kwargs["source"] = provider
         results = await academic_search(**kwargs)
-        return results if isinstance(results, list) else []
-    except ImportError:
-        # academic-mcp not installed — fall back to Semantic Scholar directly
-        url = (
-            f"https://api.semanticscholar.org/graph/v1/paper/search"
-            f"?query={query}&limit={limit}"
-            f"&fields=paperId,title,authors,year,abstract,openAccessPdf,externalIds"
-        )
-        _check_domain(url)
-        async with _make_client() as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return resp.json().get("data", [])
+        if isinstance(results, list) and results:
+            return results
+    except Exception:
+        pass
+
+    if provider == "openalex":
+        return await _search_openalex_direct(query, limit)
+    elif provider == "pubmed":
+        return await _search_pubmed_direct(query, limit)
+    elif provider == "semanticscholar":
+        return await _search_semanticscholar_direct(query, limit)
+
+    # Default "all": Try Semantic Scholar -> OpenAlex -> PubMed
+    results = await _search_semanticscholar_direct(query, limit)
+    if not results:
+        results = await _search_openalex_direct(query, limit)
+    if not results:
+        results = await _search_pubmed_direct(query, limit)
+
+    return results
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

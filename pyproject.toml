@@ -16,6 +16,8 @@ dependencies = [
     "pytest",
     "pyyaml>=6.0",
     "yfinance",
+    "markitdown>=0.1.7",
+    "scipy>=1.15.3",
 ]
 
 [project.scripts]

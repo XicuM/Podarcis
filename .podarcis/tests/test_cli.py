@@ -88,8 +88,8 @@ def test_generate_opencode_json(tmp_path, monkeypatch):
 
     data = json.loads(opencode_path.read_text(encoding='utf-8'))
     assert 'mcp' in data
-    assert 'sample-mcp' in data['mcp']
-    assert data['mcp']['sample-mcp']['enabled'] is True
+    assert 'podarcis' in data['mcp']
+    assert data['mcp']['podarcis']['enabled'] is True
 
 
 def test_generate_opencode_json_preserves_custom_config(tmp_path, monkeypatch):
@@ -125,7 +125,8 @@ def test_generate_opencode_json_preserves_custom_config(tmp_path, monkeypatch):
     # Verify custom MCP server preserved
     assert 'user-custom-mcp' in data['mcp']
     # Verify project-managed MCP server added
-    assert 'sample-mcp' in data['mcp']
+    assert 'podarcis' in data['mcp']
+
 
 
 def test_cli_diagnose(tmp_path, monkeypatch, capsys):
@@ -172,45 +173,6 @@ def test_config_frontend_obsidian_opt_in(tmp_path, monkeypatch):
 
 
 
-def test_cli_server_status_json(tmp_path, monkeypatch, capsys):
-    '''Test podarcis server status --json command.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
-
-    args = Namespace(server_action='status', json=True, port=8080)
-    res = cli.cmd_server(args)
-    assert res == 0
-
-    captured = capsys.readouterr()
-    data = json.loads(captured.out)
-    assert 'running' in data
-    assert 'port' in data
-    assert data['port'] == 8080
-
-
-def test_cli_server_install_uninstall(tmp_path, monkeypatch):
-    '''Test podarcis server install and uninstall commands.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
-    fake_home = tmp_path / 'home'
-    monkeypatch.setattr(Path, 'home', lambda: fake_home)
-
-    # Install
-    args_inst = Namespace(server_action='install', port=9000)
-    res_inst = cli.cmd_server(args_inst)
-    assert res_inst == 0
-
-    service_file = fake_home / '.config' / 'systemd' / 'user' / 'podarcis-server.service'
-    assert service_file.exists()
-    content = service_file.read_text(encoding='utf-8')
-    assert 'server --port 9000' in content
-
-    # Uninstall
-    args_uninst = Namespace(server_action='uninstall')
-    res_uninst = cli.cmd_server(args_uninst)
-    assert res_uninst == 0
-    assert not service_file.exists()
-
 
 def test_cli_default_opens_frontend(tmp_path, monkeypatch):
     '''Verify that running podarcis without subcommands opens frontend directly.'''
@@ -227,6 +189,61 @@ def test_cli_default_opens_frontend(tmp_path, monkeypatch):
         assert e.code == 0
 
     assert len(opened) == 1
+
+
+def test_cli_research_search_json(capsys, monkeypatch):
+    '''Test podarcis research search --json subcommand.'''
+    import cli
+    res_script = cli.root_dir / '.agents' / 'mcp' / 'research' / 'server.py'
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('research_mcp_server', res_script)
+    research_server = importlib.util.module_from_spec(spec)
+    import sys
+    sys.modules['research_mcp_server'] = research_server
+    spec.loader.exec_module(research_server)
+
+
+    async def fake_search(query, limit=5, provider='all'):
+        return [{'paperId': 'test:123', 'title': 'Test Paper', 'year': 2024}]
+
+    monkeypatch.setattr(research_server, 'search_literature', fake_search)
+
+    args = Namespace(research_action='search', query='test', limit=2, provider='all', json=True)
+    res = cli.cmd_research(args)
+    assert res == 0
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert len(data) == 1
+    assert data[0]['title'] == 'Test Paper'
+
+
+
+def test_cli_diagnose_resolve_id(tmp_path, monkeypatch):
+    '''Test resolving specific pain point by ID via podarcis diagnose --resolve.'''
+    import cli
+    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+
+    # Setup pain point file
+    diag_dir = tmp_path / '.podarcis' / 'diagnostics'
+    diag_dir.mkdir(parents=True)
+    pain_file = diag_dir / 'pain_points.jsonl'
+    rec = {'id': 'diag-test-1', 'summary': 'Test pain point', 'resolved': False}
+    pain_file.write_text(json.dumps(rec) + '\n', encoding='utf-8')
+
+    script_dir = tmp_path / '.agents' / 'skills' / 'self-improvement' / 'scripts'
+    script_dir.mkdir(parents=True)
+    real_script = Path(__file__).resolve().parent.parent.parent / '.agents' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
+    (script_dir / 'diagnose_session.py').write_text(real_script.read_text(encoding='utf-8'), encoding='utf-8')
+
+    args = Namespace(resolve='diag-test-1', json=False, clear=False, log_session=None)
+    res = cli.cmd_diagnose(args)
+    assert res == 0
+
+    lines = pain_file.read_text().strip().split('\n')
+    data = json.loads(lines[0])
+    assert data['resolved'] is True
+
 
 
 

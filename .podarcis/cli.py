@@ -32,7 +32,14 @@ from components import (
     sync_all_backends,
 )
 
-from repos import get_repo_names, get_repo_url, set_repo_url
+from repos import (
+    get_repo_names,
+    get_repo_url,
+    set_repo_url,
+    get_repo_status,
+    sync_repos_full,
+    push_repos,
+)
 
 
 def _get_python_bin() -> str:
@@ -324,7 +331,7 @@ def cmd_config_backend(args: argparse.Namespace) -> int:
 
 
 def cmd_config_sync(args: argparse.Namespace) -> int:
-    '''Regenerate MCP config for all supported backends from canonical mcp_config.json.'''
+    '''Regenerate MCP config for backends and sync workspace repositories.'''
     results = sync_all_backends(root_dir)
     console.print('[bold #29b8db]Synced MCP config to all backends:[/bold #29b8db]\n')
     for backend, paths in results.items():
@@ -332,6 +339,91 @@ def cmd_config_sync(args: argparse.Namespace) -> int:
             console.print(f'  [green]✓[/green] {backend:<12} → {[str(p.name) for p in paths]}')
         else:
             console.print(f'  [dim]—[/dim] {backend:<12} (no files written)')
+
+    console.print('\n[bold #29b8db]Synchronizing workspace repositories...[/bold #29b8db]\n')
+    repo_results = sync_repos_full(root_dir)
+    for rname, rinfo in repo_results.items():
+        st = rinfo.get('status')
+        msg = rinfo.get('message')
+        if st == 'ok':
+            console.print(f'  [green]✓[/green] [bold]{rname:<12}[/bold] {msg}')
+        elif st == 'warning':
+            console.print(f'  [yellow]⚠️[/yellow] [bold]{rname:<12}[/bold] {msg}')
+        else:
+            console.print(f'  [red]✗[/red] [bold]{rname:<12}[/bold] {msg}')
+    return 0
+
+
+def cmd_repo(args: argparse.Namespace) -> int:
+    '''Manage and synchronize workspace repositories (workspace, wiki, sources).'''
+    from rich.table import Table
+
+    action = getattr(args, 'repo_action', 'status') or 'status'
+
+    if action == 'status':
+        statuses = get_repo_status(root_dir)
+        if getattr(args, 'json', False):
+            print(json.dumps(statuses, indent=2))
+            return 0
+
+        table = Table(title="Workspace Repositories Status", border_style="cyan")
+        table.add_column("Repo", style="bold white", width=12)
+        table.add_column("Type", style="cyan", width=8)
+        table.add_column("Branch", style="magenta", width=12)
+        table.add_column("Status", style="yellow", width=16)
+        table.add_column("Changes", justify="right", width=8)
+        table.add_column("Ahead/Behind", justify="right", width=12)
+        table.add_column("Remote / Target", style="dim")
+
+        for s in statuses:
+            st = s['status']
+            st_str = f"[green]✓ {st}[/green]" if st in ('synced', 'ready', 'gdrive_managed') else f"[yellow]{st}[/yellow]"
+            ab = f"+{s['ahead']} / -{s['behind']}" if (s['ahead'] or s['behind']) else "—"
+            table.add_row(
+                s['repo'],
+                s['type'],
+                s['branch'] or '—',
+                st_str,
+                str(s['changes']) if s['changes'] else "0",
+                ab,
+                s['url'] or 'local'
+            )
+        console.print(table)
+        return 0
+
+    elif action in ('sync', 'pull'):
+        console.print('[bold #29b8db]Synchronizing all workspace repositories & backends...[/bold #29b8db]\n')
+        res = sync_repos_full(root_dir)
+        for rname, rinfo in res.items():
+            st = rinfo.get('status')
+            msg = rinfo.get('message')
+            if st == 'ok':
+                console.print(f'  [green]✓[/green] [bold]{rname:<12}[/bold] {msg}')
+            elif st == 'warning':
+                console.print(f'  [yellow]⚠️[/yellow] [bold]{rname:<12}[/bold] {msg}')
+            else:
+                console.print(f'  [red]✗[/red] [bold]{rname:<12}[/bold] {msg}')
+        return 0
+
+    elif action == 'push':
+        console.print('[bold #29b8db]Pushing local workspace changes to remotes...[/bold #29b8db]\n')
+        auto_commit = getattr(args, 'commit', False)
+        msg = getattr(args, 'message', 'chore: sync workspace changes') or 'chore: sync workspace changes'
+        res = push_repos(root_dir, auto_commit=auto_commit, message=msg)
+        for rname, rinfo in res.items():
+            st = rinfo.get('status')
+            r_msg = rinfo.get('message')
+            if st == 'ok':
+                console.print(f'  [green]✓[/green] [bold]{rname:<12}[/bold] {r_msg}')
+            elif st == 'skipped':
+                console.print(f'  [dim]—[/dim] [bold]{rname:<12}[/bold] {r_msg}')
+            else:
+                console.print(f'  [red]✗[/red] [bold]{rname:<12}[/bold] {r_msg}')
+        return 0
+
+    elif action == 'config':
+        return cmd_config_repo(args)
+
     return 0
 
 
@@ -357,50 +449,6 @@ def _ensure_vscode_config(root: Path) -> None:
         console.print('[dim]Initialized config/code-config/Code/User/settings.json from template[/dim]')
 
 
-def _ensure_docker_image() -> bool:
-    '''Build podarcis-user:latest from the repo Dockerfile. Returns True on success.'''
-    dockerfile = root_dir / 'Dockerfile'
-    if not dockerfile.exists():
-        console.print('[bold red]Error:[/bold red] Dockerfile not found at project root.')
-        return False
-    console.print('[dim]Building podarcis-user:latest Docker image...[/dim]')
-    rc = subprocess.run(
-        ['docker', 'build', '-t', 'podarcis-user:latest', '-f', str(dockerfile), '.'],
-        cwd=str(root_dir),
-    ).returncode
-    if rc != 0:
-        console.print('[bold red]Error:[/bold red] Docker build failed.')
-        return False
-    console.print('[dim]Docker image podarcis-user:latest built successfully.[/dim]')
-    return True
-
-
-def _launch_code_server(port: int | None = None) -> int:
-    '''Start a code-server Docker container mounting the project root. Returns the port.'''
-    import socket
-    container_name = 'podarcis-code-server'
-    subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, check=False)
-
-    if port is None:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(('127.0.0.1', 0))
-            port = s.getsockname()[1]
-
-    cmd = [
-        'docker', 'run', '-d', '--name', container_name, '--rm',
-        '-v', f'{root_dir}:/home/podarcis/workspace',
-        '-p', f'127.0.0.1:{port}:8080',
-        'podarcis-user:latest',
-        'code-server', '--bind-addr', '0.0.0.0:8080', '--auth', 'none', '/home/podarcis/workspace',
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True, cwd=str(root_dir))
-    if res.returncode != 0:
-        console.print(f'[bold red]Error:[/bold red] Failed to start code-server container:\n{res.stderr}')
-        return -1
-    console.print(f'[bold green]✓ code-server running at [link=http://127.0.0.1:{port}]http://127.0.0.1:{port}[/link][/bold green]')
-    return port
-
-
 def cmd_config_frontend(args: argparse.Namespace) -> int:
     '''Set or show the frontend name.'''
     name = args.frontend_name.lower()
@@ -410,8 +458,6 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
     set_config_value(root_dir, name, 'frontend')
     if name in ('vscode', 'code-server', 'vscode-web'):
         _ensure_vscode_config(root_dir)
-        if name in ('code-server', 'vscode-web'):
-            _ensure_docker_image()
     elif name == 'obsidian':
         backend = get_config_value(root_dir, 'backend', default='none')
         cfg_plugins = getattr(args, 'configure_plugins', None)
@@ -545,6 +591,17 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     diag_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(diag_mod)
 
+    resolve_id = getattr(args, 'resolve', None)
+    if resolve_id:
+        if hasattr(diag_mod, 'resolve_issue_by_id'):
+            ok = diag_mod.resolve_issue_by_id(resolve_id, base_dir=root_dir)
+            if ok:
+                console.print(f'[bold green]✓ Marked pain point [{resolve_id}] as resolved.[/bold green]')
+                return 0
+            else:
+                console.print(f'[bold red]Error:[/bold red] Pain point ID [{resolve_id}] not found or already resolved.')
+                return 1
+
     if getattr(args, 'clear', False):
         cleared = diag_mod.clear_issues(base_dir=root_dir)
         console.print(f'[bold green]Cleared {cleared} logged platform issue(s).[/bold green]')
@@ -577,284 +634,97 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     return 0
 
 
-
-def _get_server_pid_file() -> Path:
-    return root_dir / '.podarcis' / 'podarcis-server.pid'
-
-
-def _get_server_log_file() -> Path:
-    log_dir = root_dir / '.podarcis' / 'logs'
-    log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir / 'server.log'
-
-
-def _is_pid_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
-        return False
-
-
-def cmd_server(args: argparse.Namespace) -> int:
-    '''Launch or manage Podarcis Multi-User dynamic router and admin server.'''
-    action = getattr(args, 'server_action', None)
-    port = getattr(args, 'port', 8080)
-    pid_file = _get_server_pid_file()
-    log_file = _get_server_log_file()
-
-    if action == 'stop' or getattr(args, 'stop', False):
-        action_name = 'stop'
-    elif action == 'status' or getattr(args, 'status', False):
-        action_name = 'status'
-    elif action == 'install' or getattr(args, 'install', False):
-        action_name = 'install'
-    elif action == 'uninstall' or getattr(args, 'uninstall', False):
-        action_name = 'uninstall'
-    elif action == 'start' or getattr(args, 'daemon', False):
-        action_name = 'start'
+def cmd_research(args: argparse.Namespace) -> int:
+    '''Search academic literature or ingest papers into sources/ literature.'''
+    if 'research_mcp_server' in sys.modules:
+        research_server = sys.modules['research_mcp_server']
     else:
-        action_name = 'run'
+        res_script = root_dir / '.agents' / 'mcp' / 'research' / 'server.py'
+        if not res_script.exists():
+            console.print('[bold red]Error:[/bold red] research server module not found.')
+            return 1
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('research_mcp_server', res_script)
+        if spec is None or spec.loader is None:
+            console.print('[bold red]Error:[/bold red] Could not load research server module.')
+            return 1
+        research_server = importlib.util.module_from_spec(spec)
+        sys.modules['research_mcp_server'] = research_server
+        spec.loader.exec_module(research_server)
 
-    if action_name == 'start':
-        if pid_file.exists():
-            try:
-                pid = int(pid_file.read_text().strip())
-                if _is_pid_running(pid):
-                    console.print(f'[yellow]Podarcis Server daemon is already running (PID {pid}) at http://localhost:{port}[/yellow]')
-                    return 0
-            except ValueError:
-                pass
 
-        py_bin = _get_python_bin()
-        podarcis_cli = root_dir / '.podarcis' / 'cli.py'
-        log_f = open(log_file, 'a', encoding='utf-8')
-        proc = subprocess.Popen(
-            [py_bin, str(podarcis_cli), 'server', '--port', str(port)],
-            stdout=log_f,
-            stderr=log_f,
-            cwd=str(root_dir),
-            start_new_session=True,
-        )
-        pid_file.write_text(str(proc.pid), encoding='utf-8')
-        console.print(f'[bold green]✓ Started Podarcis Server daemon (PID {proc.pid})[/bold green]')
-        console.print(f'[bold green]✓ Portal: http://localhost:{port}/login[/bold green]')
-        console.print(f'[bold green]✓ Logs: {log_file}[/bold green]')
-        return 0
 
-    elif action_name == 'stop':
-        stopped = False
-        if pid_file.exists():
-            try:
-                pid = int(pid_file.read_text().strip())
-                if _is_pid_running(pid):
-                    import signal
-                    os.kill(pid, signal.SIGTERM)
-                    stopped = True
-            except Exception:
-                pass
-            try:
-                pid_file.unlink()
-            except OSError:
-                pass
 
-        try:
-            res = subprocess.run(['systemctl', '--user', 'is-active', 'podarcis-server'], capture_output=True, text=True)
-            if res.stdout.strip() == 'active':
-                subprocess.run(['systemctl', '--user', 'stop', 'podarcis-server'], capture_output=True)
-                stopped = True
-        except Exception:
-            pass
-
-        if stopped:
-            console.print('[yellow]✓ Stopped Podarcis Server.[/yellow]')
-        else:
-            console.print('[dim]Podarcis Server is not running.[/dim]')
-        return 0
-
-    elif action_name == 'status':
-        is_running = False
-        pid_info = None
-        systemd_info = None
-
-        if pid_file.exists():
-            try:
-                pid = int(pid_file.read_text().strip())
-                if _is_pid_running(pid):
-                    is_running = True
-                    pid_info = pid
-            except ValueError:
-                pass
-
-        try:
-            res = subprocess.run(['systemctl', '--user', 'is-active', 'podarcis-server'], capture_output=True, text=True)
-            systemd_info = res.stdout.strip()
-            if systemd_info == 'active':
-                is_running = True
-        except Exception:
-            systemd_info = 'n/a'
-
+    action = getattr(args, 'research_action', None)
+    if action == 'search':
+        import asyncio
+        query = args.query
+        limit = getattr(args, 'limit', 5)
+        provider = getattr(args, 'provider', 'all')
+        results = asyncio.run(research_server.search_literature(query=query, limit=limit, provider=provider))
         if getattr(args, 'json', False):
-            print(json.dumps({
-                'running': is_running,
-                'pid': pid_info,
-                'systemd_status': systemd_info,
-                'port': port,
-                'url': f'http://localhost:{port}/login',
-            }, indent=2))
+            print(json.dumps(results, indent=2))
             return 0
-
-        console.print('[bold #29b8db]Podarcis Server Status:[/bold #29b8db]')
-        console.print(f'  • Active: {"[bold green]Yes[/bold green]" if is_running else "[yellow]No[/yellow]"}')
-        if pid_info:
-            console.print(f'  • Process PID: {pid_info}')
-        if systemd_info and systemd_info != 'n/a':
-            console.print(f'  • Systemd Service: {systemd_info}')
-        console.print(f'  • Configured Port: {port}')
-        console.print(f'  • Access URL: http://localhost:{port}/login')
+        if not results:
+            console.print(f'[yellow]No research papers found for query: "{query}"[/yellow]')
+            return 0
+        console.print(f'[bold #29b8db]Literature Search Results ({len(results)} found):[/bold #29b8db]\n')
+        for i, item in enumerate(results, 1):
+            title = item.get('title') or 'Unknown Title'
+            year = item.get('year') or 'Unknown'
+            pid = item.get('paperId')
+            ext = item.get('externalIds') or {}
+            doi = ext.get('DOI')
+            arxiv = ext.get('ArXiv')
+            pmid = ext.get('PubMed')
+            id_str = pid if pid else (f"DOI:{doi}" if doi else (f"arXiv:{arxiv}" if arxiv else (f"pmid:{pmid}" if pmid else "N/A")))
+            abstract = (item.get('abstract') or '').replace('\n', ' ').strip()
+            if len(abstract) > 180:
+                abstract = abstract[:180] + '...'
+            console.print(f'[bold green]{i}. {title}[/bold green] ({year})')
+            console.print(f'   [dim]ID:[/dim] {id_str}')
+            if abstract:
+                console.print(f'   [dim]{abstract}[/dim]')
+            console.print('')
         return 0
 
-    elif action_name == 'install':
-        if not _ensure_docker_image():
-            return 1
-        py_bin = _get_python_bin()
-        cli_path = root_dir / '.podarcis' / 'cli.py'
-        user_service_dir = Path.home() / '.config' / 'systemd' / 'user'
-        user_service_dir.mkdir(parents=True, exist_ok=True)
-        service_file = user_service_dir / 'podarcis-server.service'
+    elif action == 'ingest':
+        import asyncio
+        import re
+        from unittest.mock import MagicMock
+        paper_id = args.paper_id
+        domain = args.domain
+        name = getattr(args, 'name', None)
+        ctx = MagicMock()
 
-        service_content = f'''[Unit]
-Description=Podarcis Multi-User Research Engine & Server
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory={root_dir}
-ExecStart={py_bin} {cli_path} server --port {port}
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-'''
-        service_file.write_text(service_content, encoding='utf-8')
+        async def _run_ingest():
+            meta = await research_server._resolve_metadata(paper_id)
+            clean_title = re.sub(r'[^a-z0-9_]+', '_', meta.title.lower()).strip('_')
+            filename_base = name or clean_title[:45]
+            res = await research_server._ingest_paper(ctx, paper_id, filename_base, domain, meta)
+            return res
 
         try:
-            subprocess.run(['systemctl', '--user', 'daemon-reload'], check=False, capture_output=True)
-            res = subprocess.run(['systemctl', '--user', 'enable', '--now', 'podarcis-server.service'], check=False, capture_output=True, text=True)
-            if res.returncode == 0:
-                console.print(f'[bold green]✓ Installed & enabled systemd boot service at {service_file}[/bold green]')
+            res = asyncio.run(_run_ingest())
+            if getattr(args, 'json', False):
+                print(json.dumps(res, indent=2))
             else:
-                console.print(f'[bold green]✓ Created systemd user unit at {service_file}[/bold green]')
-                if res.stderr.strip():
-                    console.print(f'[dim]Note: {res.stderr.strip()}[/dim]')
-
-            subprocess.run(['loginctl', 'enable-linger'], check=False, capture_output=True)
-        except Exception as e:
-            console.print(f'[bold green]✓ Created systemd unit at {service_file}[/bold green] ({e})')
-
-        return 0
-
-    elif action_name == 'uninstall':
-        service_file = Path.home() / '.config' / 'systemd' / 'user' / 'podarcis-server.service'
-        try:
-            subprocess.run(['systemctl', '--user', 'disable', '--now', 'podarcis-server.service'], check=False, capture_output=True)
-        except Exception:
-            pass
-
-        if service_file.exists():
-            try:
-                service_file.unlink()
-                console.print(f'[yellow]✓ Removed systemd user unit {service_file}[/yellow]')
-            except OSError as e:
-                console.print(f'[bold red]Error removing service file:[/bold red] {e}')
-                return 1
-        else:
-            console.print('[dim]Systemd unit podarcis-server.service was not installed.[/dim]')
-
-        try:
-            subprocess.run(['systemctl', '--user', 'daemon-reload'], check=False, capture_output=True)
-        except Exception:
-            pass
-
-        return 0
+                console.print(f'[bold green]✓ Successfully ingested paper![/bold green]')
+                console.print(f'  • Path: [cyan]{res.get("paper_dir")}[/cyan]')
+                console.print(f'  • Files: {", ".join(res.get("files", []))}')
+            return 0
+        except Exception as exc:
+            console.print(f'[bold red]Ingestion failed:[/bold red] {exc}')
+            return 1
 
     else:
-        # Default foreground execution
-        console.print(f'[bold #29b8db]Starting Podarcis Multi-User Server on port {port}...[/bold #29b8db]')
-        console.print(f'[bold green]✓ Login Portal live at http://localhost:{port}/login[/bold green]')
-        console.print(f'[bold green]✓ Admin Dashboard live at http://localhost:{port}/admin[/bold green]')
-        from podarcis.server.app import run_server
-        run_server(port=port)
-        return 0
+        console.print('[yellow]Usage: podarcis research [search|ingest] ...[/yellow]')
+        return 1
 
 
 
-def cmd_user(args: argparse.Namespace) -> int:
-    '''Manage per-user containers and workspaces.'''
-    from podarcis.server.user_manager import UserManager
-    mgr = UserManager(root_dir)
-    action = getattr(args, 'user_action', 'list')
 
-    if action == 'list':
-        users = mgr.get_users_registry()
-        console.print('[bold #29b8db]Podarcis Multi-User Registry:[/bold #29b8db]\n')
-        for username, info in users.items():
-            c_info = mgr.get_container_for_user(username)
-            st = c_info.get('status') if c_info else 'Stopped'
-            port = c_info.get('port') if c_info else 'Auto'
-            console.print(f'  • {username:<15} [{info.get("role", "user")}] — Status: {st} (Port: {port})')
-        return 0
 
-    elif action == 'create':
-        username = args.username.lower()
-        role = getattr(args, 'role', 'user')
-        password = getattr(args, 'password', None)
-        try:
-            mgr.create_user(username, role, password=password)
-            mgr.start_user_container(username)
-            console.print(f'[bold green]✓ Provisioned user "{username}" container.[/bold green]')
-        except Exception as e:
-            console.print(f'[bold red]Error:[/bold red] {e}')
-            return 1
-        return 0
-
-    elif action == 'password':
-        username = args.username.lower()
-        password = args.password
-        try:
-            mgr.set_user_password(username, password)
-            console.print(f'[bold green]✓ Updated password for user "{username}".[/bold green]')
-        except Exception as e:
-            console.print(f'[bold red]Error:[/bold red] {e}')
-            return 1
-        return 0
-
-    elif action == 'start':
-        username = args.username.lower()
-        info = mgr.start_user_container(username)
-        console.print(f'[bold green]✓ Started container for user "{username}" (Port: {info.get("port")}).[/bold green]')
-        return 0
-
-    elif action == 'stop':
-        username = args.username.lower()
-        mgr.stop_user_container(username)
-        console.print(f'[yellow]Stopped container for user "{username}".[/yellow]')
-        return 0
-
-    elif action == 'delete':
-        username = args.username.lower()
-        try:
-            mgr.delete_user(username)
-            console.print(f'[bold green]✓ Deleted user "{username}".[/bold green]')
-        except Exception as e:
-            console.print(f'[bold red]Error:[/bold red] {e}')
-            return 1
-        return 0
-
-    return 0
 
 
 
@@ -1030,8 +900,26 @@ def main() -> None:
     # config interactive
     config_sub.add_parser('interactive', help='Launch interactive TUI menu')
 
-    # config sync
-    config_sub.add_parser('sync', help='Regenerate MCP config for all backends')
+    # repo / repos
+    repo_parser = subparsers.add_parser('repo', aliases=['repos'], help='Manage and synchronize workspace repositories')
+    repo_sub = repo_parser.add_subparsers(dest='repo_action', help='Repository action')
+    repo_st = repo_sub.add_parser('status', help='Display Git and sync status across all workspace repositories')
+    repo_st.add_argument('--json', action='store_true', help='Output repository status in JSON format')
+
+    repo_sync = repo_sub.add_parser('sync', aliases=['pull'], help='Synchronize workspace repositories (pull git remotes & ingest gdrive deltas)')
+
+    repo_push = repo_sub.add_parser('push', help='Push local commits to remotes for workspace repositories')
+    repo_push.add_argument('--commit', '-c', action='store_true', help='Commit uncommitted local changes before pushing')
+    repo_push.add_argument('--message', '-m', default='chore: sync workspace changes', help='Commit message')
+
+    repo_cfg = repo_sub.add_parser('config', help='Configure repository Git remotes or local paths')
+    repo_cfg.add_argument('repo_name', nargs='?', help='Repository name (wiki, workspace, user, sources, etc.)')
+    repo_cfg.add_argument('--url', help='Remote Git URL or repository path')
+    repo_cfg.add_argument('--path', help='Local directory path or target path')
+    repo_cfg.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
+
+    # sync (top-level)
+    subparsers.add_parser('sync', help='Synchronize workspace repos, Google Drive deltas, and MCP backend configs')
 
     # backend
     subparsers.add_parser('backend', help='Open the configured backend tool')
@@ -1039,39 +927,7 @@ def main() -> None:
     # frontend
     subparsers.add_parser('frontend', help='Open the configured frontend tool')
 
-    # server
-    server_parser = subparsers.add_parser('server', help='Start or manage Podarcis multi-user dynamic router server')
-    server_parser.add_argument('server_action', nargs='?', choices=['start', 'stop', 'status', 'install', 'uninstall'], help='Server action (start|stop|status|install|uninstall)')
-    server_parser.add_argument('--port', type=int, default=8080, help='Port to bind (default: 8080)')
-    server_parser.add_argument('--daemon', '-d', action='store_true', help='Run server as background daemon process')
-    server_parser.add_argument('--stop', action='store_true', help='Stop running server daemon')
-    server_parser.add_argument('--status', action='store_true', help='Check running server status')
-    server_parser.add_argument('--install', action='store_true', help='Install and enable systemd boot service')
-    server_parser.add_argument('--uninstall', action='store_true', help='Remove systemd boot service')
-    server_parser.add_argument('--json', action='store_true', help='Output status in JSON format')
 
-    # user
-    user_parser = subparsers.add_parser('user', help='Manage user containers and workspaces')
-    user_sub = user_parser.add_subparsers(dest='user_action', help='User action')
-    user_sub.add_parser('list', help='List user registry and container statuses')
-
-    user_create = user_sub.add_parser('create', help='Create user workspace & container')
-    user_create.add_argument('username', help='Username')
-    user_create.add_argument('--password', help='Initial user password')
-    user_create.add_argument('--role', choices=['user', 'admin'], default='user', help='User role')
-
-    user_pwd = user_sub.add_parser('password', help='Set or update a user password')
-    user_pwd.add_argument('username', help='Username')
-    user_pwd.add_argument('password', help='New password')
-
-    user_start = user_sub.add_parser('start', help='Start user container')
-    user_start.add_argument('username', help='Username')
-
-    user_stop = user_sub.add_parser('stop', help='Stop user container')
-    user_stop.add_argument('username', help='Username')
-
-    user_del = user_sub.add_parser('delete', help='Delete user workspace and container')
-    user_del.add_argument('username', help='Username')
 
     # install & reinstall
     install_parser = subparsers.add_parser('install', help='Run bootstrap installer')
@@ -1101,7 +957,24 @@ def main() -> None:
     diag_parser = subparsers.add_parser('diagnose', help='Display current platform pain points and logged issues')
     diag_parser.add_argument('--json', action='store_true', help='Output issues in JSON format')
     diag_parser.add_argument('--clear', action='store_true', help='Clear or resolve current logged issues')
+    diag_parser.add_argument('--resolve', type=str, help='Mark a specific pain point ID as resolved')
     diag_parser.add_argument('--log-session', type=str, metavar='PATH', help='Parse and log pain points for a transcript file')
+
+    # research
+    research_parser = subparsers.add_parser('research', help='Search peer-reviewed literature and ingest papers into sources/')
+    research_sub = research_parser.add_subparsers(dest='research_action', help='Research action')
+
+    r_search = research_sub.add_parser('search', help='Search literature across PubMed, OpenAlex, arXiv, and Semantic Scholar')
+    r_search.add_argument('query', help='Search query or topic')
+    r_search.add_argument('--limit', type=int, default=5, help='Maximum results (default 5)')
+    r_search.add_argument('--provider', default='all', choices=['all', 'pubmed', 'openalex', 'arxiv', 'semanticscholar'], help='Provider filter')
+    r_search.add_argument('--json', action='store_true', help='Output search results in JSON format')
+
+    r_ingest = research_sub.add_parser('ingest', help='Fetch PDF, extract text, and ingest paper into sources/literature/')
+    r_ingest.add_argument('paper_id', help='Paper ID (DOI:xxx, openalex:xxx, pmid:xxx, arXiv:xxx, or raw title/hash)')
+    r_ingest.add_argument('--domain', required=True, help='Target domain directory under sources/literature/')
+    r_ingest.add_argument('--name', help='Custom snake_case slug directory name')
+    r_ingest.add_argument('--json', action='store_true', help='Output ingestion result in JSON format')
 
     # ingest
     ingest_parser = subparsers.add_parser('ingest', help='Run automated source ingestion (GDrive API delta check)')
@@ -1113,14 +986,17 @@ def main() -> None:
     if args.interactive:
         sys.exit(cmd_interactive(args))
 
-    if args.subcommand in ('job',):
+    if args.subcommand in ('repo', 'repos'):
+        sys.exit(cmd_repo(args))
+    elif args.subcommand == 'sync':
+        sys.exit(cmd_config_sync(args))
+    elif args.subcommand in ('job',):
         sys.exit(cmd_job(args))
-    elif args.subcommand == 'server':
-        sys.exit(cmd_server(args))
-    elif args.subcommand == 'user':
-        sys.exit(cmd_user(args))
+    elif args.subcommand == 'research':
+        sys.exit(cmd_research(args))
     elif args.subcommand == 'status':
         sys.exit(cmd_status(args))
+
     elif args.subcommand == 'ingest':
         from jobs import run_job
         res = run_job(root_dir, 'gdrive_sync', dry_run=getattr(args, 'dry_run', False))

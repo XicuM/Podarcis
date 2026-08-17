@@ -161,6 +161,39 @@ def clear_issues(base_dir: Optional[Path] = None) -> int:
     return count
 
 
+def resolve_issue_by_id(issue_id: str, base_dir: Optional[Path] = None) -> bool:
+    '''Mark a specific issue as resolved by its ID.'''
+    diag_dir = (base_dir / '.podarcis' / 'diagnostics') if base_dir else DIAGNOSTICS_DIR
+    log_file = diag_dir / 'pain_points.jsonl'
+
+    if not log_file.exists():
+        return False
+
+    found = False
+    updated_lines = []
+    with open(log_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+                if item.get('id') == issue_id and not item.get('resolved', False):
+                    item['resolved'] = True
+                    found = True
+                updated_lines.append(json.dumps(item))
+            except json.JSONDecodeError:
+                continue
+
+    if found:
+        with open(log_file, 'w', encoding='utf-8') as f:
+            for l in updated_lines:
+                f.write(l + '\n')
+
+    return found
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Diagnose session pain points and log to .podarcis/diagnostics.')
     parser.add_argument('--transcript', type=str, help='Path to transcript JSONL file to analyze')
