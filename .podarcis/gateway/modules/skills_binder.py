@@ -45,7 +45,10 @@ def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
             resource_fn.__doc__ = f"Skill documentation for {name}"
             return resource_fn
 
-        mcp.add_resource(_make_resource_fn(content, skill_name), resource_uri)
+        try:
+            mcp.resource(resource_uri)(_make_resource_fn(content, skill_name))
+        except Exception:
+            pass
 
         # 2. Register Prompt: podarcis_skill_<name>
         prompt_name = f'podarcis_skill_{skill_name.replace("-", "_")}'
@@ -57,7 +60,7 @@ def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
             return prompt_fn
 
         try:
-            mcp.add_prompt(_make_prompt_fn(content, skill_name), prompt_name)
+            mcp.prompt(name=prompt_name)(_make_prompt_fn(content, skill_name))
         except Exception:
             pass
 

@@ -40,7 +40,10 @@ def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
             resource_fn.__doc__ = f"Subagent persona definition for {name}"
             return resource_fn
 
-        mcp.add_resource(_make_resource_fn(content, agent_name), resource_uri)
+        try:
+            mcp.resource(resource_uri)(_make_resource_fn(content, agent_name))
+        except Exception:
+            pass
 
         # 2. Register Prompt: podarcis_agent_<name>
         prompt_name = f'podarcis_agent_{agent_name.replace("-", "_")}'
@@ -52,7 +55,7 @@ def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
             return prompt_fn
 
         try:
-            mcp.add_prompt(_make_prompt_fn(content, agent_name), prompt_name)
+            mcp.prompt(name=prompt_name)(_make_prompt_fn(content, agent_name))
         except Exception:
             pass
 

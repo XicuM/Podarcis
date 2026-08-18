@@ -42,3 +42,34 @@ def test_diagnostics_mcp_tools(tmp_path, monkeypatch):
 
     # 5. Verify empty
     assert "No active platform pain points found" in server.get_pain_points()
+
+
+def test_diagnostics_sanitization(tmp_path, monkeypatch):
+    """Test that sensitive user data, secrets, and home paths are redacted."""
+    monkeypatch.setattr(server, "ROOT", tmp_path)
+    monkeypatch.setattr(server, "DIAGNOSTICS_DIR", tmp_path / ".podarcis" / "diagnostics")
+    monkeypatch.setattr(server, "PAIN_POINTS_FILE", tmp_path / ".podarcis" / "diagnostics" / "pain_points.jsonl")
+
+    raw_summary = "Failed accessing /home/xicu/secret.key with api_key=sk-1234567890abcdef1234567890"
+    raw_details = f"File in {tmp_path}/workspace/secret.md leaked user@example.com with Bearer abcdef1234567890abcdef1234567890"
+
+    server.log_pain_point(
+        category="execution_error",
+        summary=raw_summary,
+        details=raw_details,
+    )
+
+    issues = json.loads(server.get_pain_points())
+    logged = issues[0]
+
+    # Verify no raw sensitive data leaked
+    assert "xicu" not in logged["summary"]
+    assert "<HOME>" in logged["summary"]
+    assert "sk-1234567890abcdef1234567890" not in logged["summary"]
+    assert "[REDACTED_API_KEY]" in logged["summary"]
+    assert "user@example.com" not in logged["details"]
+    assert "[REDACTED_EMAIL]" in logged["details"]
+    assert "[REDACTED_TOKEN]" in logged["details"]
+    assert str(tmp_path) not in logged["details"]
+    assert "<PROJECT_ROOT>" in logged["details"]
+

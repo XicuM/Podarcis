@@ -61,7 +61,14 @@ When the user asks the agents to **"improve the platform"** or **"resolve logged
      ```bash
      .venv/bin/pytest .podarcis/tests
      ```
-   - Clear or resolve logged issues:
+
+4. **Prepare Fortified Pull Request**:
+   - Platform fixes are committed on an isolated branch and proposed as a PR without leaking private user data.
+   - Run the PR preparation script (enforces domain isolation and sanitizes descriptions):
      ```bash
-     python .agents/skills/self-improvement/scripts/diagnose_session.py --clear
+     python .agents/skills/self-improvement/scripts/prepare_pr.py --title "Fix: resolve tool parameter parsing in menumaker" --body "Addresses command_failure logged during session execution."
      ```
+   - **Enforced PR Guardrails**:
+     - PRs **strictly reject** any changes touching `workspace/`, `sources/`, `wiki/`, or `.env*`.
+     - PR titles, commit messages, and descriptions are automatically scrubbed for credentials, tokens, emails, and local user paths.
+   - Automatically marks resolved issues in `.podarcis/diagnostics/pain_points.jsonl`.

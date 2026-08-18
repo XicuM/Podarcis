@@ -15,7 +15,7 @@ from console import console, QSTYLE
 from repos import get_repo_names, get_repo_url, prompt_configure_repo
 
 _BACKEND_CHOICES = ['opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none']
-_FRONTEND_CHOICES = ['vscode', 'code-server', 'obsidian', 'none']
+_FRONTEND_CHOICES = ['vscode', 'obsidian', 'none']
 
 
 def _style(style):
@@ -153,12 +153,10 @@ def configure_frontend(root: Path, style=None, title=None, description=None) -> 
     if not frontend:
         return
     set_config_value(root, frontend, 'frontend')
-    if frontend in ('vscode', 'code-server'):
-        from cli import _ensure_vscode_config, _ensure_docker_image
+    if frontend == 'vscode':
+        from cli import _ensure_vscode_config
         _ensure_vscode_config(root)
-        if frontend == 'code-server':
-            _ensure_docker_image()
-        console.print(f'[bold green]✓ Frontend set to {frontend} (VSCode config seeded).[/bold green]')
+        console.print(f'[bold green]✓ Frontend set to vscode (VSCode config seeded).[/bold green]')
     elif frontend == 'obsidian':
         backend = get_config_value(root, 'backend', default='none')
         if questionary.confirm(

@@ -1,3 +1,1 @@
-[submodule ".agents/mcp/zoom2okf-mcp"]
-	path = .agents/mcp/zoom2okf-mcp
-	url = ./.agents/mcp/zoom2okf-mcp
+# Podarcis Git Modules

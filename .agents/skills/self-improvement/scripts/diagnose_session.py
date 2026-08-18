@@ -21,6 +21,10 @@ PAIN_POINTS_FILE = DIAGNOSTICS_DIR / 'pain_points.jsonl'
 SESSIONS_DIR = DIAGNOSTICS_DIR / 'sessions'
 
 
+# Import sanitizer
+sys.path.insert(0, str(PROJECT_ROOT / '.agents' / 'mcp' / 'diagnostics'))
+from sanitizer import sanitize_text
+
 def ensure_diagnostics_dirs(base_dir: Optional[Path] = None) -> Path:
     '''Ensure .podarcis/diagnostics directory structure exists.'''
     diag_dir = (base_dir / '.podarcis' / 'diagnostics') if base_dir else DIAGNOSTICS_DIR
@@ -30,12 +34,13 @@ def ensure_diagnostics_dirs(base_dir: Optional[Path] = None) -> Path:
     return diag_dir
 
 
-def parse_transcript(transcript_path: Path) -> List[Dict[str, Any]]:
-    '''Parse a transcript JSONL file and extract pain points and errors.'''
+def parse_transcript(transcript_path: Path, base_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+    '''Parse a transcript JSONL file and extract sanitized pain points and errors.'''
     pain_points: List[Dict[str, Any]] = []
     if not transcript_path.exists():
         return pain_points
 
+    root = base_dir or PROJECT_ROOT
     step_index = 0
     try:
         with open(transcript_path, 'r', encoding='utf-8') as f:
@@ -57,12 +62,14 @@ def parse_transcript(transcript_path: Path) -> List[Dict[str, Any]]:
                 # 1. Detect explicit error status or command/tool execution failures
                 if status == 'ERROR' or 'The command failed with exit code' in content or 'Traceback (most recent call last)' in content:
                     first_line = content.split('\n')[0] if content else 'Unknown error'
+                    sanitized_summary = sanitize_text(first_line[:120], root_dir=root)
+                    sanitized_details = sanitize_text(content[:500], root_dir=root)
                     pain_points.append({
                         'id': f'err-{int(datetime.datetime.now(datetime.timezone.utc).timestamp())}-{step_index}',
                         'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         'category': 'command_failure' if 'command failed' in content else 'execution_error',
-                        'summary': first_line[:120],
-                        'details': content[:500],
+                        'summary': sanitized_summary,
+                        'details': sanitized_details,
                         'severity': 'high' if status == 'ERROR' else 'medium',
                         'resolved': False
                     })
@@ -72,12 +79,14 @@ def parse_transcript(transcript_path: Path) -> List[Dict[str, Any]]:
                     lowered = content.lower()
                     correction_keywords = ['no,', 'wrong', 'fail', 'broken', 'error', 'don\'t', 'instead of', 'incorrect']
                     if any(kw in lowered for kw in correction_keywords):
+                        sanitized_summary = sanitize_text(f'User correction: {content[:100]}', root_dir=root)
+                        sanitized_details = sanitize_text(content[:400], root_dir=root)
                         pain_points.append({
                             'id': f'corr-{int(datetime.datetime.now(datetime.timezone.utc).timestamp())}-{step_index}',
                             'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                             'category': 'user_correction',
-                            'summary': f'User correction: {content[:100]}',
-                            'details': content[:400],
+                            'summary': sanitized_summary,
+                            'details': sanitized_details,
                             'severity': 'medium',
                             'resolved': False
                         })
@@ -87,7 +96,7 @@ def parse_transcript(transcript_path: Path) -> List[Dict[str, Any]]:
             'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'category': 'parser_error',
             'summary': f'Failed to parse transcript: {str(e)}',
-            'details': str(e),
+            'details': sanitize_text(str(e), root_dir=root),
             'severity': 'low',
             'resolved': False
         })

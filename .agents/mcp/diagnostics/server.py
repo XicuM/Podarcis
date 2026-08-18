@@ -45,6 +45,8 @@ mcp = FastMCP(
     ),
 )
 
+from sanitizer import sanitize_text
+
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -59,12 +61,16 @@ def log_pain_point(
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     issue_id = f"diag-{int(datetime.datetime.now(datetime.timezone.utc).timestamp())}"
 
+    # Redact sensitive data, secrets, and absolute user paths before persisting
+    sanitized_summary = sanitize_text(summary, root_dir=ROOT)
+    sanitized_details = sanitize_text(details, root_dir=ROOT)
+
     record = {
         "id": issue_id,
         "timestamp": timestamp,
         "category": category,
-        "summary": summary,
-        "details": details,
+        "summary": sanitized_summary,
+        "details": sanitized_details,
         "severity": severity,
         "resolved": False,
     }
@@ -72,7 +78,7 @@ def log_pain_point(
     with open(PAIN_POINTS_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
 
-    return f"Successfully logged pain point [{issue_id}]: {summary}"
+    return f"Successfully logged pain point [{issue_id}]: {sanitized_summary}"
 
 
 @mcp.tool()

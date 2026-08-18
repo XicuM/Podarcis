@@ -199,11 +199,22 @@ def run_audit(target_path, do_fix=False):
         return all_results
 
     for root, dirs, files in os.walk(target_path):
-        if any(ignored in root for ignored in ['.git', '.venv', '.obsidian', '__pycache__', 'node_modules']):
+        parts = os.path.normpath(root).split(os.sep)
+        if any(ignored in parts for ignored in ['.git', '.venv', '.obsidian', '__pycache__', 'node_modules', 'tmp']):
             continue
+
+        # Clean up flat recipe files if subdirectories exist
+        if parts[-1] == 'recipes' and any(d in dirs for d in ['bowls', 'lunches', 'dinners']):
+            for f in list(files):
+                if f.endswith('.md') and f not in ['_index.md', 'index.md']:
+                    flat_file = os.path.join(root, f)
+                    try:
+                        os.remove(flat_file)
+                        files.remove(f)
+                    except OSError:
+                        pass
         
         # Check for directory bloat in wiki or workspace folder
-        parts = os.path.normpath(root).split(os.sep)
         if 'wiki' in parts or 'workspace' in parts:
             items = [d for d in dirs if not d.startswith('.') and d != '__pycache__'] + \
                     [f for f in files if not f.startswith('.') and f not in ['index.md', '_index.md'] and not f.endswith('.pyc')]
@@ -217,6 +228,8 @@ def run_audit(target_path, do_fix=False):
                 if res.get("yaml_errors"):
                     all_results[path] = res
             elif file.endswith('.md'):
+                if file == 'raw.md':
+                    continue
                 res = check_file(path, do_fix=do_fix)
                 
                 has_issues = False

@@ -185,7 +185,7 @@ def main() -> None:
         description='The backend is the AI coding tool Podarcis subagents run inside. Choosing a backend writes MCP server configuration to its native config file.')
     _hr()
     configure_frontend(root, title='Frontend Tool',
-        description='The frontend is the editor or knowledge-base viewer for wiki and workspace files.\nObsidian: markdown vault viewer. VSCode / code-server: full IDE.')
+        description='The frontend is the editor or knowledge-base viewer for wiki and workspace files.\nObsidian: markdown vault viewer. VSCode: full IDE.')
     _hr()
     configure_repositories(root, title='Workspace Repositories',
         description='Podarcis manages knowledge across Open Knowledge Format (OKF v0.2) repositories:\n  • wiki: Objective knowledge base (anonymized concepts & references)\n  • workspace: Actionable deliverables (user profiles, protocols, reviews)')

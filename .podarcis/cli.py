@@ -11,7 +11,7 @@ from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
 BACKENDS = {'opencode': 'opencode', 'codex': 'codex', 'agy': 'agy', 'claude': 'claude', 'openclaw': 'openclaw', 'hermes': 'hermes', 'none': None}
-FRONTENDS = {'vscode': 'code', 'code-server': 'code-server', 'vscode-web': 'code-server', 'obsidian': 'obsidian', 'none': None}
+FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'none': None}
 
 # Ensure root and .podarcis directories are in sys.path
 root_dir = Path(__file__).resolve().parent.parent
@@ -428,7 +428,7 @@ def cmd_repo(args: argparse.Namespace) -> int:
 
 
 def _ensure_vscode_config(root: Path) -> None:
-    '''Ensure .vscode and code-server user configuration directories are initialized from templates if missing.'''
+    '''Ensure .vscode user configuration directories are initialized from templates if missing.'''
     template_dir = root / '.podarcis' / 'templates' / 'vscode'
     target_dir = root / '.vscode'
     if template_dir.exists():
@@ -439,15 +439,6 @@ def _ensure_vscode_config(root: Path) -> None:
                 shutil.copy2(item, target_file)
                 console.print(f'[dim]Initialized .vscode/{item.name} from template[/dim]')
 
-    # Also seed user settings for code-server / VSCode server if absent
-    code_user_dir = root / 'config' / 'code-config' / 'Code' / 'User'
-    code_user_dir.mkdir(parents=True, exist_ok=True)
-    code_user_settings = code_user_dir / 'settings.json'
-    template_settings = template_dir / 'settings.json'
-    if template_settings.exists() and not code_user_settings.exists():
-        shutil.copy2(template_settings, code_user_settings)
-        console.print('[dim]Initialized config/code-config/Code/User/settings.json from template[/dim]')
-
 
 def cmd_config_frontend(args: argparse.Namespace) -> int:
     '''Set or show the frontend name.'''
@@ -456,7 +447,7 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
         console.print(f'[bold red]Error:[/bold red] Unknown frontend "{name}". Choose from: {", ".join(sorted(FRONTENDS))}')
         return 1
     set_config_value(root_dir, name, 'frontend')
-    if name in ('vscode', 'code-server', 'vscode-web'):
+    if name == 'vscode':
         _ensure_vscode_config(root_dir)
     elif name == 'obsidian':
         backend = get_config_value(root_dir, 'backend', default='none')
@@ -788,18 +779,12 @@ def cmd_open_tool(tool_type: str) -> int:
     name = get_config_value(root_dir, tool_type, default='vscode' if tool_type == 'frontend' else 'opencode')
     cwd = str(root_dir)
 
-    if tool_type == 'frontend' and name.lower() in ('vscode', 'code-server', 'vscode-web'):
+    if tool_type == 'frontend' and name.lower() == 'vscode':
         _ensure_vscode_config(root_dir)
 
-    if tool_type == 'frontend' and name.lower() in ('code-server', 'vscode-web'):
-        if not _ensure_docker_image():
-            return 1
-        port = _launch_code_server()
-        if port < 0:
-            return 1
-        return 0
-
     command = valid.get(name.lower(), name)
+    if not command:
+        return 0
 
     try:
         if tool_type == 'backend':
@@ -893,7 +878,7 @@ def main() -> None:
 
     # config frontend
     cfg_frontend = config_sub.add_parser('frontend', help='Set the frontend tool (vscode, obsidian, none)')
-    cfg_frontend.add_argument('frontend_name', choices=list(FRONTENDS), metavar='{vscode,obsidian,code-server,none}', help='Frontend name')
+    cfg_frontend.add_argument('frontend_name', choices=list(FRONTENDS), metavar='{vscode,obsidian,none}', help='Frontend name')
     cfg_frontend.add_argument('--configure-plugins', action='store_true', dest='configure_plugins', default=None, help='Configure Obsidian plugins (Claudian)')
     cfg_frontend.add_argument('--no-plugins', action='store_false', dest='configure_plugins', help='Skip Obsidian plugin configuration')
 
