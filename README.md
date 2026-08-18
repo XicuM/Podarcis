@@ -52,14 +52,14 @@ graph TD
 * **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `finance-mcp`, `menumaker`, `gdrive`, `diagnostics`, `zoom2okf-mcp`) enable literature search, knowledge base queries, nutritional math, and video processing.
 * **Modular Podarcis Engine**: The `.podarcis/` Python package provides interactive setup, CLI tools (`podarcis status`, `podarcis test`, `podarcis lint`), background jobs engine, and MCP backend configuration adapters.
 * **Hermetic Repositories**: `wiki/`, `workspace/`, and `sources/` are decoupled git repositories ensuring clear separation between objective knowledge and user privacy.
-* **Team Habitat & Multi-User Support**: Use [**PodarcisNest**](https://github.com/XicuM/PodarcisLab) for multi-user container orchestration, dynamic reverse proxying, shared OKF knowledge mounts, and Slack research bots.
+* **Team Habitat & Multi-User Support**: Use [**PodarcisNest**](https://github.com/XicuM/PodarcisNest) for multi-user container orchestration, dynamic reverse proxying, shared OKF knowledge mounts, and Slack research bots.
 
 ---
 
 ## 🦎 Podarcis Ecosystem
 
 * **[Podarcis](https://github.com/XicuM/Podarcis)** (This Repo): The core evidence-based research engine, FastMCP gateway (`podarcis-mcp`), CLI, and multi-agent personas (`researcher`, `synthesizer`, `protocol-architect`, `auditor`).
-* **[PodarcisNest](https://github.com/XicuM/PodarcisLab)**: Multi-user containerized research habitat, Starlette reverse proxy, and Slack Socket Mode daemon for research teams.
+* **[PodarcisNest](https://github.com/XicuM/PodarcisNest)**: Multi-user containerized research habitat, Starlette reverse proxy, and Slack Socket Mode daemon for research teams.
 
 ---
 
