@@ -98,9 +98,13 @@ This automatically configures the virtual environment, installs dependencies, se
 
 ---
 
-## 🦎 Save *Podarcis pityusensis*
+## 🦎 Salvem ses Sargantanes! (*Podarcis pityusensis*)
 
-This project takes its name from *Podarcis*, the genus of wall lizards native to the Mediterranean basin ("agile-footed" in Greek). In particular, the **Ibiza wall lizard** (*Podarcis pityusensis*), endemic to the islands of Ibiza and Formentera, is facing severe threats of extinction due to invasive alien snake species. If you find this project useful, please consider learning more about and supporting active conservation efforts:
-
-👉 **[Protegim ses Sargantanes — Learn & Support *Podarcis pityusensis* Conservation](https://protegimsessargantanes.org/en/home-english/)**
+> ### 🌿 Salvem ses Sargantanes!
+> 
+> This project takes its name from *Podarcis*, the genus of agile Mediterranean wall lizards. In particular, the **Ibiza wall lizard** (*Podarcis pityusensis*), endemic to Ibiza and Formentera (*ses sargantanes*), is facing critical threats of extinction due to invasive alien snake species.
+> 
+> Support active conservation, educational, and habitat protection initiatives:
+> 
+> 👉 **[Protegim ses Sargantanes — Learn & Support Conservation Efforts](https://protegimsessargantanes.org/en/home-english/)**
 
