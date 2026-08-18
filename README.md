@@ -59,7 +59,7 @@ graph TD
 ## 🦎 Podarcis Ecosystem
 
 * **[Podarcis](https://github.com/XicuM/Podarcis)** (This Repo): The core evidence-based research engine, FastMCP gateway (`podarcis-mcp`), CLI, and multi-agent personas (`researcher`, `synthesizer`, `protocol-architect`, `auditor`).
-* **[PodarcisNest](https://github.com/XicuM/PodarcisNest)**: Multi-user containerized research habitat, Starlette reverse proxy, and Slack Socket Mode daemon for research teams.
+* **[PodarcisNest](https://github.com/XicuM/PodarcisNest)**: Multi-User LLM Wiki Server Infrastructure, Starlette reverse proxy, and Slack Socket Mode daemon for research teams.
 
 ---
 
