@@ -10,7 +10,8 @@ import sys
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
-BACKENDS = {'opencode': 'opencode', 'codex': 'codex', 'agy': 'agy', 'claude': 'claude', 'openclaw': 'openclaw', 'hermes': 'hermes', 'none': None}
+HARNESSES = {'opencode': 'opencode', 'codex': 'codex', 'agy': 'agy', 'claude': 'claude', 'openclaw': 'openclaw', 'hermes': 'hermes', 'none': None}
+BACKENDS = HARNESSES
 FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'none': None}
 
 # Ensure root and .podarcis directories are in sys.path
@@ -29,6 +30,7 @@ from components import (
     set_mcp_server_status,
     set_skill_status,
     set_agent_status,
+    sync_all_harnesses,
     sync_all_backends,
 )
 
@@ -145,11 +147,11 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_config_set_status(args: argparse.Namespace, enable: bool) -> int:
     '''Enable or disable a component (mcp, skill, agent).'''
-    backend = get_config_value(root_dir, 'backend', default='none')
-    if backend == 'none':
+    harness = get_config_value(root_dir, 'harness', default=get_config_value(root_dir, 'backend', default='none'))
+    if harness == 'none':
         console.print(
-            '[bold yellow]Warning:[/bold yellow] No backend selected — MCP config changes will have no effect.\n'
-            'Change it with: [bold]podarcis config backend <name>[/bold] or [bold]podarcis config interactive[/bold]'
+            '[bold yellow]Warning:[/bold yellow] No harness selected — MCP config changes will have no effect.\n'
+            'Change it with: [bold]podarcis config harness <name>[/bold] or [bold]podarcis config interactive[/bold]'
         )
     ctype = args.type.lower()
     name = args.name
@@ -237,28 +239,29 @@ def cmd_config_repo(args: argparse.Namespace) -> int:
 # Claudian Obsidian plugin ID
 _CLAUDIAN_PLUGIN_ID = 'realclaudian'
 
-# Maps Podarcis backend name to the Claudian settingsProvider value.
-# Backends absent from this map are unsupported: the plugin is disabled.
-_BACKEND_TO_CLAUDIAN: dict[str, str] = {
+# Maps Podarcis harness name to the Claudian settingsProvider value.
+# Harnesses absent from this map are unsupported: the plugin is disabled.
+_HARNESS_TO_CLAUDIAN: dict[str, str] = {
     'claude': 'claude',
     'opencode': 'opencode',
     'codex': 'codex',
     # 'openclaw' and 'hermes' have no Claudian providerId → plugin is disabled
 }
+_BACKEND_TO_CLAUDIAN = _HARNESS_TO_CLAUDIAN
 
 
-def _sync_claudian_plugin(backend: str) -> None:
-    '''Sync the Claudian Obsidian plugin state to match the active Podarcis backend.
+def _sync_claudian_plugin(harness: str) -> None:
+    '''Sync the Claudian Obsidian plugin state to match the active Podarcis harness.
 
-    Supported backends (claude / opencode / codex): enable the plugin and
+    Supported harnesses (claude / opencode / codex): enable the plugin and
     write the matching ``settingsProvider`` into its data.json.
-    Unsupported backends (agy / openclaw / hermes): disable the plugin entirely.
+    Unsupported harnesses (agy / openclaw / hermes): disable the plugin entirely.
     '''
     obsidian_dir = root_dir / '.obsidian'
     community_plugins_path = obsidian_dir / 'community-plugins.json'
     plugin_data_path = obsidian_dir / 'plugins' / _CLAUDIAN_PLUGIN_ID / 'data.json'
 
-    provider = _BACKEND_TO_CLAUDIAN.get(backend)
+    provider = _HARNESS_TO_CLAUDIAN.get(harness)
     supported = provider is not None
 
     if supported:
@@ -285,7 +288,7 @@ def _sync_claudian_plugin(backend: str) -> None:
         community_plugins_path.write_text(
             json.dumps(plugins, indent=2) + '\n', encoding='utf-8'
         )
-        console.print(f'[dim]Claudian: disabled in community-plugins.json (backend "{backend}" not supported)[/dim]')
+        console.print(f'[dim]Claudian: disabled in community-plugins.json (harness "{harness}" not supported)[/dim]')
 
     # --- data.json: set settingsProvider when supported ---
     if not supported:
@@ -308,37 +311,41 @@ def _sync_claudian_plugin(backend: str) -> None:
     console.print(f'[dim]Claudian: settingsProvider set to "{provider}"[/dim]')
 
 
-def cmd_config_backend(args: argparse.Namespace) -> int:
-    '''Set or show the backend name (opencode, codex, agy, claude, openclaw, hermes, none).'''
-    backends = {'opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none'}
-    name = args.backend_name.lower()
-    if name not in backends:
-        console.print(f'[bold red]Error:[/bold red] Unknown backend "{name}". Choose from: {", ".join(sorted(backends))}')
+def cmd_config_harness(args: argparse.Namespace) -> int:
+    '''Set or show the harness name (opencode, codex, agy, claude, openclaw, hermes, none).'''
+    harnesses = {'opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none'}
+    harness_arg = getattr(args, 'harness_name', None) or getattr(args, 'backend_name', None)
+    name = harness_arg.lower() if harness_arg else ''
+    if name not in harnesses:
+        console.print(f'[bold red]Error:[/bold red] Unknown harness "{name}". Choose from: {", ".join(sorted(harnesses))}')
         return 1
-    set_config_value(root_dir, name, 'backend')
+    set_config_value(root_dir, name, 'harness')
     if name == 'none':
-        console.print('[bold yellow]✓ Backend set to none.[/bold yellow] MCP configuration will be skipped.')
+        console.print('[bold yellow]✓ Harness set to none.[/bold yellow] MCP configuration will be skipped.')
         return 0
     _sync_claudian_plugin(name)
-    # Regenerate MCP config for the newly active backend
-    from backends import generate_for_backend
-    paths = generate_for_backend(root_dir, name)
+    # Regenerate MCP config for the newly active harness
+    from harnesses import generate_for_harness
+    paths = generate_for_harness(root_dir, name)
     if paths:
         path_list = paths if isinstance(paths, list) else [paths]
         console.print(f'[dim]Regenerated MCP config for {name}: {[str(p) for p in path_list]}[/dim]')
-    console.print(f'[bold green]✓ Backend set to {name}.[/bold green]')
+    console.print(f'[bold green]✓ Harness set to {name}.[/bold green]')
     return 0
 
 
+cmd_config_backend = cmd_config_harness
+
+
 def cmd_config_sync(args: argparse.Namespace) -> int:
-    '''Regenerate MCP config for backends and sync workspace repositories.'''
-    results = sync_all_backends(root_dir)
-    console.print('[bold #29b8db]Synced MCP config to all backends:[/bold #29b8db]\n')
-    for backend, paths in results.items():
+    '''Regenerate MCP config for harnesses and sync workspace repositories.'''
+    results = sync_all_harnesses(root_dir)
+    console.print('[bold #29b8db]Synced MCP config to all harnesses:[/bold #29b8db]\n')
+    for harness, paths in results.items():
         if paths:
-            console.print(f'  [green]✓[/green] {backend:<12} → {[str(p.name) for p in paths]}')
+            console.print(f'  [green]✓[/green] {harness:<12} → {[str(p.name) for p in paths]}')
         else:
-            console.print(f'  [dim]—[/dim] {backend:<12} (no files written)')
+            console.print(f'  [dim]—[/dim] {harness:<12} (no files written)')
 
     console.print('\n[bold #29b8db]Synchronizing workspace repositories...[/bold #29b8db]\n')
     repo_results = sync_repos_full(root_dir)
@@ -450,20 +457,20 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
     if name == 'vscode':
         _ensure_vscode_config(root_dir)
     elif name == 'obsidian':
-        backend = get_config_value(root_dir, 'backend', default='none')
+        harness = get_config_value(root_dir, 'harness', default=get_config_value(root_dir, 'backend', default='none'))
         cfg_plugins = getattr(args, 'configure_plugins', None)
         if cfg_plugins is None and sys.stdin.isatty():
             try:
                 import questionary
                 cfg_plugins = questionary.confirm(
-                    f'Configure Obsidian plugins for agentic knowledge base (Claudian for backend "{backend}")?',
+                    f'Configure Obsidian plugins for agentic knowledge base (Claudian for harness "{harness}")?',
                     default=True,
                 ).ask()
             except Exception:
                 cfg_plugins = False
 
         if cfg_plugins:
-            _sync_claudian_plugin(backend)
+            _sync_claudian_plugin(harness)
             console.print(f'[bold green]✓ Frontend set to obsidian with Claudian plugin configured.[/bold green]')
         else:
             console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green] [dim]Skipped Obsidian plugin configuration.[/dim]')
@@ -474,29 +481,28 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_backend(args: argparse.Namespace) -> int:
-    '''Open the configured backend.'''
-    backend = get_config_value(root_dir, 'backend', default='none')
-    if backend == 'none':
+def cmd_harness(args: argparse.Namespace) -> int:
+    '''Open the configured harness.'''
+    harness = get_config_value(root_dir, 'harness', default=get_config_value(root_dir, 'backend', default='none'))
+    if harness == 'none':
         console.print(
-            '[bold yellow]Warning:[/bold yellow] No backend selected.\n'
-            'Change it with: [bold]podarcis config backend <name>[/bold] or [bold]podarcis config interactive[/bold]'
+            '[bold yellow]Warning:[/bold yellow] No harness selected.\n'
+            'Change it with: [bold]podarcis config harness <name>[/bold] or [bold]podarcis config interactive[/bold]'
         )
         return 1
-    return cmd_open_tool('backend')
+    return cmd_open_tool('harness')
+
+
+cmd_backend = cmd_harness
 
 
 def cmd_frontend(args: argparse.Namespace) -> int:
     '''Open the configured frontend.'''
-    frontend = get_config_value(root_dir, 'frontend', default='none')
-    if frontend == 'none':
-        console.print(
-            '[bold yellow]Warning:[/bold yellow] No frontend selected.\n'
-            'Change it with: [bold]podarcis config frontend <name>[/bold] or [bold]podarcis config interactive[/bold]'
-        )
-        return 1
     from banner import display_project_banner
     display_project_banner(root_dir)
+    frontend = get_config_value(root_dir, 'frontend', default='none')
+    if frontend == 'none':
+        return 0
     return cmd_open_tool('frontend')
 
 
@@ -774,12 +780,16 @@ def cmd_job(args: argparse.Namespace) -> int:
 
 
 def cmd_open_tool(tool_type: str) -> int:
-    '''Open the configured tool (backend or frontend) at the current directory.'''
-    valid = BACKENDS if tool_type == 'backend' else FRONTENDS
-    name = get_config_value(root_dir, tool_type, default='vscode' if tool_type == 'frontend' else 'opencode')
+    '''Open the configured tool (harness or frontend) at the current directory.'''
+    is_harness = tool_type in ('harness', 'backend')
+    valid = HARNESSES if is_harness else FRONTENDS
+    if is_harness:
+        name = get_config_value(root_dir, 'harness', default=get_config_value(root_dir, 'backend', default='opencode'))
+    else:
+        name = get_config_value(root_dir, 'frontend', default='vscode')
     cwd = str(root_dir)
 
-    if tool_type == 'frontend' and name.lower() == 'vscode':
+    if not is_harness and name.lower() == 'vscode':
         _ensure_vscode_config(root_dir)
 
     command = valid.get(name.lower(), name)
@@ -787,7 +797,7 @@ def cmd_open_tool(tool_type: str) -> int:
         return 0
 
     try:
-        if tool_type == 'backend':
+        if is_harness:
             os.execvp(command, [command, cwd])
         else:
             if name.lower() == 'obsidian':
@@ -872,9 +882,13 @@ def main() -> None:
     cfg_repo.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
 
 
-    # config backend
-    cfg_backend = config_sub.add_parser('backend', help='Set the agent backend (opencode, codex, agy, claude, none, …)')
-    cfg_backend.add_argument('backend_name', choices=list(BACKENDS), help='Backend name')
+    # config harness
+    cfg_harness = config_sub.add_parser('harness', help='Set the agent harness (opencode, codex, agy, claude, none, …)')
+    cfg_harness.add_argument('harness_name', choices=list(HARNESSES), help='Harness name')
+
+    # config backend (alias)
+    cfg_backend = config_sub.add_parser('backend', help='Set the agent harness (alias for config harness)')
+    cfg_backend.add_argument('backend_name', choices=list(HARNESSES), help='Harness name')
 
     # config frontend
     cfg_frontend = config_sub.add_parser('frontend', help='Set the frontend tool (vscode, obsidian, none)')
@@ -904,10 +918,11 @@ def main() -> None:
     repo_cfg.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
 
     # sync (top-level)
-    subparsers.add_parser('sync', help='Synchronize workspace repos, Google Drive deltas, and MCP backend configs')
+    subparsers.add_parser('sync', help='Synchronize workspace repos, Google Drive deltas, and MCP harness configs')
 
-    # backend
-    subparsers.add_parser('backend', help='Open the configured backend tool')
+    # harness & backend
+    subparsers.add_parser('harness', help='Open the configured harness tool')
+    subparsers.add_parser('backend', help='Open the configured harness tool (alias for harness)')
 
     # frontend
     subparsers.add_parser('frontend', help='Open the configured frontend tool')
@@ -995,8 +1010,8 @@ def main() -> None:
             sys.exit(cmd_config_disable(args))
         elif args.config_action == 'repo':
             sys.exit(cmd_config_repo(args))
-        elif args.config_action == 'backend':
-            sys.exit(cmd_config_backend(args))
+        elif args.config_action in ('harness', 'backend'):
+            sys.exit(cmd_config_harness(args))
         elif args.config_action == 'frontend':
             sys.exit(cmd_config_frontend(args))
         elif args.config_action == 'interactive':
@@ -1006,8 +1021,8 @@ def main() -> None:
         else:
             sys.exit(cmd_interactive(args))
 
-    elif args.subcommand == 'backend':
-        sys.exit(cmd_backend(args))
+    elif args.subcommand in ('harness', 'backend'):
+        sys.exit(cmd_harness(args))
     elif args.subcommand == 'frontend':
         sys.exit(cmd_frontend(args))
     elif args.subcommand == 'install':

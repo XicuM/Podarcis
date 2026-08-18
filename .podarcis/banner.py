@@ -26,19 +26,19 @@ def _center_text(t: Text, width: int) -> Text:
 
 
 _FRONTEND_DISPLAY = {'vscode': 'VSCode', 'obsidian': 'Obsidian'}
-_BACKEND_DISPLAY = {'opencode': 'OpenCode', 'codex': 'Codex', 'agy': 'Agy', 'claude': 'Claude', 'openclaw': 'OpenClaw', 'hermes': 'Hermes'}
+_HARNESS_DISPLAY = {'opencode': 'OpenCode', 'codex': 'Codex', 'agy': 'Agy', 'claude': 'Claude', 'openclaw': 'OpenClaw', 'hermes': 'Hermes'}
+_BACKEND_DISPLAY = _HARNESS_DISPLAY
 
 
 def _build_subtitle(root_dir: Path) -> Text:
-    backend = _BACKEND_DISPLAY.get(
-        get_config_value(root_dir, 'backend'), 'No backend',
-    )
+    harness_val = get_config_value(root_dir, 'harness', default=get_config_value(root_dir, 'backend'))
+    harness = _HARNESS_DISPLAY.get(harness_val, 'No harness')
     frontend = _FRONTEND_DISPLAY.get(
         get_config_value(root_dir, 'frontend'), 'No frontend',
     )
     path_str = str(root_dir).replace(str(Path.home()), '~')
     return (Text()
-        .append(backend, style='white')
+        .append(harness, style='white')
         .append(' — ', style='cyan')
         .append(frontend, style='white')
         .append(' — ', style='cyan')

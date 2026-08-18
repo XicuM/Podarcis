@@ -149,6 +149,18 @@ def test_cli_diagnose(tmp_path, monkeypatch, capsys):
     assert captured.out.strip() == '[]'
 
 
+def test_config_harness(tmp_path, monkeypatch):
+    '''Test configuring agent harness via CLI.'''
+    import cli
+    from common import get_config_value
+    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+
+    args = Namespace(harness_name='claude')
+    res = cli.cmd_config_harness(args)
+    assert res == 0
+    assert get_config_value(tmp_path, 'harness') == 'claude'
+
+
 def test_config_frontend_obsidian_opt_in(tmp_path, monkeypatch):
     '''Test opt-in Obsidian plugin configuration via CLI flags.'''
     import cli
@@ -160,8 +172,8 @@ def test_config_frontend_obsidian_opt_in(tmp_path, monkeypatch):
     assert res == 0
     assert not (tmp_path / '.obsidian').exists()
 
-    # 2. With --configure-plugins: Claudian plugin is configured for active backend
-    cli.cmd_config_backend(Namespace(backend_name='opencode'))
+    # 2. With --configure-plugins: Claudian plugin is configured for active harness
+    cli.cmd_config_harness(Namespace(harness_name='opencode'))
     args_yes = Namespace(frontend_name='obsidian', configure_plugins=True)
     res = cli.cmd_config_frontend(args_yes)
     assert res == 0

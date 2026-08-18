@@ -101,7 +101,19 @@ def get_config_value(root_dir: Path, *keys: str, default: str = '') -> str:
         if isinstance(val, dict):
             val = val.get(k, {})
         else:
-            return default
+            val = None
+            break
+    if isinstance(val, str) and val:
+        return val
+    # Fallback between harness and backend
+    if keys == ('harness',):
+        fallback = get_config_value(root_dir, 'backend', default='')
+        if fallback:
+            return fallback
+    elif keys == ('backend',):
+        fallback = get_config_value(root_dir, 'harness', default='')
+        if fallback:
+            return fallback
     return val if isinstance(val, str) else default
 
 

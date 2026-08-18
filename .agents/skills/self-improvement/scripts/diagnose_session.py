@@ -23,7 +23,11 @@ SESSIONS_DIR = DIAGNOSTICS_DIR / 'sessions'
 
 # Import sanitizer
 sys.path.insert(0, str(PROJECT_ROOT / '.agents' / 'mcp' / 'diagnostics'))
-from sanitizer import sanitize_text
+try:
+    from sanitizer import sanitize_text
+except ImportError:
+    def sanitize_text(text: str) -> str:
+        return re.sub(r'(sk-[a-zA-Z0-9_\-]{20,})', '[REDACTED_API_KEY]', text)
 
 def ensure_diagnostics_dirs(base_dir: Optional[Path] = None) -> Path:
     '''Ensure .podarcis/diagnostics directory structure exists.'''

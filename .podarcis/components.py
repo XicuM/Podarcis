@@ -7,7 +7,7 @@ from pathlib import Path
 # Local imports
 from common import load_json, save_json
 from console import console
-from backends import _server_name_map
+from harnesses import _server_name_map
 
 
 SKILLS = lambda root: root/'.agents'/'skills'
@@ -331,9 +331,9 @@ def discover_components(root: Path) -> tuple[dict, dict]:
 
 
 def generate_opencode_json(root: Path) -> Path:
-    '''Dynamically generate opencode.json. Delegates to backends adapter.'''
-    from backends import generate_for_backend
-    result = generate_for_backend(root, 'opencode')
+    '''Dynamically generate opencode.json. Delegates to harnesses adapter.'''
+    from harnesses import generate_for_harness
+    result = generate_for_harness(root, 'opencode')
     return result or root / 'opencode.json'
 
 
@@ -365,7 +365,7 @@ def get_enabled_mcp_servers(root: Path) -> set[str]:
 def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: dict) -> None:
     '''Persist enabled state for specified MCP module in .podarcis/config.yaml.'''
     from common import get_config_value, load_yaml, save_yaml
-    from backends import write_enabled, generate_for_backend
+    from harnesses import write_enabled, generate_for_harness
 
     clean_key = server_key.removesuffix('-mcp')
     cfg_path = root / '.podarcis' / 'config.yaml'
@@ -378,9 +378,9 @@ def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: d
         mcp_mods[clean_key] = {'enabled': enable}
     save_yaml(cfg_path, data)
 
-    # Regenerate the active backend's config file
-    backend = get_config_value(root, 'backend', default='opencode')
-    generate_for_backend(root, backend)
+    # Regenerate the active harness's config file
+    harness = get_config_value(root, 'harness', default='opencode')
+    generate_for_harness(root, harness)
 
     if enable and mcp_info.get('req'):
         install_deps(root, str(mcp_info['req']), True, f'Verifying deps for {server_key}...')
@@ -468,12 +468,16 @@ def set_agent_status(root: Path, agent_name: str, enable: bool, agent_info: dict
     agent_file.write_text(content, encoding='utf-8')
 
 
-def sync_all_backends(root: Path) -> dict[str, Path | None]:
-    '''Regenerate MCP config for ALL supported backends from canonical definitions.
+def sync_all_harnesses(root: Path) -> dict[str, Path | None]:
+    '''Regenerate MCP config for ALL supported harnesses from canonical definitions.
 
-    Each backend's config is regenerated using its own enable/disable state.
-    Returns {backend_name: path_written} for each backend.
+    Each harness's config is regenerated using its own enable/disable state.
+    Returns {harness_name: path_written} for each harness.
     '''
-    from backends import generate_all
+    from harnesses import generate_all
     return generate_all(root)
+
+
+# Backward compatibility alias
+sync_all_backends = sync_all_harnesses
 

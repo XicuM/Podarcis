@@ -118,7 +118,7 @@ def _create_podarcis_yaml() -> None:
                 'Filesystem traversal at gecko speed.',
                 'Podarcis: endemic to knowledge graphs everywhere.',
             ],
-            'backend': 'opencode',
+            'harness': 'opencode',
             'frontend': 'none',
         })
 
@@ -169,7 +169,7 @@ def main() -> None:
 
     from config_wizard import (
         configure_mcp_servers, configure_skills, configure_agents, configure_jobs,
-        configure_backend, configure_frontend, configure_repositories,
+        configure_harness, configure_frontend, configure_repositories,
     )
 
     configure_mcp_servers(root, title='MCP Servers Configuration',
@@ -181,8 +181,8 @@ def main() -> None:
     configure_agents(root, title='Subagent Personas Configuration',
         description='Personas configure autonomous subagents under .agents/agents/ for multi-agent literature discovery, protocol architecture, and OKF concept verification.')
     _hr()
-    configure_backend(root, title='Agent Backend',
-        description='The backend is the AI coding tool Podarcis subagents run inside. Choosing a backend writes MCP server configuration to its native config file.')
+    configure_harness(root, title='Agent Harness',
+        description='The harness is the AI coding tool Podarcis subagents run inside. Choosing a harness writes MCP server configuration to its native config file.')
     _hr()
     configure_frontend(root, title='Frontend Tool',
         description='The frontend is the editor or knowledge-base viewer for wiki and workspace files.\nObsidian: markdown vault viewer. VSCode: full IDE.')
