@@ -21,7 +21,11 @@ Subagent personas are defined in `.agents/agents/*.md` (with a relative symlink 
 | **Researcher** | [researcher.md](.agents/agents/researcher.md) | `podarcis:researcher`: Discovers peer-reviewed literature via `research-mcp` (Semantic Scholar), scrapes Google Drive documents, downloads PDFs, and stages raw sources in `sources/` + `sources/state.json`. |
 | **Synthesizer** | [synthesizer.md](.agents/agents/synthesizer.md) | `podarcis:synthesizer`: Reads pending items from `sources/state.json` (or GDrive/local sources), ingests raw sources, and compiles objective, anonymized OKF concept notes into `wiki/`. |
 | **Protocol Architect** | [protocol-architect.md](.agents/agents/protocol-architect.md) | `podarcis:protocol_architect`: Reads user profile constraints (`workspace/profile.md`), translates Wiki findings into step-by-step personalized protocols, menu plans (via `menumaker`), and deliverables. |
-| **Auditor** | [auditor.md](.agents/agents/auditor.md) | `podarcis:auditor`: Runs automated link linting (`podarcis lint`), audits OKF frontmatter schema, verifies citation integrity, and fact-checks claims against wiki and literature. |
+| **Auditor** | [auditor.md](.agents/agents/auditor.md) | `podarcis:auditor`: Runs automated link linting (`podarcis lint`), audits OKF frontmatter schema, verifies citation integrity, fact-checks claims against wiki and literature, and delivers structured remediation payloads. |
+
+### Generator-Critic Verification & Auto-Remediation Loop
+- **Autonomous Review Loop**: When `@synthesizer` or `@protocol-architect` outputs draft documents, they immediately hand off the updated file paths to `@auditor`.
+- **Structured Remediation**: If `@auditor` identifies broken links, missing citations, or unsupported claims, it outputs a structured remediation payload and re-triggers the generator agent to apply surgical fixes until machine sign-off (`verified:` frontmatter) is achieved.
 
 ### Domain Knowledge Skills
 
