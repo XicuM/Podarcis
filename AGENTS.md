@@ -87,6 +87,7 @@ The coordination is asynchronous, mediated by the file structure:
 * **Surgical Edits**: Touch only the files and lines required for the task.
 * **No Manual Line Wrapping**: Write each paragraph as a single line. Obsidian handles visual wrapping automatically.
 * **Diagnostic Logging**: Immediately log any execution failures, tool errors, user corrections, or instances where generated results fail to meet user expectations via `log_pain_point` (`diagnostics-mcp`) into `.podarcis/diagnostics/pain_points.jsonl`.
+* **Sync at Start & End**: Establish the baseline with `get_workspace_status` (or `git fetch` + `status -sb`) before starting, and confirm clean + synced before finishing. Fetch for awareness — never blind-pull into a dirty tree.
 
 ---
 
