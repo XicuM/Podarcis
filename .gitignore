@@ -40,11 +40,11 @@ uv.lock
 .claudian
 
 # Workspace & Decoupled Repositories
-workspace/
-wiki/
-sources/
-config/
-open-code-data/
+/workspace/
+/wiki/
+/sources/
+/config/
+/open-code-data/
 
 # Continue.dev local config (contains API keys)
 .continue/

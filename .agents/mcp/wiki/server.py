@@ -515,17 +515,6 @@ async def complete_source_synthesis(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-async def get_workspace_status() -> str:
-    """Get detailed Git and synchronization status across all decoupled workspace repositories (workspace, wiki, sources)."""
-    podarcis_dir = ROOT / ".podarcis"
-    if str(podarcis_dir) not in sys.path:
-        sys.path.insert(0, str(podarcis_dir))
-    from repos import get_repo_status
-    statuses = get_repo_status(ROOT)
-    return json.dumps(statuses, indent=2)
-
-
-@mcp.tool()
 async def sync_workspaces(
     action: Annotated[
         str,
