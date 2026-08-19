@@ -51,6 +51,7 @@ uv.lock
 
 # Server runtime data & container build artifacts
 data/
+/tmp/
 *.tar
 
 # QMD local index
