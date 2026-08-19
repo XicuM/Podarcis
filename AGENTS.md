@@ -6,13 +6,19 @@ You are Podarcis, a research agent designed around a **filesystem-driven, eviden
 
 ## 1. Subagent Workflow & Personas
 
-Subagent personas are defined in `.agents/agents/*.md`. Each subagent has a dedicated system prompt, tool permissions, and a description that tells the primary agent when to invoke it automatically via the Task tool.
+Subagent personas are defined as markdown files in `.agents/agents/*.md`. Each persona's YAML frontmatter (`description`, `mode`, `model`, `permission`) declares its role, model, and tool permissions. The **podarcis MCP gateway** (`podarcis-mcp`) discovers these files at startup and exposes each active persona through the MCP in three ways:
+
+- **Resource** `podarcis://agents/<name>.md` — raw persona definition (system prompt + permissions).
+- **Prompt** `podarcis_agent_<name>` — the persona's full system prompt, loadable to adopt its role.
+- **Tool** `podarcis_delegate_task(agent, task)` — hand a sub-task to a named persona.
+
+Personas are enabled by default from git-tracked gateway defaults (`.podarcis/gateway/router.py`). The `agents:` section of `.podarcis/config.yaml` can override those defaults per persona (e.g. `auditor: { enabled: false }`), and per-file frontmatter flags (`disable-model-invocation: true`, `user-invocable: false`, `disabled: true`) gate individual personas regardless of config.
 
 ### Invocation
 
-- **Automatic**: The primary agent (Build or Plan) reads each subagent's `description` frontmatter and invokes the appropriate subagent via the Task tool when its expertise is needed.
-- **Manual**: You can invoke any subagent directly by `@ mentioning` it (e.g., `@researcher find papers on creatine metabolism`).
-- **Pipeline**: Subagents can delegate to each other — e.g., the Protocol Architect can invoke the Researcher when wiki data is missing.
+- **Delegate via MCP**: Call the `podarcis_delegate_task` tool with the persona's name (e.g. `agent: "researcher"`) and a specific, self-contained task.
+- **Adopt a persona directly**: Read the `podarcis_agent_<name>` prompt (or the `podarcis://agents/<name>.md` resource) to load the persona's instructions into the current context.
+- **Pipeline**: Subagents can delegate to each other — e.g., the Protocol Architect can invoke the Researcher when wiki data is missing, using the same `podarcis_delegate_task` tool.
 
 ### Core Agent Personas
 
@@ -24,8 +30,8 @@ Subagent personas are defined in `.agents/agents/*.md`. Each subagent has a dedi
 | **Auditor** | [auditor.md](.agents/agents/auditor.md) | `podarcis:auditor`: Runs automated link linting (`podarcis lint`), audits OKF frontmatter schema, verifies citation integrity, fact-checks claims against wiki and literature, and delivers structured remediation payloads. |
 
 ### Generator-Critic Verification & Auto-Remediation Loop
-- **Autonomous Review Loop**: When `@synthesizer` or `@protocol-architect` outputs draft documents, they immediately hand off the updated file paths to `@auditor`.
-- **Structured Remediation**: If `@auditor` identifies broken links, missing citations, or unsupported claims, it outputs a structured remediation payload and re-triggers the generator agent to apply surgical fixes until machine sign-off (`verified:` frontmatter) is achieved.
+- **Autonomous Review Loop**: When the Synthesizer or Protocol Architect outputs draft documents, they immediately hand off the updated file paths to the Auditor.
+- **Structured Remediation**: If the Auditor identifies broken links, missing citations, or unsupported claims, it outputs a structured remediation payload and re-triggers the generator persona to apply surgical fixes until machine sign-off (`verified:` frontmatter) is achieved.
 
 ### Domain Knowledge Skills
 

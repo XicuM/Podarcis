@@ -52,18 +52,60 @@ def load_server_mcp(root: Path, rel_path: str) -> Any | None:
         logger.error(f"Error loading MCP module at {rel_path}: {e}")
         return None
 
+# ── Default gateway configuration ────────────────────────────────────────────
+# Defaults live here in git-tracked code so every instance gets the same
+# baseline. The (git-ignored) .podarcis/config.yaml only *overrides* these
+# defaults — e.g. disabling a specific persona — and is never the source of
+# truth for which modules/skills/agents are active.
+
+DEFAULT_MCP_MODULES = {
+    'wiki': {'enabled': True},
+    'research': {'enabled': True},
+    'diagnostics': {'enabled': True},
+}
+
+DEFAULT_SKILLS = {
+    'harness': {'enabled': True},
+    'self-improvement': {'enabled': True},
+}
+
+DEFAULT_AGENTS = {
+    'researcher': {'enabled': True},
+    'synthesizer': {'enabled': True},
+    'protocol-architect': {'enabled': True},
+    'auditor': {'enabled': True},
+}
+
+
+def _merge_section(defaults: dict, on_disk: Any) -> dict:
+    '''Overlay an on-disk config section onto its git-tracked defaults.'''
+    section = dict(defaults)
+    if isinstance(on_disk, dict):
+        section.update(on_disk)
+    return section
+
+
 def load_gateway_config(root: Path, config_path: Path | None = None) -> dict[str, Any]:
-    '''Load node configuration from .podarcis/config.yaml.'''
+    '''Merge .podarcis/config.yaml over git-tracked defaults.
+
+    The three gateway sections (mcp_modules, skills, agents) are always
+    returned with defaults filled in, so a fresh instance whose config.yaml
+    only holds repositories/harness/etc. still binds every core module, skill,
+    and persona. Any other top-level keys (repositories, harness, engines, …)
+    are carried through unchanged.
+    '''
     path = config_path or (root / '.podarcis' / 'config.yaml')
-    if path.exists():
-        data = load_yaml(path)
-        if isinstance(data, dict):
-            return data
-    return {
-        'mcp_modules': {'wiki': {'enabled': True}, 'research': {'enabled': True}, 'diagnostics': {'enabled': True}},
-        'skills': {'harness': {'enabled': True}, 'self-improvement': {'enabled': True}},
-        'agents': {'researcher': {'enabled': True}, 'synthesizer': {'enabled': True}},
+    on_disk = load_yaml(path)
+
+    merged = {
+        'mcp_modules': _merge_section(DEFAULT_MCP_MODULES, on_disk.get('mcp_modules')),
+        'skills': _merge_section(DEFAULT_SKILLS, on_disk.get('skills')),
+        'agents': _merge_section(DEFAULT_AGENTS, on_disk.get('agents')),
     }
+    for key, value in on_disk.items():
+        if key not in merged:
+            merged[key] = value
+    return merged
 
 def sync_gateway(mcp: Any, root: Path, config_path: Path | None = None) -> dict[str, Any]:
     '''Synchronize FastMCP server tools, resources, and prompts with configuration.'''

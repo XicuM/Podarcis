@@ -62,7 +62,7 @@ def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
     # 3. Register Delegation Tool: podarcis_delegate_task
     @mcp.tool(name='podarcis_delegate_task')
     def delegate_task(
-        agent: Annotated[str, "Target subagent persona name (e.g. 'researcher', 'synthesizer', 'protocol_architect', 'auditor')"],
+        agent: Annotated[str, "Target subagent persona name (e.g. 'researcher', 'synthesizer', 'protocol-architect', 'auditor')"],
         task: Annotated[str, "Clear, specific task prompt to delegate to the subagent"],
     ) -> str:
         '''Delegate a sub-task to an active Podarcis subagent persona.'''
