@@ -81,3 +81,17 @@ The coordination is asynchronous, mediated by the file structure:
 * **Surgical Edits**: Touch only the files and lines required for the task.
 * **No Manual Line Wrapping**: Write each paragraph as a single line. Obsidian handles visual wrapping automatically.
 * **Diagnostic Logging**: Immediately log any execution failures, tool errors, user corrections, or instances where generated results fail to meet user expectations via `log_pain_point` (`diagnostics-mcp`) into `.podarcis/diagnostics/pain_points.jsonl`.
+
+---
+
+## 5. Clarification & Pre-flight
+
+Ask clarifying questions proactively and early — never wait to be told. A wrong assumption is far more expensive than a good question.
+
+* **Ask only what would change the output.** No curiosity questions.
+* **Batch and prioritize**: lead with the 2–4 highest-leverage questions; the rest are optional and skippable.
+* **State assumptions as defaults** (e.g., "assuming ≤ €100/mo — correct?"), so the user can confirm or correct in one word.
+* **Never block progress on low-priority answers** — proceed and ask in parallel.
+* **Volume**: cap at ~10–12 *unrelated* questions per turn; grouped/overlapping questions may exceed this.
+* **Pre-flight before building anything**: (1) who/what is affected; (2) any hard constraint (medical, legal, financial, relational) that could make the obvious answer wrong or dangerous; (3) whose idea / who benefits; (4) what "done" looks like.
+* **Tooling**: if a tool fails twice, switch to the manual path — stop diagnosing variations.
