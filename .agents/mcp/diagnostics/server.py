@@ -45,6 +45,7 @@ mcp = FastMCP(
     ),
 )
 
+sys.path.insert(0, str(ROOT / ".agents" / "mcp" / "diagnostics"))
 from sanitizer import sanitize_text
 
 # ── Tools ─────────────────────────────────────────────────────────────────────

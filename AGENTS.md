@@ -86,6 +86,7 @@ The coordination is asynchronous, mediated by the file structure:
 * **Automate Last**: Execute direct manual solutions first before building meta-tooling around them.
 * **Surgical Edits**: Touch only the files and lines required for the task.
 * **No Manual Line Wrapping**: Write each paragraph as a single line. Obsidian handles visual wrapping automatically.
+* **Version Every Platform Commit**: Every commit that touches platform code (`.podarcis/`, `.agents/`, skills, or `pyproject.toml`) MUST bump the `version` field in `pyproject.toml` — patch (x.y.Z) for fixes, minor (x.Y.0) for features, major (X.0.0) for breaking changes — so drift between instances is detectable via `podarcis --version`.
 * **Diagnostic Logging**: Immediately log any execution failures, tool errors, user corrections, or instances where generated results fail to meet user expectations via `log_pain_point` (`diagnostics-mcp`) into `.podarcis/diagnostics/pain_points.jsonl`.
 * **Sync at Start & End**: `git fetch --all` + `status -sb` before starting, and confirm clean + pushed before finishing. Fetch for awareness — never blind-pull into a dirty tree.
 

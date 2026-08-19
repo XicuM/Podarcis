@@ -62,7 +62,14 @@ When the user asks the agents to **"improve the platform"** or **"resolve logged
      .venv/bin/pytest .podarcis/tests
      ```
 
-4. **Prepare Fortified Pull Request**:
+4. **Bump Platform Version**:
+   - Every platform commit MUST bump `[project] version` in `pyproject.toml`:
+     - patch (`x.y.Z`) — bug fixes, doc/skill-only changes.
+     - minor (`x.Y.0`) — new features (new MCP tool, new skill, new persona).
+     - major (`X.0.0`) — breaking config/schema changes.
+   - `podarcis --version` and the CLI banner read this value, so an instance running a stale version is immediately visible.
+
+5. **Prepare Fortified Pull Request**:
    - Platform fixes are committed on an isolated branch and proposed as a PR without leaking private user data.
    - Run the PR preparation script (enforces domain isolation and sanitizes descriptions):
      ```bash
