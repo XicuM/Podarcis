@@ -28,13 +28,16 @@ def check_footnotes(content, sources_ids=None):
     missing_defs = [r for r in refs if r not in defs]
     unused_defs = [d for d in defs if d not in refs]
     
+    # Positional/numeric labels are forbidden (OKF §5.1): labels must be stable ids, not [^1]
+    positional = sorted({r for r in refs if re.fullmatch(r'\d+', r)})
+    
     unmatched_sources = []
     if sources_ids is not None:
         for ref in refs:
             if ref not in sources_ids and ref not in defs:
                 unmatched_sources.append(ref)
                 
-    return missing_defs, unused_defs, unmatched_sources
+    return missing_defs, unused_defs, unmatched_sources, positional
 
 def try_fix_unquoted_colons(fm_text):
     """Attempt to fix unquoted colons in single-line YAML values like 'title: Protocol: Social Life'."""
@@ -77,6 +80,7 @@ def check_file(filepath, do_fix=False):
         "missing_footnotes": [],
         "unused_footnotes": [],
         "unmatched_sources": [],
+        "positional_footnotes": [],
         "missing_frontmatter": [],
         "yaml_errors": [],
         "word_count": 0
@@ -175,10 +179,11 @@ def check_file(filepath, do_fix=False):
             results["broken_links"].append((link, target_path))
             
     # Check Footnotes
-    missing, unused, unmatched = check_footnotes(content_no_code, sources_ids)
+    missing, unused, unmatched, positional = check_footnotes(content_no_code, sources_ids)
     results["missing_footnotes"] = missing
     results["unused_footnotes"] = unused
     results["unmatched_sources"] = unmatched
+    results["positional_footnotes"] = positional
     
     # Check Word Count
     results["word_count"] = len(content.split())
@@ -194,7 +199,7 @@ def run_audit(target_path, do_fix=False):
                 all_results[target_path] = res
         elif target_path.endswith('.md'):
             res = check_file(target_path, do_fix=do_fix)
-            if any(res.get(k) for k in ["broken_links", "missing_footnotes", "unused_footnotes", "unmatched_sources", "missing_frontmatter", "yaml_errors"]):
+            if any(res.get(k) for k in ["broken_links", "missing_footnotes", "unused_footnotes", "unmatched_sources", "positional_footnotes", "missing_frontmatter", "yaml_errors"]):
                 all_results[target_path] = res
         return all_results
 
@@ -233,7 +238,7 @@ def run_audit(target_path, do_fix=False):
                 res = check_file(path, do_fix=do_fix)
                 
                 has_issues = False
-                if res.get("broken_links") or res.get("missing_footnotes") or res.get("unused_footnotes") or res.get("missing_frontmatter") or res.get("unmatched_sources") or res.get("yaml_errors"):
+                if res.get("broken_links") or res.get("missing_footnotes") or res.get("unused_footnotes") or res.get("positional_footnotes") or res.get("missing_frontmatter") or res.get("unmatched_sources") or res.get("yaml_errors"):
                     has_issues = True
                     
                 parts = os.path.normpath(path).split(os.sep)
@@ -295,6 +300,10 @@ if __name__ == "__main__":
 
             if res.get("unmatched_sources"):
                 issues.append(f"Unmatched Footnote Sources: {', '.join(res['unmatched_sources'])}")
+                has_issues = True
+
+            if res.get("positional_footnotes"):
+                issues.append(f"Positional (numeric) footnotes — use named [^id] labels: {', '.join(res['positional_footnotes'])}")
                 has_issues = True
                 
             if res.get("missing_frontmatter"):
