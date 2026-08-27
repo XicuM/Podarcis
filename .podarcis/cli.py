@@ -688,11 +688,11 @@ def cmd_research(args: argparse.Namespace) -> int:
     elif action == 'ingest':
         import asyncio
         import re
-        from unittest.mock import MagicMock
+        from unittest.mock import AsyncMock
         paper_id = args.paper_id
         domain = args.domain
         name = getattr(args, 'name', None)
-        ctx = MagicMock()
+        ctx = AsyncMock()
 
         async def _run_ingest():
             meta = await research_server._resolve_metadata(paper_id)

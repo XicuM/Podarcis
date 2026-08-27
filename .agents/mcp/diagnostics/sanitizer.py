@@ -21,7 +21,7 @@ RE_PATTERNS = [
     # Key-value secret assignments (e.g., password=foo, api_key=bar, token=baz)
     (
         re.compile(
-            r"((?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|access[_-]?key)\s*[:=]\s*['\"]?)([^'\"\s\n&]{6,})(['\"]?)",
+            r"((?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|access[_-]?key)\s*[:=]\s*['\"]?)(?!\[REDACTED)([^'\"\s\n&]{6,})(['\"]?)",
             re.IGNORECASE,
         ),
         r"\1[REDACTED]\3",
@@ -79,7 +79,9 @@ def validate_pr_scope(changed_files: List[str]) -> tuple[bool, List[str]]:
     violations: List[str] = []
     
     for f in changed_files:
-        norm_path = f.replace("\\", "/").lstrip("./")
+        norm_path = f.replace("\\", "/")
+        if norm_path.startswith("./"):
+            norm_path = norm_path[2:]
         
         # Check explicit forbidden prefixes
         for forbidden in FORBIDDEN_PR_PREFIXES:

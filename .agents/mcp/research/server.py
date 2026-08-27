@@ -83,39 +83,30 @@ def _load_api_key(root: Path) -> str:
 
 _API_KEY: str = _load_api_key(ROOT)
 
-# Allowed outbound domains (runtime_gate policy)
+# Allowed outbound domains & TLDs for academic literature & repositories
 _ALLOWED_DOMAINS = {
-    "api.semanticscholar.org",
-    "export.arxiv.org",
-    "api.openalex.org",
-    "eutils.ncbi.nlm.nih.gov",
-    "www.ncbi.nlm.nih.gov",
-    "googleapis.com",
-    "api.unpaywall.org",
-    "arxiv.org",
-    "upenn.edu",
-    "nature.com",
-    "science.org",
-    "pnas.org",
-    "cell.com",
-    "frontiersin.org",
-    "plos.org",
-    "biorxiv.org",
-    "medrxiv.org",
-    "sciencedirect.com",
+    'semanticscholar.org', 'arxiv.org', 'openalex.org', 'nih.gov', 'ncbi.nlm.nih.gov',
+    'nature.com', 'science.org', 'pnas.org', 'cell.com', 'frontiersin.org', 'plos.org',
+    'biorxiv.org', 'medrxiv.org', 'sciencedirect.com', 'royalsocietypublishing.org',
+    'wiley.com', 'springer.com', 'mdpi.com', 'tandfonline.com', 'apa.org', 'sagepub.com',
+    'oup.com', 'bmj.com', 'jamanetwork.com', 'thelancet.com', 'cambridge.org', 'jstor.org',
+    'unpaywall.org', 'zenodo.org', 'osf.io', 'figshare.com', 'ssrn.com', 'archive.org',
+    'googleapis.com', 'crossref.org', 'doi.org',
 }
+
+_ALLOWED_TLDS = ('.edu', '.ac.uk', '.gov', '.gov.uk', '.org.uk', '.edu.au')
 
 # ── Server ────────────────────────────────────────────────────────────────────
 
 mcp = FastMCP(
-    "research-mcp",
+    'research-mcp',
     instructions=(
-        "Literature discovery and ingestion server. "
-        "Use search_literature to find papers across multiple academic providers. "
-        "Use download_paper to fetch, extract, and enqueue them (PDF → raw.md → metadata.md). "
-        "Use queue_* tools to inspect and manage the ingestion queue. "
-        "The queue state file location depends on sources_backend in .podarcis/config.yaml: "
-        "'gdrive' → workspace/state.json, 'local' → sources/state.json."
+        'Literature discovery and ingestion server. '
+        'Use search_literature to find papers across multiple academic providers. '
+        'Use download_paper to fetch, extract, and enqueue them (PDF → raw.md → metadata.md). '
+        'Use queue_* tools to inspect and manage the ingestion queue. '
+        'The queue state file location depends on sources_backend in .podarcis/config.yaml: '
+        '\'gdrive\' → workspace/state.json, \'local\' → sources/state.json.'
     ),
 )
 
@@ -127,21 +118,22 @@ _state_lock = asyncio.Lock()
 def _make_client(**kwargs) -> httpx.AsyncClient:
     """Return a configured async httpx client with retries and a shared UA header."""
     transport = httpx.AsyncHTTPTransport(retries=3)
-    headers = {"User-Agent": "Mozilla/5.0 (agentic-wiki research-mcp/1.0)"}
+    headers = {'User-Agent': 'Mozilla/5.0 (agentic-wiki research-mcp/1.0)'}
     if _API_KEY:
-        headers["x-api-key"] = _API_KEY
+        headers['x-api-key'] = _API_KEY
     return httpx.AsyncClient(transport=transport, headers=headers, timeout=60, follow_redirects=True, **kwargs)
 
 
 def _check_domain(url: str) -> None:
-    """Enforce the outbound domain allow-list. Raises ValueError for disallowed hosts."""
+    """Enforce outbound domain allow-list for academic sources."""
     from urllib.parse import urlparse
-    host = urlparse(url).hostname or ""
-    if not any(host == d or host.endswith("." + d) for d in _ALLOWED_DOMAINS):
-        raise ValueError(
-            f"Outbound request to '{host}' is blocked. "
-            f"Allowed domains: {sorted(_ALLOWED_DOMAINS)}"
-        )
+    host = (urlparse(url).hostname or '').lower()
+    if (
+        any(host == d or host.endswith('.' + d) for d in _ALLOWED_DOMAINS)
+        or host.endswith(_ALLOWED_TLDS)
+    ):
+        return
+    raise ValueError(f"Outbound request to '{host}' is blocked by research policy.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Metadata dataclass
@@ -258,6 +250,15 @@ async def _fetch_openalex(work_id: str) -> PaperMetadata | None:
                 for a in work.get("authorships", [])
                 if a.get("author", {}).get("display_name")
             ]
+            best_oa = work.get("best_oa_location") or {}
+            primary_loc = work.get("primary_location") or {}
+            oa_info = work.get("open_access") or {}
+            pdf_url = (
+                best_oa.get("pdf_url")
+                or primary_loc.get("pdf_url")
+                or best_oa.get("landing_page_url")
+                or oa_info.get("oa_url")
+            )
             doi_url = work.get("doi") or ""
             doi = doi_url.replace("https://doi.org/", "").lower() or None
             return PaperMetadata(
@@ -265,7 +266,7 @@ async def _fetch_openalex(work_id: str) -> PaperMetadata | None:
                 abstract=abstract or "No abstract available.",
                 authors=authors,
                 year=work.get("publication_year") or "Unknown",
-                pdf_url=(work.get("primary_location") or {}).get("pdf_url"),
+                pdf_url=pdf_url,
                 doi=doi,
                 url=work.get("doi") or work.get("id"),
                 publication_types=[work.get("type", "journal-article")],
@@ -298,9 +299,15 @@ async def _fetch_pubmed(pmid: str) -> PaperMetadata | None:
             for aid in item.get("articleids", []):
                 if aid.get("idtype") == "doi":
                     doi = aid.get("id")
-                elif aid.get("idtype") == "pmc":
+                elif aid.get("idtype") in ("pmc", "pmcid"):
                     pmcid = aid.get("id")
-            pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/" if pmcid else None
+            if pmcid:
+                clean_pmc = pmcid.replace("pmc-id:", "").strip()
+                if not clean_pmc.upper().startswith("PMC"):
+                    clean_pmc = f"PMC{clean_pmc}"
+                pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{clean_pmc}/pdf/"
+            else:
+                pdf_url = None
             # Fetch abstract
             abstract = ""
             fetch_url = (
@@ -731,33 +738,36 @@ async def _ingest_paper(
         _update_state_json(filename_base, domain, meta.title, abstract_summary, meta.year)
         _update_domain_index(filename_base, domain, meta.title, abstract_summary, meta.year)
 
+    rel_paper_dir = str(paper_dir.relative_to(ROOT)) if paper_dir.is_relative_to(ROOT) else str(paper_dir)
     return {
-        "status": "ingested",
-        "paper_dir": str(paper_dir.relative_to(ROOT)),
-        "files": ["original.pdf", "raw.md", "metadata.md"],
-        "queued_for_ingest": True,
+        'status': 'ingested',
+        'paper_dir': rel_paper_dir,
+        'files': ['original.pdf', 'raw.md', 'metadata.md'],
+        'queued_for_ingest': True,
     }
 
 
 def _update_state_json(filename_base, domain, title, abstract_summary, year):
-    state = {"version": "1.0", "ingestion_queue": []}
+    state = {'version': '1.0', 'ingestion_queue': []}
     if _STATE_PATH.exists():
         try:
-            state = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
+            state = json.loads(_STATE_PATH.read_text(encoding='utf-8'))
         except Exception:
             pass
-    queue = state.setdefault("ingestion_queue", [])
-    if not any(item.get("id") == filename_base for item in queue):
+    queue = state.setdefault('ingestion_queue', [])
+    raw_file = _SOURCES_LIT / domain / filename_base / 'raw.md'
+    rel_raw = str(raw_file.relative_to(ROOT)) if raw_file.is_relative_to(ROOT) else str(raw_file)
+    if not any(item.get('id') == filename_base for item in queue):
         queue.append({
-            "id": filename_base,
-            "type": "Literature",
-            "path": str((_SOURCES_LIT / domain / filename_base / "raw.md").relative_to(ROOT)),
-            "summary": f"{title} - {abstract_summary}",
-            "enqueued_at": datetime.datetime.now().isoformat(),
-            "status": "pending",
-            "tags": [domain],
+            'id': filename_base,
+            'type': 'Literature',
+            'path': rel_raw,
+            'summary': f'{title} - {abstract_summary}',
+            'enqueued_at': datetime.datetime.now().isoformat(),
+            'status': 'pending',
+            'tags': [domain],
         })
-        _STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        _STATE_PATH.write_text(json.dumps(state, indent=2), encoding='utf-8')
 
 
 def _update_domain_index(filename_base, domain, title, abstract_summary, year):

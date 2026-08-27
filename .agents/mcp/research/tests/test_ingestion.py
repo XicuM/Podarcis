@@ -122,59 +122,75 @@ def test_sanitize_preserves_single_newline():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _ALLOWED_DOMAINS = {
-    "api.semanticscholar.org",
-    "export.arxiv.org",
-    "api.openalex.org",
-    "eutils.ncbi.nlm.nih.gov",
-    "www.ncbi.nlm.nih.gov",
-    "googleapis.com",
-    "api.unpaywall.org",
-    "arxiv.org",
+    'semanticscholar.org', 'arxiv.org', 'openalex.org', 'nih.gov', 'ncbi.nlm.nih.gov',
+    'nature.com', 'science.org', 'pnas.org', 'cell.com', 'frontiersin.org', 'plos.org',
+    'biorxiv.org', 'medrxiv.org', 'sciencedirect.com', 'royalsocietypublishing.org',
+    'wiley.com', 'springer.com', 'mdpi.com', 'tandfonline.com', 'apa.org', 'sagepub.com',
+    'oup.com', 'bmj.com', 'jamanetwork.com', 'thelancet.com', 'cambridge.org', 'jstor.org',
+    'unpaywall.org', 'zenodo.org', 'osf.io', 'figshare.com', 'ssrn.com', 'archive.org',
+    'googleapis.com', 'crossref.org', 'doi.org',
 }
+
+_ALLOWED_TLDS = ('.edu', '.ac.uk', '.gov', '.gov.uk', '.org.uk', '.edu.au')
 
 
 def _check_domain(url: str) -> None:
     from urllib.parse import urlparse
-    host = urlparse(url).hostname or ""
-    if not any(host == d or host.endswith("." + d) for d in _ALLOWED_DOMAINS):
-        raise ValueError(
-            f"Outbound request to '{host}' is blocked."
-        )
+    host = (urlparse(url).hostname or '').lower()
+    if (
+        any(host == d or host.endswith('.' + d) for d in _ALLOWED_DOMAINS)
+        or host.endswith(_ALLOWED_TLDS)
+    ):
+        return
+    raise ValueError(f"Outbound request to '{host}' is blocked by research policy.")
 
 
 def test_check_domain_allows_semantic_scholar():
-    _check_domain("https://api.semanticscholar.org/graph/v1/paper/123")
+    _check_domain('https://api.semanticscholar.org/graph/v1/paper/123')
 
 
 def test_check_domain_allows_arxiv():
-    _check_domain("http://export.arxiv.org/api/query?id=1234.5678")
+    _check_domain('http://export.arxiv.org/api/query?id=1234.5678')
 
 
 def test_check_domain_allows_openalex():
-    _check_domain("https://api.openalex.org/works/W123")
+    _check_domain('https://api.openalex.org/works/W123')
 
 
 def test_check_domain_allows_pubmed():
-    _check_domain("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi")
-    _check_domain("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC123/")
+    _check_domain('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi')
+    _check_domain('https://www.ncbi.nlm.nih.gov/pmc/articles/PMC123/')
+
+
+def test_check_domain_allows_publishers():
+    _check_domain('https://royalsocietypublishing.org/doi/pdf/10.1098/rstb.2016.0206')
+    _check_domain('https://onlinelibrary.wiley.com/doi/pdf/10.1111/j.1467.x')
+    _check_domain('https://link.springer.com/content/pdf/10.1007/s123.pdf')
+    _check_domain('https://www.nature.com/articles/s41598-021-90968-z.pdf')
+
+
+def test_check_domain_allows_academic_tlds():
+    _check_domain('https://repository.upenn.edu/articles/12345/pdf')
+    _check_domain('https://eprints.ox.ac.uk/id/eprint/123/paper.pdf')
+    _check_domain('https://digitalcommons.unl.edu/psychology/123')
 
 
 def test_check_domain_allows_google_books():
-    _check_domain("https://www.googleapis.com/books/v1/volumes/abc")
+    _check_domain('https://www.googleapis.com/books/v1/volumes/abc')
 
 
 def test_check_domain_allows_unpaywall():
-    _check_domain("https://api.unpaywall.org/v2/10.1234/foo")
+    _check_domain('https://api.unpaywall.org/v2/10.1234/foo')
 
 
 def test_check_domain_blocks_unknown():
-    with pytest.raises(ValueError, match="blocked"):
-        _check_domain("https://evil.example.com/steal")
+    with pytest.raises(ValueError, match='blocked'):
+        _check_domain('https://evil.example.com/steal')
 
 
 def test_check_domain_blocks_no_host():
-    with pytest.raises(ValueError, match="blocked"):
-        _check_domain("not-a-url")
+    with pytest.raises(ValueError, match='blocked'):
+        _check_domain('not-a-url')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -401,3 +417,113 @@ def test_domain_index_idempotent():
         content = index_path.read_text()
         # idempotent: the entry for paper1/raw.md should appear exactly once
         assert content.count("- [paper1/raw.md](paper1/raw.md)") == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# End-to-End Ingestion & CLI Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.anyio
+async def test_ingest_paper_full_lifecycle(tmp_path, monkeypatch):
+    """Test full _ingest_paper pipeline with mocked PDF and metadata."""
+    import importlib.util
+    from unittest.mock import AsyncMock
+
+    server_path = Path(__file__).resolve().parent.parent / 'server.py'
+    spec = importlib.util.spec_from_file_location('research_mcp_test_mod', server_path)
+    res_server = importlib.util.module_from_spec(spec)
+    sys.modules['research_mcp_test_mod'] = res_server
+    spec.loader.exec_module(res_server)
+
+    sources_lit = tmp_path / 'sources' / 'literature'
+    state_file = tmp_path / 'sources' / 'state.json'
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(json.dumps({'version': '1.0', 'ingestion_queue': []}))
+
+    monkeypatch.setattr(res_server, 'ROOT', tmp_path)
+    monkeypatch.setattr(res_server, '_SOURCES_LIT', sources_lit)
+    monkeypatch.setattr(res_server, '_STATE_PATH', state_file)
+
+    async def mock_download_pdf(url, dest, doi=None):
+        dest.write_text('Mock PDF Content', encoding='utf-8')
+
+    monkeypatch.setattr(res_server, '_download_pdf', mock_download_pdf)
+
+    class MockMarkItDown:
+        def convert(self, path):
+            class MockResult:
+                text_content = 'Extracted full text from research paper on assertiveness and agency.'
+            return MockResult()
+
+    monkeypatch.setattr(res_server, 'MarkItDown', MockMarkItDown)
+
+    ctx = AsyncMock()
+    meta = res_server.PaperMetadata(
+        title='Empirical Study on Interpersonal Agency',
+        abstract='An abstract exploring communion and agency balance.',
+        authors=[{'name': 'Jane Doe'}, {'name': 'John Smith'}],
+        year=2024,
+        pdf_url='https://api.semanticscholar.org/paper.pdf',
+        doi='10.1000/182',
+    )
+
+    result = await res_server._ingest_paper(
+        ctx=ctx,
+        paper_id='DOI:10.1000/182',
+        filename_base='doe_2024_agency',
+        domain='social_and_behavioral/psychology',
+        meta=meta,
+    )
+
+    assert result['status'] == 'ingested'
+    assert result['queued_for_ingest'] is True
+    paper_dir = sources_lit / 'social_and_behavioral' / 'psychology' / 'doe_2024_agency'
+    assert (paper_dir / 'original.pdf').exists()
+    assert (paper_dir / 'raw.md').exists()
+    assert (paper_dir / 'metadata.md').exists()
+
+    raw_content = (paper_dir / 'raw.md').read_text()
+    assert 'Extracted full text from research paper' in raw_content
+    meta_content = (paper_dir / 'metadata.md').read_text()
+    assert 'Jane Doe' in meta_content
+
+    state_data = json.loads(state_file.read_text())
+    assert len(state_data['ingestion_queue']) == 1
+    assert state_data['ingestion_queue'][0]['id'] == 'doe_2024_agency'
+
+
+def test_cli_research_ingest_with_mock(tmp_path, monkeypatch):
+    """Test CLI cmd_research ingest flow with mocked metadata and async context."""
+    from unittest.mock import AsyncMock
+    from podarcis import cli
+    import argparse
+
+    mock_res = {
+        'success': True,
+        'paper_dir': str(tmp_path / 'paper_dir'),
+        'files': ['original.pdf', 'raw.md', 'metadata.md'],
+    }
+
+    class MockResearchServer:
+        @staticmethod
+        async def _resolve_metadata(paper_id):
+            class Meta:
+                title = 'Sample Interpersonal Paper'
+            return Meta()
+
+        @staticmethod
+        async def _ingest_paper(ctx, paper_id, filename_base, domain, meta):
+            return mock_res
+
+    monkeypatch.setitem(sys.modules, 'research_mcp_server', MockResearchServer)
+
+    args = argparse.Namespace(
+        research_action='ingest',
+        paper_id='openalex:W12345',
+        domain='social_and_behavioral/psychology',
+        name='sample_2024_paper',
+        json=False,
+    )
+
+    exit_code = cli.cmd_research(args)
+    assert exit_code == 0

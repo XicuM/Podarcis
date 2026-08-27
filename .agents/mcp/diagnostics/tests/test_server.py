@@ -3,12 +3,11 @@ import json
 import pytest
 from pathlib import Path
 
-import sys
+import importlib.util
 SERVER_DIR = Path(__file__).resolve().parent.parent
-if str(SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(SERVER_DIR))
-
-import server
+spec = importlib.util.spec_from_file_location("diagnostics_mcp_server", SERVER_DIR / "server.py")
+server = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(server)
 
 
 def test_diagnostics_mcp_tools(tmp_path, monkeypatch):
