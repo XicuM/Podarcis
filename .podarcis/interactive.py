@@ -9,10 +9,10 @@ from common import get_config_value
 from console import console, QSTYLE
 from config_wizard import (
     configure_mcp_servers, configure_skills, configure_agents, configure_jobs,
-    configure_repositories, configure_harness, configure_backend, configure_frontend,
+    configure_repositories, configure_frontend,
 )
 
-_MENU = ['MCP Servers', 'Skills', 'Agents', 'Jobs', 'Repositories', 'Harness', 'Frontend', 'Exit']
+_MENU = ['MCP Servers', 'Skills', 'Agents', 'Jobs', 'Repositories', 'Frontend', 'Exit']
 
 
 def interactive_config(root: Path) -> None:
@@ -42,6 +42,4 @@ def interactive_config(root: Path) -> None:
             case 'Agents':         configure_agents(root, style=style)
             case 'Jobs':           configure_jobs(root, style=style)
             case 'Repositories':   configure_repositories(root, style=style)
-            case 'Harness':        configure_harness(root, style=style)
-            case 'Backend':        configure_harness(root, style=style)
             case 'Frontend':       configure_frontend(root, style=style)

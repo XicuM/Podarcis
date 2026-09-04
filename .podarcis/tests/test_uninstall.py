@@ -158,7 +158,7 @@ def test_remove_config_dry_run(fake_root):
     pod_dir = fake_root / '.podarcis'
     pod_dir.mkdir(parents=True)
     cfg = pod_dir / 'config.yaml'
-    cfg.write_text('backend: opencode\n')
+    cfg.write_text('repositories: {}\n')
 
     result = uninstall._remove_config(dry_run=True)
 
@@ -171,7 +171,7 @@ def test_remove_config_live(fake_root):
     pod_dir = fake_root / '.podarcis'
     pod_dir.mkdir(parents=True)
     cfg = pod_dir / 'config.yaml'
-    cfg.write_text('backend: opencode\n')
+    cfg.write_text('repositories: {}\n')
 
     result = uninstall._remove_config(dry_run=False)
 
@@ -184,7 +184,7 @@ def test_default_does_not_remove_config(fake_root):
     pod_dir = fake_root / '.podarcis'
     pod_dir.mkdir(parents=True)
     cfg = pod_dir / 'config.yaml'
-    cfg.write_text('backend: opencode\n')
+    cfg.write_text('repositories: {}\n')
 
     # _remove_build_artefacts should NOT touch config.yaml
     uninstall._remove_build_artefacts(dry_run=False)

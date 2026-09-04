@@ -72,63 +72,6 @@ def test_cli_config_repo(tmp_path, monkeypatch):
     assert get_repo_url(tmp_path, 'wiki') == ''
 
 
-
-def test_generate_opencode_json(tmp_path, monkeypatch):
-    '''Test dynamic generation of opencode.json.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
-
-    mcp_dir = tmp_path / '.agents' / 'mcp' / 'sample'
-    mcp_dir.mkdir(parents=True)
-    (mcp_dir / 'server.py').write_text('# sample server', encoding='utf-8')
-
-    from components import generate_opencode_json
-    opencode_path = generate_opencode_json(tmp_path)
-    assert opencode_path.exists()
-
-    data = json.loads(opencode_path.read_text(encoding='utf-8'))
-    assert 'mcp' in data
-    assert 'podarcis' in data['mcp']
-    assert data['mcp']['podarcis']['enabled'] is True
-
-
-def test_generate_opencode_json_preserves_custom_config(tmp_path, monkeypatch):
-    '''Test that generate_opencode_json non-destructively preserves user custom settings.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
-
-    # Pre-populate opencode.json with custom user settings and custom MCP server
-    opencode_path = tmp_path / 'opencode.json'
-    pre_data = {
-        '$schema': 'https://opencode.ai/config.json',
-        'model': 'custom-provider/custom-model',
-        'mcp': {
-            'user-custom-mcp': {
-                'type': 'local',
-                'command': ['node', 'custom.js'],
-                'enabled': True
-            }
-        }
-    }
-    opencode_path.write_text(json.dumps(pre_data), encoding='utf-8')
-
-    mcp_dir = tmp_path / '.agents' / 'mcp' / 'sample'
-    mcp_dir.mkdir(parents=True)
-    (mcp_dir / 'server.py').write_text('# sample server', encoding='utf-8')
-
-    from components import generate_opencode_json
-    generate_opencode_json(tmp_path)
-
-    data = json.loads(opencode_path.read_text(encoding='utf-8'))
-    # Verify custom top-level key preserved
-    assert data.get('model') == 'custom-provider/custom-model'
-    # Verify custom MCP server preserved
-    assert 'user-custom-mcp' in data['mcp']
-    # Verify project-managed MCP server added
-    assert 'podarcis' in data['mcp']
-
-
-
 def test_cli_diagnose(tmp_path, monkeypatch, capsys):
     '''Test podarcis diagnose subcommand output.'''
     import cli
@@ -149,39 +92,16 @@ def test_cli_diagnose(tmp_path, monkeypatch, capsys):
     assert captured.out.strip() == '[]'
 
 
-def test_config_harness(tmp_path, monkeypatch):
-    '''Test configuring agent harness via CLI.'''
+def test_config_frontend_obsidian(tmp_path, monkeypatch):
+    '''Test configuring frontend to obsidian.'''
     import cli
+    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+
+    args = Namespace(frontend_name='obsidian')
+    res = cli.cmd_config_frontend(args)
+    assert res == 0
     from common import get_config_value
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
-
-    args = Namespace(harness_name='claude')
-    res = cli.cmd_config_harness(args)
-    assert res == 0
-    assert get_config_value(tmp_path, 'harness') == 'claude'
-
-
-def test_config_frontend_obsidian_opt_in(tmp_path, monkeypatch):
-    '''Test opt-in Obsidian plugin configuration via CLI flags.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
-
-    # 1. With --no-plugins: .obsidian/ should remain untouched
-    args_no = Namespace(frontend_name='obsidian', configure_plugins=False)
-    res = cli.cmd_config_frontend(args_no)
-    assert res == 0
-    assert not (tmp_path / '.obsidian').exists()
-
-    # 2. With --configure-plugins: Claudian plugin is configured for active harness
-    cli.cmd_config_harness(Namespace(harness_name='opencode'))
-    args_yes = Namespace(frontend_name='obsidian', configure_plugins=True)
-    res = cli.cmd_config_frontend(args_yes)
-    assert res == 0
-    obsidian_dir = tmp_path / '.obsidian'
-    assert obsidian_dir.exists()
-    assert (obsidian_dir / 'community-plugins.json').exists()
-    plugins = json.loads((obsidian_dir / 'community-plugins.json').read_text())
-    assert 'realclaudian' in plugins
+    assert get_config_value(tmp_path, 'frontend') == 'obsidian'
 
 
 

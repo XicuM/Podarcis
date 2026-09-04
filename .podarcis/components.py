@@ -7,7 +7,6 @@ from pathlib import Path
 # Local imports
 from common import load_json, save_json
 from console import console
-from harnesses import _server_name_map
 
 
 SKILLS = lambda root: root/'.agents'/'skills'
@@ -75,11 +74,11 @@ def run_mcp_setup(root: Path, name: str) -> bool:
     credentials/config.yaml).  Dependency installation is always performed
     afterwards by the caller (set_mcp_server_status / _configure_mcp_servers).
     '''
-    smap = _server_name_map(root)
-    # smap is dir_name → key; build inverse (key → dir_name) to resolve path from key
-    inv_smap = {v: k for k, v in smap.items()}
-    dir_name = inv_smap.get(name) or smap.get(name) or name
+    dir_name = name.removesuffix('-mcp')
     mcp_dir = MCPS(root)/dir_name
+    if not mcp_dir.exists():
+        mcp_dir = MCPS(root)/name
+        dir_name = name
     if not (setup_script := mcp_dir/'setup.py').exists(): return True
 
     if (req_file := mcp_dir / 'requirements.txt').exists():
@@ -232,10 +231,9 @@ def discover_components(root: Path) -> tuple[dict, dict]:
 
     mcp_servers = {}
     if (mcp_dir := root/'.agents'/'mcp').exists():
-        smap = _server_name_map(root)
         for d in mcp_dir.iterdir():
             if d.is_dir():
-                key = smap.get(d.name, d.name)
+                key = d.name if d.name.endswith('-mcp') else f'{d.name}-mcp'
                 req_file = d / 'requirements.txt'
                 server_py = d / 'server.py'
                 mtime = server_py.stat().st_mtime if server_py.exists() else 0
@@ -330,30 +328,18 @@ def discover_components(root: Path) -> tuple[dict, dict]:
 
 
 
-def generate_opencode_json(root: Path) -> Path:
-    '''Dynamically generate opencode.json. Delegates to harnesses adapter.'''
-    from harnesses import generate_for_harness
-    result = generate_for_harness(root, 'opencode')
-    return result or root / 'opencode.json'
-
-
-
 def get_enabled_mcp_servers(root: Path) -> set[str]:
     '''Retrieve set of active MCP module identifiers from .podarcis/config.yaml.'''
     from common import load_yaml
     cfg = load_yaml(root / '.podarcis' / 'config.yaml')
     mcp_mods = cfg.get('mcp_modules', {})
     enabled = set()
-    smap = _server_name_map(root)
 
     for k, v in mcp_mods.items():
         is_on = v.get('enabled', True) if isinstance(v, dict) else bool(v)
         if is_on:
             enabled.add(k)
             enabled.add(f'{k}-mcp')
-            for dir_name, mapped in smap.items():
-                if mapped == k or mapped == f'{k}-mcp':
-                    enabled.add(dir_name)
 
     # Defaults if config empty
     if not enabled:
@@ -364,8 +350,7 @@ def get_enabled_mcp_servers(root: Path) -> set[str]:
 
 def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: dict) -> None:
     '''Persist enabled state for specified MCP module in .podarcis/config.yaml.'''
-    from common import get_config_value, load_yaml, save_yaml
-    from harnesses import write_enabled, generate_for_harness
+    from common import load_yaml, save_yaml
 
     clean_key = server_key.removesuffix('-mcp')
     cfg_path = root / '.podarcis' / 'config.yaml'
@@ -377,10 +362,6 @@ def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: d
     else:
         mcp_mods[clean_key] = {'enabled': enable}
     save_yaml(cfg_path, data)
-
-    # Regenerate the active harness's config file
-    harness = get_config_value(root, 'harness', default='opencode')
-    generate_for_harness(root, harness)
 
     if enable and mcp_info.get('req'):
         install_deps(root, str(mcp_info['req']), True, f'Verifying deps for {server_key}...')
@@ -468,16 +449,4 @@ def set_agent_status(root: Path, agent_name: str, enable: bool, agent_info: dict
     agent_file.write_text(content, encoding='utf-8')
 
 
-def sync_all_harnesses(root: Path) -> dict[str, Path | None]:
-    '''Regenerate MCP config for ALL supported harnesses from canonical definitions.
-
-    Each harness's config is regenerated using its own enable/disable state.
-    Returns {harness_name: path_written} for each harness.
-    '''
-    from harnesses import generate_all
-    return generate_all(root)
-
-
-# Backward compatibility alias
-sync_all_backends = sync_all_harnesses
 

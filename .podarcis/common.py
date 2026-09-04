@@ -105,16 +105,6 @@ def get_config_value(root_dir: Path, *keys: str, default: str = '') -> str:
             break
     if isinstance(val, str) and val:
         return val
-    # Fallback between harness and backend (read sibling key directly to avoid
-    # mutual recursion when neither key is present in config.yaml).
-    if keys == ('harness',):
-        sibling = cfg.get('backend', '')
-        if isinstance(sibling, str) and sibling:
-            return sibling
-    elif keys == ('backend',):
-        sibling = cfg.get('harness', '')
-        if isinstance(sibling, str) and sibling:
-            return sibling
     return val if isinstance(val, str) else default
 
 

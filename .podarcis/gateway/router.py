@@ -65,7 +65,6 @@ DEFAULT_MCP_MODULES = {
 }
 
 DEFAULT_SKILLS = {
-    'harness': {'enabled': True},
     'self-improvement': {'enabled': True},
 }
 
@@ -90,8 +89,8 @@ def load_gateway_config(root: Path, config_path: Path | None = None) -> dict[str
 
     The three gateway sections (mcp_modules, skills, agents) are always
     returned with defaults filled in, so a fresh instance whose config.yaml
-    only holds repositories/harness/etc. still binds every core module, skill,
-    and persona. Any other top-level keys (repositories, harness, engines, …)
+    only holds repositories/engines/etc. still binds every core module, skill,
+    and persona. Any other top-level keys (repositories, engines, …)
     are carried through unchanged.
     '''
     path = config_path or (root / '.podarcis' / 'config.yaml')

@@ -32,7 +32,7 @@ graph TD
 ├── .agents/                 # Core agent personas, MCP servers, and skills
 │   ├── agents/              # Subagent personas (researcher, synthesizer, protocol-architect, auditor)
 │   ├── mcp/                 # MCP servers (wiki, research, finance, menumaker, gdrive, diagnostics, zoom2okf-mcp)
-│   └── skills/              # Domain knowledge (menumaker, harness, self-improvement, python-skill)
+│   └── skills/              # Domain knowledge (menumaker, self-improvement, python-skill)
 ├── .opencode/               # OpenCode adapter configuration
 │   └── agents -> ../.agents/agents  # Relative symlink for OpenCode subagent integration
 ├── .podarcis/               # Podarcis runtime engine, TUI CLI, jobs runner, and web server
@@ -50,7 +50,7 @@ graph TD
 
 * **Subagent Architecture**: Four specialized subagents (`Researcher`, `Synthesizer`, `Protocol Architect`, `Auditor`) auto-invoked by the primary agent based on task context.
 * **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `finance-mcp`, `menumaker`, `gdrive`, `diagnostics`, `zoom2okf-mcp`) enable literature search, knowledge base queries, nutritional math, and video processing.
-* **Modular Podarcis Engine**: The `.podarcis/` Python package provides interactive setup, CLI tools (`podarcis status`, `podarcis test`, `podarcis lint`), background jobs engine, and MCP backend configuration adapters.
+* **Modular Podarcis Engine**: The `.podarcis/` Python package provides interactive setup, CLI tools (`podarcis status`, `podarcis test`, `podarcis lint`), and background jobs engine.
 * **Hermetic Repositories**: `wiki/`, `workspace/`, and `sources/` are decoupled git repositories ensuring clear separation between objective knowledge and user privacy.
 * **Team Habitat & Multi-User Support**: Use [**PodarcisNest**](https://github.com/XicuM/PodarcisNest) for multi-user container orchestration, dynamic reverse proxying, shared OKF knowledge mounts, and Slack research bots.
 

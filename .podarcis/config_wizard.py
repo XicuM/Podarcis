@@ -14,8 +14,6 @@ from components import (
 from console import console, QSTYLE
 from repos import get_repo_names, get_repo_url, prompt_configure_repo
 
-_HARNESS_CHOICES = ['opencode', 'codex', 'agy', 'claude', 'openclaw', 'hermes', 'none']
-_BACKEND_CHOICES = _HARNESS_CHOICES
 _FRONTEND_CHOICES = ['vscode', 'obsidian', 'none']
 
 
@@ -125,28 +123,6 @@ def configure_repositories(root: Path, style=None, title=None, description=None)
         prompt_configure_repo(root, sub.split(' (', 1)[0].strip(), style=st)
 
 
-def configure_harness(root: Path, style=None, title=None, description=None) -> None:
-    _header(title, description)
-    current = get_config_value(root, 'harness', default=get_config_value(root, 'backend', default='none'))
-    harness = questionary.select(
-        'Select Agent Harness:', choices=_HARNESS_CHOICES,
-        default=current if current in _HARNESS_CHOICES else 'none', style=_style(style),
-    ).ask()
-    if not harness or harness == current:
-        return
-    set_config_value(root, harness, 'harness')
-    if harness == 'none':
-        return console.print('[bold yellow]✓ Harness set to none.[/bold yellow] MCP configuration will be skipped.')
-    from harnesses import generate_for_harness
-    from cli import _sync_claudian_plugin
-    _sync_claudian_plugin(harness)
-    generate_for_harness(root, harness)
-    console.print(f'[bold green]✓ Harness set to {harness}.[/bold green]')
-
-
-configure_backend = configure_harness
-
-
 def configure_frontend(root: Path, style=None, title=None, description=None) -> None:
     _header(title, description)
     current = get_config_value(root, 'frontend', default='none')
@@ -162,16 +138,7 @@ def configure_frontend(root: Path, style=None, title=None, description=None) -> 
         _ensure_vscode_config(root)
         console.print(f'[bold green]✓ Frontend set to vscode (VSCode config seeded).[/bold green]')
     elif frontend == 'obsidian':
-        harness = get_config_value(root, 'harness', default=get_config_value(root, 'backend', default='none'))
-        if questionary.confirm(
-            f'Configure Obsidian plugins for agentic knowledge base (Claudian plugin for harness "{harness}")?',
-            default=True, style=_style(style),
-        ).ask():
-            from cli import _sync_claudian_plugin
-            _sync_claudian_plugin(harness)
-            console.print('[bold green]✓ Claudian plugin configured for Obsidian.[/bold green]')
-        else:
-            console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green] [dim]Skipped plugin configuration.[/dim]')
+        console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green]')
     elif frontend == 'none':
         console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.')
     else:

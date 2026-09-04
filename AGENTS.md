@@ -37,7 +37,6 @@ Personas are enabled by default from git-tracked gateway defaults (`.podarcis/ga
 
 Skills (`.agents/skills/`) inject specialized domain knowledge on-demand:
 - **menumaker**: Nutritional reasoning, USDA food data, and menu optimization heuristics.
-- **harness**: Runtime state, context compaction, and permission gating utilities.
 - **zoom2okf-mcp**: Video processing to markdown OKF notes.
 - **self-improvement**: Diagnostic session analysis and platform pain-point resolution.
 
@@ -53,7 +52,7 @@ The coordination is asynchronous, mediated by the file structure:
 * **Wiki (`wiki/` repository)**: Objective, anonymized knowledge base written in OKF v0.2 format.
 * **Workspace (`workspace/` repository)**: Personal profiles, active protocols, feedback, and deliverables.
 * **Temporary Workspace (`tmp/`)**: Scratchpad operations and temporal data edits.
-* **Podarcis Engine (`.podarcis/` & `podarcis` CLI)**: Unified Python CLI and runtime engine for status inspection (`podarcis status`), configuration (`podarcis config`), backend generation (`backends.py`), multi-workspace git/gdrive syncing (`podarcis repo sync`), testing (`podarcis test`), and link linting (`podarcis lint`).
+* **Podarcis Engine (`.podarcis/` & `podarcis` CLI)**: Unified Python CLI and runtime engine for status inspection (`podarcis status`), configuration (`podarcis config`), multi-workspace git/gdrive syncing (`podarcis repo sync`), testing (`podarcis test`), and link linting (`podarcis lint`).
 
 ---
 

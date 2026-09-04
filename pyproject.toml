@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "podarcis"
-version = "2.2.0"
+version = "2.3.0"
 description = "Podarcis Open Knowledge Format (OKF v0.2) research agent engine and CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,6 +43,5 @@ pythonpath = [
     ".agents/mcp/finance",
     ".agents/mcp/research",
     ".agents/mcp/diagnostics",
-    ".agents/skills/harness/scripts",
     ".agents/skills/self-improvement/scripts"
 ]
