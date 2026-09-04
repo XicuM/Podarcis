@@ -45,7 +45,9 @@ mcp = FastMCP(
     ),
 )
 
-sys.path.insert(0, str(ROOT / ".agents" / "mcp" / "diagnostics"))
+_DIAG_DIR = Path(__file__).resolve().parent
+if str(_DIAG_DIR) not in sys.path:
+    sys.path.insert(0, str(_DIAG_DIR))
 from sanitizer import sanitize_text
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
