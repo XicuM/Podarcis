@@ -37,13 +37,13 @@ mcp = FastMCP(
     "menumaker-mcp",
     instructions=(
         "Nutritional target calculator, food nutrient search, and menu optimizer server. "
-        "Use get_intake_targets for RDA limits, search_foods/get_food_nutrients for food profile queries, "
-        "optimize_menu for linear programming cost optimization, and price_menu for market pricing."
+        "Use intake_targets for RDA limits, food_search/food_nutrients for food profile queries, "
+        "menu_optimize for linear programming cost optimization, and menu_price for market pricing."
     ),
 )
 
 @mcp.tool()
-def get_intake_targets(
+def intake_targets(
     age: Annotated[int, "Age in years"],
     gender: Annotated[Literal["male", "female"], "Biological gender"],
     stage: Annotated[Literal["adult", "child", "pregnancy", "lactation"], "Life stage"] = "adult",
@@ -66,7 +66,7 @@ def get_intake_targets(
     return "\n".join(lines)
 
 @mcp.tool()
-def search_foods(
+def food_search(
     query: Annotated[str, "Search term for food name (case-insensitive substring match)"],
     limit: Annotated[int, "Maximum results to return"] = 10,
 ) -> str:
@@ -90,7 +90,7 @@ def search_foods(
     return "\n".join(lines)
 
 @mcp.tool()
-def get_food_nutrients(
+def food_nutrients(
     food_name: Annotated[str, "Exact food name from the database"],
 ) -> str:
     """Get the full nutrient profile for a specific food from the USDA database."""
@@ -104,7 +104,7 @@ def get_food_nutrients(
     return "\n".join(lines)
 
 @mcp.tool()
-def optimize_menu(
+def menu_optimize(
     age: Annotated[int, "Age in years"],
     gender: Annotated[Literal["male", "female"], "Biological gender"],
     stage: Annotated[Literal["adult", "child", "pregnancy", "lactation"], "Life stage"] = "adult",
@@ -130,7 +130,7 @@ def optimize_menu(
     return "\n".join(lines)
 
 @mcp.tool()
-def price_menu(
+def menu_price(
     items: Annotated[dict[str, float], "Dictionary mapping food names to gram amounts"],
 ) -> str:
     """Calculate the Mercadona and Dia prices for a menu (dict of food names to grams)."""

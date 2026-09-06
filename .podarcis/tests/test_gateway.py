@@ -14,9 +14,9 @@ def test_gateway_dynamic_routing():
         tools = await mcp.list_tools()
         tool_names = [t.name for t in tools]
         assert 'wiki_search' in tool_names
-        assert 'search_literature' in tool_names
-        assert 'log_pain_point' in tool_names
-        assert 'podarcis_delegate_task' in tool_names
+        assert 'literature_search' in tool_names
+        assert 'diagnostics_log' in tool_names
+        assert 'agent_delegate' in tool_names
 
     asyncio.run(run())
 

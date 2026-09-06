@@ -50,8 +50,8 @@ def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
         except Exception:
             pass
 
-        # 2. Register Prompt: podarcis_skill_<name>
-        prompt_name = f'podarcis_skill_{skill_name.replace("-", "_")}'
+        # 2. Register Prompt: skill_<name>
+        prompt_name = f'skill_{skill_name.replace("-", "_")}'
 
         def _make_prompt_fn(text: str, name: str):
             def prompt_fn() -> str:
@@ -68,7 +68,7 @@ def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
         scripts_dir = skill_path / 'scripts'
         if scripts_dir.exists():
             for script_file in scripts_dir.glob('*.py'):
-                tool_name = f'podarcis_skill_{skill_name.replace("-", "_")}_{script_file.stem}'
+                tool_name = f'skill_{skill_name.replace("-", "_")}_{script_file.stem}'
                 if str(scripts_dir) not in sys.path:
                     sys.path.insert(0, str(scripts_dir))
                 try:

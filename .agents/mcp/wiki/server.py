@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -48,8 +49,10 @@ mcp = FastMCP(
     "wiki-mcp",
     instructions=(
         "Knowledge base querier and auditor for the agentic wiki. "
-        "Use wiki_* tools to search or retrieve documents, lint_* tools for audits. "
-        "All wiki_* tools query across wiki/ and workspace/protocols/."
+        "wiki_search finds documents, wiki_fetch batch-retrieves them, wiki_publish "
+        "commits a synthesis, wiki_lint audits, and wiki_reindex rebuilds the search "
+        "index. All wiki_* tools span wiki/, workspace/protocols/ and sources/literature/. "
+        "repo_sync synchronises the configured workspace repositories."
     ),
 )
 
@@ -84,6 +87,69 @@ def get_qmd_status() -> tuple[Literal["disabled", "enabled_ok", "enabled_broken"
     if not qmd_bin:
         return ("enabled_broken", "'qmd' binary not found in PATH.")
     return ("enabled_ok", qmd_bin)
+
+
+# Index-health cache: `qmd status` spawns a subprocess, too slow to run per search.
+_QMD_HEALTH_TTL = 300.0
+_qmd_health_cache: tuple[float, str | None] = (0.0, None)
+
+_VECTORS_RE = re.compile(r"Vectors:\s+([\d,]+)\s+embedded", re.IGNORECASE)
+_PENDING_RE = re.compile(r"Pending:\s+([\d,]+)\s+need embedding", re.IGNORECASE)
+_UPDATED_RE = re.compile(r"Updated:\s+(\d+)([smhd])\s+ago", re.IGNORECASE)
+
+
+def _parse_index_health(status_text: str) -> str | None:
+    """Return a warning for index conditions qmd does not report itself, else None.
+
+    Deliberately narrow. qmd already prints its own "N documents need embeddings"
+    notice on vsearch and query, and that text reaches the caller through _qmd(),
+    so re-detecting it here would only duplicate a warning the agent already sees.
+
+    Two conditions qmd does NOT surface:
+      * A stale index. A 25-day-old index answers queries with no warning at all,
+        which is how this repo searched a month-old snapshot of the wiki without
+        noticing (diag-1787825572).
+      * Zero embeddings. qmd downgrades this to "for better results", but with no
+        vectors at all semantic and hybrid search do not work — a severity worth
+        restating, since the caller otherwise treats the results as vector-backed.
+    """
+    m = _VECTORS_RE.search(status_text)
+    vectors = int(m.group(1).replace(",", "")) if m else None
+    if vectors == 0:
+        p = _PENDING_RE.search(status_text)
+        pending = int(p.group(1).replace(",", "")) if p else 0
+        return (
+            f"QMD index has NO embeddings ({pending} documents pending). Semantic and "
+            "hybrid search cannot work — results below are keyword-only. Run `qmd embed`."
+        )
+
+    u = _UPDATED_RE.search(status_text)
+    if u:
+        amount, unit = int(u.group(1)), u.group(2).lower()
+        days = {"s": 0, "m": 0, "h": amount / 24.0, "d": amount}[unit]
+        if days >= 7:
+            return (
+                f"QMD index was last updated {amount}{unit} ago and may not reflect "
+                "recent edits — run `qmd update`."
+            )
+
+    return None
+
+
+async def _qmd_index_warning() -> str | None:
+    """Cached index-health warning, or None when the index is healthy."""
+    global _qmd_health_cache
+    now = time.monotonic()
+    checked_at, cached = _qmd_health_cache
+    if now - checked_at < _QMD_HEALTH_TTL:
+        return cached
+    try:
+        text = await _qmd("status")
+        warning = _parse_index_health(text)
+    except Exception as exc:
+        warning = f"QMD index health could not be determined ({exc})."
+    _qmd_health_cache = (now, warning)
+    return warning
 
 
 async def _native_search(
@@ -238,7 +304,14 @@ async def wiki_search(
         args.append("--no-rerank")
 
     try:
-        return await _qmd(*args)
+        result = await _qmd(*args)
+        # A healthy binary does not imply a usable index — check before the caller
+        # treats vector-backed results as authoritative.
+        if method in ("semantic", "hybrid") or hyde:
+            health = await _qmd_index_warning()
+            if health:
+                return f"⚠️ {health}\n\n{result}"
+        return result
     except Exception as e:
         warning = (
             f"⚠️ WARNING: QMD Vector DB execution failed ({e}).\n"
@@ -246,7 +319,6 @@ async def wiki_search(
         )
         native_res = await _native_search(query, collection=collection, limit=limit)
         return warning + native_res
-
 
 # wiki_vsearch: deprecated — use wiki_search(method='semantic') instead.
 # Kept as an internal helper; NOT registered as an MCP tool.
@@ -276,63 +348,9 @@ async def wiki_query(
     return await wiki_search(query, collection=collection, method="hybrid", min_score=min_score)
 
 
-@mcp.tool()
-async def wiki_get(
-    path: Annotated[
-        str,
-        "Relative path or filename (e.g. 'sargantana_core.md' or 'wiki/riscv_cores/sargantana_core.md').",
-    ],
-    start_line: Annotated[int | None, "1-indexed starting line number for slicing content"] = None,
-    num_lines: Annotated[int | None, "Maximum number of lines to retrieve starting from start_line"] = None,
-) -> str:
-    """Retrieve content of a document by its relative path or filename, with optional line range slicing."""
-    resolved_path = Path(path)
-    if resolved_path.is_absolute():
-        try:
-            resolved_path = resolved_path.relative_to(ROOT)
-        except ValueError:
-            pass
-
-    full_target = ROOT / resolved_path
-    target_file = None
-
-    if full_target.is_file():
-        target_file = full_target
-    else:
-        name_query = resolved_path.name
-        matches = []
-        for search_dir in ["wiki", "workspace/protocols", "user/protocols", "sources/literature"]:
-            dir_path = ROOT / search_dir
-            if dir_path.exists():
-                matches.extend(list(dir_path.rglob(f"*{name_query}*")))
-
-        matches = sorted(list(set([m for m in matches if m.is_file()])))
-        if len(matches) == 1:
-            target_file = matches[0]
-        elif len(matches) > 1:
-            options = "\n".join([f"- {m.relative_to(ROOT)}" for m in matches])
-            return f"Error: Multiple files matched '{path}'. Please specify the exact path:\n{options}"
-        else:
-            return f"Error: File '{path}' not found."
-
-    try:
-        content = target_file.read_text(encoding="utf-8")
-        if start_line is not None or num_lines is not None:
-            lines = content.splitlines()
-            total_lines = len(lines)
-            s_idx = max(0, (start_line or 1) - 1)
-            n_len = num_lines if num_lines is not None else (total_lines - s_idx)
-            e_idx = min(total_lines, s_idx + n_len)
-            sliced = lines[s_idx:e_idx]
-            header = f"<!-- {target_file.relative_to(ROOT)} [Lines {s_idx+1}-{e_idx} of {total_lines}] -->\n"
-            return header + "\n".join(sliced)
-        return content
-    except Exception as e:
-        return f"Error reading file '{target_file.relative_to(ROOT)}': {e}"
-
 
 @mcp.tool()
-async def wiki_multi_get(
+async def wiki_fetch(
     pattern: Annotated[
         str,
         "Glob pattern (e.g. 'wiki/nutrition/*.md') or relative file path pattern to batch fetch.",
@@ -371,7 +389,7 @@ async def wiki_multi_get(
 
 
 @mcp.tool()
-async def wiki_update_index() -> str:
+async def wiki_reindex() -> str:
     """Rebuild the qmd semantic index and refresh collection context summaries."""
     status, info = get_qmd_status()
     if status == "disabled":
@@ -414,8 +432,8 @@ async def wiki_update_index() -> str:
 
 
 @mcp.tool()
-async def complete_source_synthesis(
-    queue_id: Annotated[str, "The source ID being synthesized (e.g., 'smith_2023_protein_synthesis') — must match a `[^queue_id]:` footnote in `content` so `research-mcp_queue_list` picks up the citation and reports this source as 'done'."],
+async def wiki_publish(
+    queue_id: Annotated[str, "The source ID being synthesized (e.g., 'smith_2023_protein_synthesis') — must match a `[^queue_id]:` footnote in `content` so `literature_status` picks up the citation and reports this source as 'done'."],
     wiki_path: Annotated[str, "Target file path to write the synthesis (relative to PROJECT_ROOT, e.g. 'wiki/nutrition/protein.md')"],
     content: Annotated[str, "Markdown content to write to the wiki file"],
     category: Annotated[str, "YAML frontmatter category (e.g., 'nutrition')"],
@@ -425,7 +443,7 @@ async def complete_source_synthesis(
 ) -> str:
     """Atomic transaction tool: Writes wiki page with standard frontmatter, updates search index,
     and runs link audits. There is no separate queue to mark 'done' — as long as `content`
-    contains a `[^queue_id]:` footnote, `research-mcp_queue_list` will report this source's
+    contains a `[^queue_id]:` footnote, `literature_status` will report this source's
     status as 'done' on its next call, derived live from the citation."""
     target_file = ROOT / wiki_path
 
@@ -452,7 +470,7 @@ async def complete_source_synthesis(
         return f"Error writing wiki file: {e}"
 
     # 4. Sanity-check that the wiki page actually cites queue_id — otherwise
-    #    queue_list will keep reporting this source as 'pending' after this call,
+    #    literature_status will keep reporting this source as 'pending' after this call,
     #    which would silently defeat the point of calling this tool.
     queue_id_cited = bool(re.search(rf'^\[\^{re.escape(queue_id)}\]:', content, re.MULTILINE))
 
@@ -477,10 +495,10 @@ async def complete_source_synthesis(
         audit_res = f"Link checker error: {e}"
 
     queue_note = (
-        f"✓ '{queue_id}' is cited — research-mcp_queue_list will report it as 'done'."
+        f"✓ '{queue_id}' is cited — literature_status will report it as 'done'."
         if queue_id_cited else
         f"⚠️ WARNING: content has no '[^{queue_id}]:' footnote — "
-        f"research-mcp_queue_list will still report '{queue_id}' as 'pending'."
+        f"literature_status will still report '{queue_id}' as 'pending'."
     )
     res_summary = (
         f"✓ Successfully wrote wiki page to: {wiki_path}\n"
@@ -497,7 +515,7 @@ async def complete_source_synthesis(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-async def sync_workspaces(
+async def repo_sync(
     action: Annotated[
         str,
         "Action to perform: 'pull' (sync/pull remotes and gdrive), 'push' (push local commits to remotes), or 'all'.",
@@ -534,7 +552,7 @@ async def sync_workspaces(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-async def lint_check_links(
+async def wiki_lint(
     scope_path: Annotated[
         str,
         "Directory or file to audit (relative to PROJECT_ROOT, e.g. 'wiki/' or 'wiki/nutrition/').",

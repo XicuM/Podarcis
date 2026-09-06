@@ -6,7 +6,7 @@ Provides typed async tools for:
     sources/ directory structure — all natively in async Python with httpx, no
     subprocess boundary.
   - Inspecting synthesis status of ingested sources, derived live from disk (see
-    `queue_list` / `_synthesis_status`) rather than from a hand-maintained manifest.
+    `literature_status` / `_synthesis_status`) rather than from a hand-maintained manifest.
 
 Set PROJECT_ROOT env var to the repository root.
 """
@@ -102,9 +102,9 @@ mcp = FastMCP(
     'research-mcp',
     instructions=(
         'Literature discovery and ingestion server. '
-        'Use search_literature to find papers across multiple academic providers. '
-        'Use download_paper to fetch, extract, and ingest them (PDF → raw.md → metadata.md). '
-        'Use queue_list to check synthesis status — it is derived live by checking whether '
+        'Use literature_search to find papers across multiple academic providers. '
+        'Use literature_download to fetch, extract, and ingest them (PDF → raw.md → metadata.md). '
+        'Use literature_status to check synthesis status — it is derived live by checking whether '
         'each source id is cited (as a `[^id]:` footnote) anywhere in wiki/ or workspace/, '
         'not read from a manifest, so it can never drift stale. '
         'The literature directory location depends on sources_backend in .podarcis/config.yaml: '
@@ -509,7 +509,7 @@ async def _resolve_metadata(paper_id: str) -> PaperMetadata:
     
     if not has_prefix and not is_hex_id:
         print(f"Title or search query detected: '{paper_id}'. Searching literature...")
-        search_results = await search_literature(paper_id, limit=1)
+        search_results = await literature_search(paper_id, limit=1)
         if search_results:
             first_paper = search_results[0]
             resolved_id = first_paper.get("paperId")
@@ -819,7 +819,7 @@ async def _ingest_paper(
         'status': 'ingested',
         'paper_dir': rel_paper_dir,
         'files': ['original.pdf', 'raw.md', 'metadata.md'],
-        'queued_for_ingest': False,  # synthesis status is now derived live — see queue_list
+        'queued_for_ingest': False,  # synthesis status is now derived live — see literature_status
     }
 
 
@@ -933,7 +933,7 @@ async def _search_pubmed_direct(query: str, limit: int = 5) -> list[dict]:
 
 
 @mcp.tool()
-async def search_literature(
+async def literature_search(
     query: Annotated[str, "Search query (title keywords, topic, author name, etc.)"],
     limit: Annotated[int, "Maximum number of results to return (default 5)"] = 5,
     provider: Annotated[
@@ -983,7 +983,7 @@ async def search_literature(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-async def download_paper(
+async def literature_download(
     ctx: Context,
     paper_id: Annotated[
         str,
@@ -1016,7 +1016,7 @@ async def download_paper(
     Returns paths to the created files. The agent should then git commit.
     On any error, the partial directory is removed rather than left as a stub — see
     CLAUDE.md §No Stubs. Synthesis status is not tracked here; check it later with
-    `queue_list`, which derives it live from wiki/workspace citations.
+    `literature_status`, which derives it live from wiki/workspace citations.
     """
     # Sanitise filename_base
     if re.search(r"[/\\.]", filename_base):
@@ -1100,7 +1100,7 @@ def _synthesis_status(root: Path, sources_lit: Path) -> list[dict]:
 
 
 @mcp.tool()
-async def queue_list(
+async def literature_status(
     status: Annotated[
         Literal["pending", "done", "all"],
         "Filter by synthesis status (default: all)",

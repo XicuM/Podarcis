@@ -45,8 +45,8 @@ def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
         except Exception:
             pass
 
-        # 2. Register Prompt: podarcis_agent_<name>
-        prompt_name = f'podarcis_agent_{agent_name.replace("-", "_")}'
+        # 2. Register Prompt: agent_<name>
+        prompt_name = f'agent_{agent_name.replace("-", "_")}'
 
         def _make_prompt_fn(text: str, name: str):
             def prompt_fn() -> str:
@@ -59,8 +59,8 @@ def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
         except Exception:
             pass
 
-    # 3. Register Delegation Tool: podarcis_delegate_task
-    @mcp.tool(name='podarcis_delegate_task')
+    # 3. Register Delegation Tool: agent_delegate
+    @mcp.tool(name='agent_delegate')
     def delegate_task(
         agent: Annotated[str, "Target subagent persona name (e.g. 'researcher', 'synthesizer', 'protocol-architect', 'auditor')"],
         task: Annotated[str, "Clear, specific task prompt to delegate to the subagent"],
@@ -72,16 +72,22 @@ def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
 
         persona_prompt = _REGISTERED_AGENTS[agent]
         return (
-            f"=== DELEGATED TASK TO AGENT [{agent}] ===\n"
-            f"Persona Context Loaded ({len(persona_prompt)} chars).\n"
+            f"=== DELEGATED TASK: ADOPT PERSONA [{agent}] ===\n"
+            f"This MCP tool cannot spawn an isolated subagent process itself. "
+            f"To execute this delegation, adopt the persona below as your operating "
+            f"instructions for the remainder of this task, then carry out the task.\n\n"
             f"Task: {task}\n\n"
-            f"System Prompt:\n{persona_prompt[:500]}...\n"
+            f"=== Persona System Prompt ({len(persona_prompt)} chars) ===\n{persona_prompt}\n"
+            f"=== End Persona System Prompt ===\n\n"
+            f"Note: on Claude Code, prefer the native Agent tool with "
+            f"subagent_type: \"{agent}\" instead of this tool — it runs the persona "
+            f"in an isolated context rather than folding it into the current one."
         )
 
 def unregister(mcp) -> None:
     '''Unregister agent delegation tools.'''
     _REGISTERED_AGENTS.clear()
     try:
-        mcp.remove_tool('podarcis_delegate_task')
+        mcp.remove_tool('agent_delegate')
     except Exception:
         pass

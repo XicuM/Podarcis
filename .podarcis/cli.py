@@ -509,7 +509,7 @@ def cmd_research(args: argparse.Namespace) -> int:
         query = args.query
         limit = getattr(args, 'limit', 5)
         provider = getattr(args, 'provider', 'all')
-        results = asyncio.run(research_server.search_literature(query=query, limit=limit, provider=provider))
+        results = asyncio.run(research_server.literature_search(query=query, limit=limit, provider=provider))
         if getattr(args, 'json', False):
             print(json.dumps(results, indent=2))
             return 0

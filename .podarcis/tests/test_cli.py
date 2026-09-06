@@ -138,7 +138,7 @@ def test_cli_research_search_json(capsys, monkeypatch):
     async def fake_search(query, limit=5, provider='all'):
         return [{'paperId': 'test:123', 'title': 'Test Paper', 'year': 2024}]
 
-    monkeypatch.setattr(research_server, 'search_literature', fake_search)
+    monkeypatch.setattr(research_server, 'literature_search', fake_search)
 
     args = Namespace(research_action='search', query='test', limit=2, provider='all', json=True)
     res = cli.cmd_research(args)

@@ -73,11 +73,10 @@ Add the following to your MCP host configuration (e.g., `~/.config/claude/claude
 
 **Tools**
 - `wiki_search` - Consolidated search (hybrid, semantic vector, keyword BM25, HyDE passage search, `--explain` score traces).
-- `wiki_get` - Retrieve document content by path with optional line slicing (`start_line`, `num_lines`).
-- `wiki_multi_get` - Batch pattern snippet retrieval across wiki, protocols, or sources.
-- `wiki_update_index` - Rebuild QMD semantic index and auto-sync folder context summaries.
-- `complete_source_synthesis` - Atomic synthesis transaction (frontmatter format, queue done status, index rebuild, link audit).
-- `lint_check_links` - Audit broken links, YAML frontmatter schemas, directory bloat, and footnotes.
+- `wiki_fetch` - Batch pattern snippet retrieval across wiki, protocols, or sources.
+- `wiki_reindex` - Rebuild QMD semantic index and auto-sync folder context summaries.
+- `wiki_publish` - Atomic synthesis transaction (frontmatter format, queue done status, index rebuild, link audit).
+- `wiki_lint` - Audit broken links, YAML frontmatter schemas, directory bloat, and footnotes.
 
 **Resources**
 - `wiki://collections/wiki` - Directory listing of the wiki.
@@ -87,9 +86,9 @@ Add the following to your MCP host configuration (e.g., `~/.config/claude/claude
 ### research-mcp
 
 **Tools**
-- `search_literature` - Search 19+ providers via academic-mcp.
-- `download_paper` - Fetch metadata → PDF → markitdown → `sources/literature/<domain>/<id>/`.
-- `queue_list` - List ingested sources with synthesis status, derived live by checking
+- `literature_search` - Search 19+ providers via academic-mcp.
+- `literature_download` - Fetch metadata → PDF → markitdown → `sources/literature/<domain>/<id>/`.
+- `literature_status` - List ingested sources with synthesis status, derived live by checking
   whether each source's id is cited as a `[^id]:` footnote anywhere in `wiki/` or
   `workspace/`. There is no manifest to enqueue/dequeue — status can't drift stale
   because it's recomputed from the citation graph on every call.
@@ -112,5 +111,5 @@ Add the following to your MCP host configuration (e.g., `~/.config/claude/claude
 
 - **Transport**: All servers communicate via standard `stdio`.
 - **Stateless**: Servers are stateless. Git commits are always the agent's responsibility.
-- **No Fabrication**: `search_literature` returns empty lists if no results are found; never hallucinates papers.
-- **Strict Ingestion**: `download_paper` halts on failure and cleans up; agents must provide PDFs manually (`local:<path>`) if open-access fetching fails.
+- **No Fabrication**: `literature_search` returns empty lists if no results are found; never hallucinates papers.
+- **Strict Ingestion**: `literature_download` halts on failure and cleans up; agents must provide PDFs manually (`local:<path>`) if open-access fetching fails.

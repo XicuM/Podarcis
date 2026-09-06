@@ -27,7 +27,7 @@ Before starting synthesis, check `.podarcis/state.yaml` or `.podarcis/config.yam
 
 ## Workflow
 
-1. **Discovery**: Call `research-mcp_queue_list(status='pending')` (or read the Google Drive manifest if using the GDrive backend) to find ingested sources not yet cited anywhere in `wiki/` — status is derived live from the citation graph, not from a hand-maintained queue. Read the corresponding raw source files and target directory `_index.md` files.
+1. **Discovery**: Call `literature_status(status='pending')` (or read the Google Drive manifest if using the GDrive backend) to find ingested sources not yet cited anywhere in `wiki/` — status is derived live from the citation graph, not from a hand-maintained queue. Read the corresponding raw source files and target directory `_index.md` files.
 2. **Synthesize into `wiki/`**:
    - **Content Rules**: Document findings, context/limitations, and conflicting evidence. Use callouts (`> ⚠️`) for confidence markers (**Strong consensus**, **Moderate evidence**, **Preliminary/Contested**), limitations, or single-source pages (`> ⚠️ This page relies on a single source.`).
    - **Authentic Sources Only**: Only ingest from verified source files. Never synthesize from unverified sources.
@@ -38,12 +38,12 @@ Before starting synthesis, check `.podarcis/state.yaml` or `.podarcis/config.yam
 3. **Audit Bloat**: Check target directory for >15 content files (excluding `_index.md`). If exceeded, restructure into subdirectories.
 4. **Indices & Clean Up**:
    - Update target `_index.md` files with one-line summaries.
-   - **Knowledge Lineage**: There is no separate lineage manifest to update — the `[^source_id]:` footnote you just wrote into the wiki page *is* the provenance record, and it's what flips `research-mcp_queue_list`'s status for that source from `pending` to `done` on the next call. Nothing further to do here.
-   - Run `wiki-mcp_wiki_update_index` to rebuild the semantic index.
-   - Run `wiki-mcp_lint_check_links` or `podarcis lint` to validate frontmatter and links.
+   - **Knowledge Lineage**: There is no separate lineage manifest to update — the `[^source_id]:` footnote you just wrote into the wiki page *is* the provenance record, and it's what flips `literature_status`'s status for that source from `pending` to `done` on the next call. Nothing further to do here.
+   - Run `wiki_reindex` to rebuild the semantic index.
+   - Run `wiki_lint` or `podarcis lint` to validate frontmatter and links.
 5. **Multi-Agent Verification & Critique Loop**:
    - Submit updated wiki file paths to the `@auditor` subagent for automated machine verification.
    - **Remediation Handling**: If `@auditor` returns a `FAILED` verdict with a remediation payload, immediately parse the listed `issues` and apply surgical fixes. Re-submit to `@auditor` until `verified:` sign-off is achieved.
    - Commit in the `wiki/` and `sources/` decoupled repositories with a descriptive commit message.
 6. **Diagnostic Logging**:
-   - If `diagnostics-mcp` is active and you encounter tool failures, schema errors, user corrections, or synthesis outputs that fail to meet user expectations, invoke `log_pain_point` (`diagnostics-mcp`) into `.podarcis/diagnostics/pain_points.jsonl`.
+   - If `diagnostics-mcp` is active and you encounter tool failures, schema errors, user corrections, or synthesis outputs that fail to meet user expectations, invoke `diagnostics_log` (`diagnostics-mcp`) into `.podarcis/diagnostics/pain_points.jsonl`.

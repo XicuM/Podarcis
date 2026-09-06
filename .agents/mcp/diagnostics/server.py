@@ -40,8 +40,8 @@ mcp = FastMCP(
     "diagnostics-mcp",
     instructions=(
         "Platform diagnostic logger and issue inspector. "
-        "Call log_pain_point whenever you encounter tool errors, execution failures, user corrections, or results that fail to meet user expectations. "
-        "Call get_pain_points to retrieve active issues when instructed to improve the platform."
+        "Call diagnostics_log whenever you encounter tool errors, execution failures, user corrections, or results that fail to meet user expectations. "
+        "Call diagnostics_list to retrieve active issues when instructed to improve the platform."
     ),
 )
 
@@ -53,7 +53,7 @@ from sanitizer import sanitize_text
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def log_pain_point(
+def diagnostics_log(
     category: Annotated[str, "Issue category: command_failure, execution_error, user_correction, or friction"],
     summary: Annotated[str, "Single-line summary of the pain point, user correction, or unmet expectation"],
     details: Annotated[str, "Optional detailed error traceback, output context, or user guidance"] = "",
@@ -85,7 +85,7 @@ def log_pain_point(
 
 
 @mcp.tool()
-def get_pain_points(
+def diagnostics_list(
     category: Annotated[str, "Optional category filter (e.g. command_failure, user_correction)"] = "",
 ) -> str:
     """Retrieve all active, unresolved platform pain points from .podarcis/diagnostics/."""
@@ -114,7 +114,7 @@ def get_pain_points(
 
 
 @mcp.tool()
-def clear_pain_points() -> str:
+def diagnostics_clear() -> str:
     """Mark all recorded platform pain points as resolved."""
     _ensure_dirs()
     if not PAIN_POINTS_FILE.exists():

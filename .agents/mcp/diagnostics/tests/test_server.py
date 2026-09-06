@@ -11,13 +11,13 @@ spec.loader.exec_module(server)
 
 
 def test_diagnostics_mcp_tools(tmp_path, monkeypatch):
-    """Test log_pain_point, get_pain_points, and clear_pain_points tools."""
+    """Test diagnostics_log, diagnostics_list, and diagnostics_clear tools."""
     monkeypatch.setattr(server, "ROOT", tmp_path)
     monkeypatch.setattr(server, "DIAGNOSTICS_DIR", tmp_path / ".podarcis" / "diagnostics")
     monkeypatch.setattr(server, "PAIN_POINTS_FILE", tmp_path / ".podarcis" / "diagnostics" / "pain_points.jsonl")
 
     # 1. Log issue
-    res = server.log_pain_point(
+    res = server.diagnostics_log(
         category="command_failure",
         summary="Pytest command failed",
         details="Exit code 1",
@@ -26,21 +26,21 @@ def test_diagnostics_mcp_tools(tmp_path, monkeypatch):
     assert "Successfully logged pain point" in res
 
     # 2. Get active issues
-    issues_str = server.get_pain_points()
+    issues_str = server.diagnostics_list()
     assert "Pytest command failed" in issues_str
     issues = json.loads(issues_str)
     assert len(issues) == 1
     assert issues[0]["category"] == "command_failure"
 
     # 3. Filter by category
-    assert "No active platform pain points found" in server.get_pain_points(category="user_correction")
+    assert "No active platform pain points found" in server.diagnostics_list(category="user_correction")
 
     # 4. Clear issues
-    clear_res = server.clear_pain_points()
+    clear_res = server.diagnostics_clear()
     assert "Marked 1 platform pain point(s) as resolved" in clear_res
 
     # 5. Verify empty
-    assert "No active platform pain points found" in server.get_pain_points()
+    assert "No active platform pain points found" in server.diagnostics_list()
 
 
 def test_diagnostics_sanitization(tmp_path, monkeypatch):
@@ -52,13 +52,13 @@ def test_diagnostics_sanitization(tmp_path, monkeypatch):
     raw_summary = "Failed accessing /home/xicu/secret.key with api_key=sk-1234567890abcdef1234567890"
     raw_details = f"File in {tmp_path}/workspace/secret.md leaked user@example.com with Bearer abcdef1234567890abcdef1234567890"
 
-    server.log_pain_point(
+    server.diagnostics_log(
         category="execution_error",
         summary=raw_summary,
         details=raw_details,
     )
 
-    issues = json.loads(server.get_pain_points())
+    issues = json.loads(server.diagnostics_list())
     logged = issues[0]
 
     # Verify no raw sensitive data leaked
