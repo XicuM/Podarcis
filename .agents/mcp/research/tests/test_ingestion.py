@@ -1,12 +1,11 @@
 """Tests for research-mcp ingestion pipeline: path resolution, text sanitization,
-domain validation, state.json CRUD, and queue operations.
+domain validation, and derived synthesis status.
 
 All tests operate on temp directories without importing the full server module
-(which has FastMCP/httpx dependencies). Queue operations are tested directly
-against state.json file contents.
+(which has FastMCP/httpx dependencies), except where the module is loaded directly
+via importlib for end-to-end pipeline tests.
 """
 
-import json
 import os
 import re
 import sys
@@ -18,11 +17,11 @@ import yaml
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Backend-aware path resolution (mirrors server._resolve_sources_paths)
+# Backend-aware path resolution (mirrors server._resolve_sources_lit)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _resolve_sources_paths(root: Path):
-    """Replicate server._resolve_sources_paths logic for testing."""
+def _resolve_sources_lit(root: Path) -> Path:
+    """Replicate server._resolve_sources_lit logic for testing."""
     pod_yaml = root / ".podarcis" / "config.yaml"
     backend = "gdrive"
     if pod_yaml.exists():
@@ -32,8 +31,8 @@ def _resolve_sources_paths(root: Path):
         except Exception:
             pass
     if backend != "gdrive":
-        return root / "sources" / "state.json", root / "sources" / "literature"
-    return root / "workspace" / "state.json", root / "workspace" / "literature"
+        return root / "sources" / "literature"
+    return root / "workspace" / "literature"
 
 
 def test_resolve_paths_gdrive():
@@ -45,8 +44,7 @@ def test_resolve_paths_gdrive():
             yaml.safe_dump({"repositories": {"sources": "gdrive"}}),
             encoding="utf-8",
         )
-        state_path, sources_lit = _resolve_sources_paths(root)
-        assert "workspace" in str(state_path)
+        sources_lit = _resolve_sources_lit(root)
         assert "workspace" in str(sources_lit)
 
 
@@ -59,8 +57,7 @@ def test_resolve_paths_local():
             yaml.safe_dump({"repositories": {"sources": "local"}}),
             encoding="utf-8",
         )
-        state_path, sources_lit = _resolve_sources_paths(root)
-        assert "sources" in str(state_path)
+        sources_lit = _resolve_sources_lit(root)
         assert "sources" in str(sources_lit)
 
 
@@ -75,16 +72,14 @@ def test_resolve_paths_git_url():
             ),
             encoding="utf-8",
         )
-        state_path, sources_lit = _resolve_sources_paths(root)
-        assert "sources" in str(state_path)
+        sources_lit = _resolve_sources_lit(root)
         assert "sources" in str(sources_lit)
 
 
 def test_resolve_paths_default_when_no_config():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        state_path, sources_lit = _resolve_sources_paths(root)
-        assert "workspace" in str(state_path)
+        sources_lit = _resolve_sources_lit(root)
         assert "workspace" in str(sources_lit)
 
 
@@ -194,152 +189,158 @@ def test_check_domain_blocks_no_host():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# State JSON / queue CRUD (direct file manipulation tests)
+# Derived synthesis status (mirrors server._cited_source_ids / _synthesis_status)
+#
+# Replaces the old sources/state.json queue: instead of a hand-maintained "status"
+# field that has to be kept in sync by enqueue/dequeue calls (and in practice
+# drifted stale — an audit found 73/82 real entries still "pending" despite
+# already being cited in wiki/), status is derived live from whether the source's
+# id appears as a `[^id]:` footnote definition anywhere in wiki/ or workspace/.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_state_json_empty_enqueue():
+_FOOTNOTE_DEF_RE = re.compile(r'^\[\^([A-Za-z0-9_\-]+)\]:', re.MULTILINE)
+
+
+def _cited_source_ids(root: Path) -> set:
+    """Replicate server._cited_source_ids logic for testing."""
+    cited = set()
+    for base_name in ("wiki", "workspace"):
+        base = root / base_name
+        if not base.exists():
+            continue
+        for md_file in base.rglob("*.md"):
+            cited.update(_FOOTNOTE_DEF_RE.findall(md_file.read_text(encoding="utf-8")))
+    return cited
+
+
+def _synthesis_status(root: Path, sources_lit: Path) -> list:
+    """Replicate server._synthesis_status logic for testing."""
+    if not sources_lit.exists():
+        return []
+    cited = _cited_source_ids(root)
+    items = []
+    for meta_path in sorted(sources_lit.rglob("metadata.md")):
+        paper_dir = meta_path.parent
+        if not (paper_dir / "raw.md").exists() or not (paper_dir / "original.pdf").exists():
+            continue
+        source_id = paper_dir.name
+        items.append({"id": source_id, "status": "done" if source_id in cited else "pending"})
+    return items
+
+
+def _make_source(sources_lit: Path, domain: str, source_id: str, full: bool = True):
+    """Create a fake ingested source directory under sources_lit/domain/source_id/."""
+    paper_dir = sources_lit / domain / source_id
+    paper_dir.mkdir(parents=True)
+    (paper_dir / "metadata.md").write_text(f'---\ntitle: "{source_id}"\n---\n', encoding="utf-8")
+    if full:
+        (paper_dir / "raw.md").write_text("body", encoding="utf-8")
+        (paper_dir / "original.pdf").write_bytes(b"%PDF-1.4")
+    return paper_dir
+
+
+def test_cited_source_ids_finds_footnote_in_wiki():
     with tempfile.TemporaryDirectory() as tmp:
-        state_file = Path(tmp) / "state.json"
-        # Initial empty state
-        state = {"version": "1.0", "ingestion_queue": []}
-        state_file.write_text(json.dumps(state, indent=2))
-
-        # Enqueue
-        entry = {
-            "id": "paper_2025",
-            "type": "Literature",
-            "path": "sources/lit/domain/paper/raw.md",
-            "summary": "Test Paper — abstract",
-            "enqueued_at": "2025-01-01T00:00:00",
-            "status": "pending",
-            "tags": ["testing"],
-        }
-        state = json.loads(state_file.read_text())
-        state["ingestion_queue"].append(entry)
-        state_file.write_text(json.dumps(state, indent=2))
-
-        loaded = json.loads(state_file.read_text())
-        assert len(loaded["ingestion_queue"]) == 1
-        assert loaded["ingestion_queue"][0]["id"] == "paper_2025"
-        assert loaded["ingestion_queue"][0]["status"] == "pending"
+        root = Path(tmp)
+        wiki = root / "wiki"
+        wiki.mkdir()
+        (wiki / "page.md").write_text(
+            "Some claim[^smith_2024].\n\n[^smith_2024]: [Smith (2024).](../sources/x.md)\n",
+            encoding="utf-8",
+        )
+        assert _cited_source_ids(root) == {"smith_2024"}
 
 
-def test_state_json_duplicate_id_rejected():
+def test_cited_source_ids_ignores_inline_reference_marker():
+    """An inline [^id] reference with no matching definition line must not count as cited —
+    only the `[^id]:` *definition* is the OKF-required citation."""
     with tempfile.TemporaryDirectory() as tmp:
-        state_file = Path(tmp) / "state.json"
-        state = {
-            "version": "1.0",
-            "ingestion_queue": [
-                {
-                    "id": "dup",
-                    "type": "Literature",
-                    "path": "first.md",
-                    "summary": "First",
-                    "enqueued_at": "2025-01-01T00:00:00",
-                    "status": "pending",
-                    "tags": ["a"],
-                }
-            ],
-        }
-        state_file.write_text(json.dumps(state, indent=2))
-
-        # Attempt duplicate
-        data = json.loads(state_file.read_text())
-        existing = [i for i in data["ingestion_queue"] if i["id"] == "dup"]
-        assert len(existing) == 1
-        assert existing[0]["path"] == "first.md"
+        root = Path(tmp)
+        wiki = root / "wiki"
+        wiki.mkdir()
+        (wiki / "page.md").write_text("Some claim[^smith_2024], no definition below.\n", encoding="utf-8")
+        assert _cited_source_ids(root) == set()
 
 
-def test_state_json_dequeue_removes_item():
+def test_cited_source_ids_checks_workspace_too():
     with tempfile.TemporaryDirectory() as tmp:
-        state_file = Path(tmp) / "state.json"
-        state = {
-            "version": "1.0",
-            "ingestion_queue": [
-                {
-                    "id": "keep",
-                    "type": "Literature",
-                    "path": "keep.md",
-                    "summary": "Keep",
-                    "enqueued_at": "2025-01-01T00:00:00",
-                    "status": "pending",
-                    "tags": ["x"],
-                },
-                {
-                    "id": "remove",
-                    "type": "Literature",
-                    "path": "remove.md",
-                    "summary": "Remove",
-                    "enqueued_at": "2025-01-01T00:00:00",
-                    "status": "done",
-                    "tags": ["x"],
-                },
-            ],
-        }
-        state_file.write_text(json.dumps(state, indent=2))
-
-        data = json.loads(state_file.read_text())
-        data["ingestion_queue"] = [
-            i for i in data["ingestion_queue"] if i["id"] != "remove"
-        ]
-        state_file.write_text(json.dumps(data, indent=2))
-
-        loaded = json.loads(state_file.read_text())
-        assert len(loaded["ingestion_queue"]) == 1
-        assert loaded["ingestion_queue"][0]["id"] == "keep"
+        root = Path(tmp)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        (workspace / "protocol.md").write_text(
+            "[^doe_2023]: [Doe (2023).](../wiki/x.md)\n", encoding="utf-8"
+        )
+        assert _cited_source_ids(root) == {"doe_2023"}
 
 
-def test_state_json_mark_done():
+def test_synthesis_status_pending_when_uncited():
     with tempfile.TemporaryDirectory() as tmp:
-        state_file = Path(tmp) / "state.json"
-        state = {
-            "version": "1.0",
-            "ingestion_queue": [
-                {
-                    "id": "process_me",
-                    "type": "Literature",
-                    "path": "proc.md",
-                    "summary": "Process me",
-                    "enqueued_at": "2025-01-01T00:00:00",
-                    "status": "pending",
-                    "tags": ["x"],
-                }
-            ],
-        }
-        state_file.write_text(json.dumps(state, indent=2))
+        root = Path(tmp)
+        sources_lit = root / "sources" / "literature"
+        _make_source(sources_lit, "testing", "uncited_paper")
 
-        data = json.loads(state_file.read_text())
-        for item in data["ingestion_queue"]:
-            if item["id"] == "process_me":
-                item["status"] = "done"
-                item["completed_at"] = "2025-06-15T12:00:00"
-        state_file.write_text(json.dumps(data, indent=2))
-
-        loaded = json.loads(state_file.read_text())
-        assert loaded["ingestion_queue"][0]["status"] == "done"
-        assert "completed_at" in loaded["ingestion_queue"][0]
+        items = _synthesis_status(root, sources_lit)
+        assert len(items) == 1
+        assert items[0] == {"id": "uncited_paper", "status": "pending"}
 
 
-def test_state_json_filter_by_status():
+def test_synthesis_status_done_when_cited():
     with tempfile.TemporaryDirectory() as tmp:
-        state_file = Path(tmp) / "state.json"
-        state = {
-            "version": "1.0",
-            "ingestion_queue": [
-                {"id": "a", "status": "pending", "tags": []},
-                {"id": "b", "status": "done", "tags": []},
-                {"id": "c", "status": "pending", "tags": []},
-                {"id": "d", "status": "processing", "tags": []},
-            ],
-        }
-        state_file.write_text(json.dumps(state, indent=2))
+        root = Path(tmp)
+        sources_lit = root / "sources" / "literature"
+        _make_source(sources_lit, "testing", "cited_paper")
+        wiki = root / "wiki"
+        wiki.mkdir()
+        (wiki / "page.md").write_text("[^cited_paper]: [Cited.](../sources/x.md)\n", encoding="utf-8")
 
-        data = json.loads(state_file.read_text())
-        pending = [i for i in data["ingestion_queue"] if i["status"] == "pending"]
-        done = [i for i in data["ingestion_queue"] if i["status"] == "done"]
-        assert len(pending) == 2
-        assert len(done) == 1
+        items = _synthesis_status(root, sources_lit)
+        assert items == [{"id": "cited_paper", "status": "done"}]
+
+
+def test_synthesis_status_excludes_partial_directories():
+    """A directory missing original.pdf or raw.md is not a fully-ingested source
+    (CLAUDE.md §No Stubs) and must not show up at all, pending or done."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        sources_lit = root / "sources" / "literature"
+        _make_source(sources_lit, "testing", "stub_paper", full=False)
+
+        assert _synthesis_status(root, sources_lit) == []
+
+
+def test_synthesis_status_stays_correct_without_any_manual_bookkeeping():
+    """The core guarantee this replaces state.json for: citing a source in wiki/
+    flips its status on the very next call, with nothing else to update anywhere."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        sources_lit = root / "sources" / "literature"
+        _make_source(sources_lit, "testing", "flips_paper")
+
+        assert _synthesis_status(root, sources_lit)[0]["status"] == "pending"
+
+        wiki = root / "wiki"
+        wiki.mkdir()
+        (wiki / "page.md").write_text("[^flips_paper]: [Cited.](../sources/x.md)\n", encoding="utf-8")
+
+        assert _synthesis_status(root, sources_lit)[0]["status"] == "done"
+
+
+def test_synthesis_status_filter_by_status():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        sources_lit = root / "sources" / "literature"
+        _make_source(sources_lit, "testing", "a")
+        _make_source(sources_lit, "testing", "b")
+        _make_source(sources_lit, "testing", "c")
+        wiki = root / "wiki"
+        wiki.mkdir()
+        (wiki / "page.md").write_text("[^b]: [Cited.](../sources/x.md)\n", encoding="utf-8")
+
+        items = _synthesis_status(root, sources_lit)
+        pending = [i for i in items if i["status"] == "pending"]
+        done = [i for i in items if i["status"] == "done"]
         assert {i["id"] for i in pending} == {"a", "c"}
+        assert {i["id"] for i in done} == {"b"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -436,13 +437,10 @@ async def test_ingest_paper_full_lifecycle(tmp_path, monkeypatch):
     spec.loader.exec_module(res_server)
 
     sources_lit = tmp_path / 'sources' / 'literature'
-    state_file = tmp_path / 'sources' / 'state.json'
-    state_file.parent.mkdir(parents=True)
-    state_file.write_text(json.dumps({'version': '1.0', 'ingestion_queue': []}))
+    sources_lit.mkdir(parents=True)
 
     monkeypatch.setattr(res_server, 'ROOT', tmp_path)
     monkeypatch.setattr(res_server, '_SOURCES_LIT', sources_lit)
-    monkeypatch.setattr(res_server, '_STATE_PATH', state_file)
 
     async def mock_download_pdf(url, dest, doi=None):
         dest.write_text('Mock PDF Content', encoding='utf-8')
@@ -476,7 +474,7 @@ async def test_ingest_paper_full_lifecycle(tmp_path, monkeypatch):
     )
 
     assert result['status'] == 'ingested'
-    assert result['queued_for_ingest'] is True
+    assert result['queued_for_ingest'] is False  # status is derived, not tracked here
     paper_dir = sources_lit / 'social_and_behavioral' / 'psychology' / 'doe_2024_agency'
     assert (paper_dir / 'original.pdf').exists()
     assert (paper_dir / 'raw.md').exists()
@@ -487,9 +485,16 @@ async def test_ingest_paper_full_lifecycle(tmp_path, monkeypatch):
     meta_content = (paper_dir / 'metadata.md').read_text()
     assert 'Jane Doe' in meta_content
 
-    state_data = json.loads(state_file.read_text())
-    assert len(state_data['ingestion_queue']) == 1
-    assert state_data['ingestion_queue'][0]['id'] == 'doe_2024_agency'
+    # No state.json anywhere — synthesis status is derived from wiki/ citations, not tracked here.
+    assert not (tmp_path / 'sources' / 'state.json').exists()
+    status = res_server._synthesis_status(tmp_path, sources_lit)
+    assert status == [{
+        'id': 'doe_2024_agency',
+        'title': 'Empirical Study on Interpersonal Agency',
+        'domain': 'social_and_behavioral/psychology',
+        'path': 'sources/literature/social_and_behavioral/psychology/doe_2024_agency/metadata.md',
+        'status': 'pending',
+    }]
 
 
 def test_cli_research_ingest_with_mock(tmp_path, monkeypatch):

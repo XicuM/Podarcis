@@ -10,7 +10,7 @@ Evidence progresses through a strict pipeline with a formal **Hierarchy of Evide
 
 ```mermaid
 graph TD
-    Researcher[Researcher Subagent @researcher] -->|Stages raw sources| Sources[sources/ + state.json]
+    Researcher[Researcher Subagent @researcher] -->|Stages raw sources| Sources[sources/literature/]
     Sources -->|Ingested by| Synthesizer[Synthesizer Subagent @synthesizer]
     Synthesizer -->|Writes to| Wiki[wiki/ Objective Knowledge]
     Wiki -->|Tailored by| Architect[Protocol Architect @protocol-architect]
@@ -19,8 +19,8 @@ graph TD
     Auditor -.->|Validates| Protocols
 ```
 
-1. **Research (`@researcher`)**: Discovers literature via `research-mcp` (Semantic Scholar), scrapes Google Drive, downloads PDFs, extracts text with markitdown, and enqueues items in `sources/state.json`.
-2. **Synthesis (`@synthesizer`)**: Reads pending items from the queue or drive, ingests raw sources, and compiles objective, anonymized knowledge into `wiki/`.
+1. **Research (`@researcher`)**: Discovers literature via `research-mcp` (Semantic Scholar), scrapes Google Drive, downloads PDFs, and extracts text with markitdown into `sources/literature/`.
+2. **Synthesis (`@synthesizer`)**: Finds sources not yet cited anywhere in `wiki/` (status derived live from the citation graph — no manifest to go stale), ingests them, and compiles objective, anonymized knowledge into `wiki/`.
 3. **Protocol Architect (`@protocol-architect`)**: Reads `workspace/profile.md`, adapts Wiki findings into step-by-step personalized protocols in `workspace/protocols/` (loading `menumaker` for nutritional protocols).
 4. **Audit (`@auditor`)**: Runs continuous machine validation — link integrity (`podarcis lint`), OKF v0.2 frontmatter audits, citation verification, and fact-checking.
 

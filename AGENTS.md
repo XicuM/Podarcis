@@ -24,8 +24,8 @@ Personas are enabled by default from git-tracked gateway defaults (`.podarcis/ga
 
 | Subagent | File Path | Actor String & Description |
 |---|---|---|
-| **Researcher** | [researcher.md](.agents/agents/researcher.md) | `podarcis:researcher`: Discovers peer-reviewed literature via `research-mcp` (Semantic Scholar), scrapes Google Drive documents, downloads PDFs, and stages raw sources in `sources/` + `sources/state.json`. |
-| **Synthesizer** | [synthesizer.md](.agents/agents/synthesizer.md) | `podarcis:synthesizer`: Reads pending items from `sources/state.json` (or GDrive/local sources), ingests raw sources, and compiles objective, anonymized OKF concept notes into `wiki/`. |
+| **Researcher** | [researcher.md](.agents/agents/researcher.md) | `podarcis:researcher`: Discovers peer-reviewed literature via `research-mcp` (Semantic Scholar), scrapes Google Drive documents, downloads PDFs, and stages raw sources in `sources/literature/`. |
+| **Synthesizer** | [synthesizer.md](.agents/agents/synthesizer.md) | `podarcis:synthesizer`: Reads sources not yet cited in `wiki/` (via `queue_list`, derived live from the citation graph — no manifest), ingests raw sources, and compiles objective, anonymized OKF concept notes into `wiki/`. |
 | **Protocol Architect** | [protocol-architect.md](.agents/agents/protocol-architect.md) | `podarcis:protocol_architect`: Reads user profile constraints (`workspace/profile.md`), translates Wiki findings into step-by-step personalized protocols, menu plans (via `menumaker`), and deliverables. |
 | **Auditor** | [auditor.md](.agents/agents/auditor.md) | `podarcis:auditor`: Runs automated link linting (`podarcis lint`), audits OKF frontmatter schema, verifies citation integrity, fact-checks claims against wiki and literature, and delivers structured remediation payloads. |
 
@@ -46,7 +46,7 @@ Skills (`.agents/skills/`) inject specialized domain knowledge on-demand:
 
 The coordination is asynchronous, mediated by the file structure:
 
-* **Staging (`sources/`)**: Decoupled repository for raw evidence and `sources/state.json` orchestration queue. Sources can be stored in `sources/` locally or in Google Drive (`sources_backend: gdrive`).
+* **Staging (`sources/`)**: Decoupled repository for raw evidence. Sources can be stored in `sources/` locally or in Google Drive (`sources_backend: gdrive`). Which sources are still unsynthesized is derived live (via `research-mcp_queue_list`) by checking whether each source id is cited in `wiki/` — there is no separate orchestration-queue manifest to keep in sync.
 * **Literature (`research-mcp`)**: Queries Semantic Scholar for publications and citation graphs. Paper downloads route to `sources/literature/`.
 * **Google Drive (`drive` / `google-drive-mcp`)**: Shared team drive scraper for internal documents, pre-prints, and remote source storage.
 * **Wiki (`wiki/` repository)**: Objective, anonymized knowledge base written in OKF v0.2 format.
@@ -61,7 +61,7 @@ The coordination is asynchronous, mediated by the file structure:
 ### Hierarchy of Evidence & Citation
 * **Strict Citation Chain**: Workspace files and protocols (`workspace/`) MUST cite the Wiki (`wiki/`); the Wiki (`wiki/`) MUST cite Sources (`sources/`). Under no circumstances should `workspace/` files bypass `wiki/` to cite `sources/` directly.
 * **Source Locations**: Raw sources may reside locally in `sources/` (e.g., `sources/literature/`) OR remotely in a Google Drive folder (`sources_backend: gdrive`). Regardless of source location, the citation chain remains strictly `workspace -> wiki -> sources`.
-* **OKF Frontmatter**: Every non-index markdown file in `wiki/` and `workspace/` must begin with standardized YAML frontmatter containing `type`, `title`, `description`, `category`, `rationale`, `generated` (object `{ by, at }`), `status`, and `sources` — or `related` for non-cited cross-references.
+* **OKF Frontmatter**: Every non-index markdown file in `wiki/` and `workspace/` must begin with standardized YAML frontmatter containing `type`, `title`, `description`, `category`, `rationale`, `generated` (object `{ by, model, effort, at }`), `status`, and `sources` — or `related` for non-cited cross-references. `by` is the persona actor string (e.g. `podarcis:synthesizer`); `model` is the actual underlying model that generated the content (e.g. `claude-sonnet-5`) — record both, since a persona's configured model and the model that actually ran it can differ. `effort` is the reasoning-effort level the generating model was running at when it produced the content (e.g. `low`, `medium`, `high`), when that information is available to the model — omit the key entirely if it isn't, rather than guessing.
 * **Footnote Formatting**: Body footnotes MUST use a label equal to a `sources[].id` (named, e.g. `[^smith2024]`). Numeric positional footnotes (`[^1]`) are forbidden — a positional index silently misattributes when the `sources` list is reordered, whereas a stable `id` survives reordering (OKF §5.1).
 * **Cross-References**: Use relative markdown links (`[Text](../path.md)`). Unlinked mentions or `[[wikilinks]]` are forbidden.
 * **Folder Bloat Limit**: Maximum of 15 content files per directory (excluding `_index.md`). Restructure into subdirectories when exceeded.
@@ -74,6 +74,13 @@ The coordination is asynchronous, mediated by the file structure:
   - **Workspace (`workspace/`)**: May cite public web sources (e.g. government reports, financial filings, corporate press releases) ONLY when filling temporal gaps where peer-reviewed literature is not available.
 * **Wiki (Objective)**: Must remain anonymous and objective. Present competing hypotheses with confidence markers (`> ⚠️`). Never include user-specific data in `wiki/`.
 * **User Profile**: Persist only structural, recurring traits (goals, constraints, physiology). Never save anecdotal one-off events.
+
+### Research Tool Usage: Mandatory Prohibitions
+> **🚫 PROHIBITED**: `WebSearch` and `WebFetch` for academic research. Breaks citation hierarchy and contaminates wiki with unsourced URLs.
+
+* **For academic/peer-reviewed papers**: Delegate to **Researcher** via `podarcis_delegate_task(agent: "researcher", task: "...")`. Papers go to `sources/literature/`.
+* **WebSearch/WebFetch allowed only for**: Government reports, filings, press releases (workspace only, when peer-reviewed literature unavailable).
+* **When uncertain**: Stop and ask the user.
 
 ---
 

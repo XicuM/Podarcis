@@ -88,11 +88,13 @@ Add the following to your MCP host configuration (e.g., `~/.config/claude/claude
 
 **Tools**
 - `search_literature` - Search 19+ providers via academic-mcp.
-- `download_paper` - Fetch metadata → PDF → markitdown → `sources/state.json` queue.
-- `queue_list`, `queue_enqueue`, `queue_dequeue` - Manage the ingestion queue.
+- `download_paper` - Fetch metadata → PDF → markitdown → `sources/literature/<domain>/<id>/`.
+- `queue_list` - List ingested sources with synthesis status, derived live by checking
+  whether each source's id is cited as a `[^id]:` footnote anywhere in `wiki/` or
+  `workspace/`. There is no manifest to enqueue/dequeue — status can't drift stale
+  because it's recomputed from the citation graph on every call.
 
 **Resources**
-- `research://state` - Live contents of the ingestion queue.
 - `research://sources/index` - Live contents of the sources catalogue.
 
 ### menumaker-mcp

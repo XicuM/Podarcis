@@ -24,8 +24,8 @@ Use this skill when `sources_backend: local` is set in `.podarcis/config.yaml`.
 - Git-add and commit: `git add sources/<domain>/<slug>/ && git commit -m "feat(sources): ingest <slug>"` inside the `sources/` directory.
 
 **For peer-reviewed papers:**
-- Use `research-mcp` (`download_paper`) with `domain=<domain>` — this writes to `sources/literature/<domain>/<slug>/` automatically when `sources_backend: local`.
-- The tool handles the commit manifest (`sources/state.json`); you only need to git-add and commit the new files.
+- Use `research-mcp` (`download_paper`) with `domain=<domain>` — this writes to `sources/literature/<domain>/<slug>/` automatically when `sources_backend: local`, and updates that domain's `_index.md`.
+- There is no separate commit manifest to update — you only need to git-add and commit the new files. (`research-mcp_queue_list` derives what's still unsynthesized live, by checking wiki/ citations, rather than reading a manifest.)
 
 ### Step 3 — Build `sources[]` in frontmatter
 

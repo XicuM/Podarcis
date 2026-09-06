@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -414,7 +415,7 @@ async def wiki_update_index() -> str:
 
 @mcp.tool()
 async def complete_source_synthesis(
-    queue_id: Annotated[str, "The ID of the enqueued item (e.g., 'smith_2023_protein_synthesis')"],
+    queue_id: Annotated[str, "The source ID being synthesized (e.g., 'smith_2023_protein_synthesis') — must match a `[^queue_id]:` footnote in `content` so `research-mcp_queue_list` picks up the citation and reports this source as 'done'."],
     wiki_path: Annotated[str, "Target file path to write the synthesis (relative to PROJECT_ROOT, e.g. 'wiki/nutrition/protein.md')"],
     content: Annotated[str, "Markdown content to write to the wiki file"],
     category: Annotated[str, "YAML frontmatter category (e.g., 'nutrition')"],
@@ -422,8 +423,10 @@ async def complete_source_synthesis(
     related: Annotated[list[str], "List of related internal markdown link paths"],
     title: Annotated[str, "Title of the wiki page"],
 ) -> str:
-    """Atomic transaction tool: Writes wiki page with standard frontmatter, marks the queue item as done, updates search index, and runs link audits."""
-    import datetime
+    """Atomic transaction tool: Writes wiki page with standard frontmatter, updates search index,
+    and runs link audits. There is no separate queue to mark 'done' — as long as `content`
+    contains a `[^queue_id]:` footnote, `research-mcp_queue_list` will report this source's
+    status as 'done' on its next call, derived live from the citation."""
     target_file = ROOT / wiki_path
 
     # 1. Ensure target directory exists
@@ -448,37 +451,10 @@ async def complete_source_synthesis(
     except Exception as e:
         return f"Error writing wiki file: {e}"
 
-    # 4. Update state.json (mark queue item status as 'done')
-    # Resolve the same backend-aware path that research-mcp uses.
-    pod_yaml = ROOT / ".podarcis" / "config.yaml"
-    sources_backend = "gdrive"
-    if pod_yaml.exists():
-        try:
-            import yaml
-            _cfg = yaml.safe_load(pod_yaml.read_text(encoding="utf-8")) or {}
-            sources_backend = _cfg.get("sources_backend", "gdrive")
-        except Exception:
-            pass
-    state_path = (
-        ROOT / "sources" / "state.json"
-        if sources_backend == "local"
-        else ROOT / "workspace" / "state.json"
-    )
-    queue_updated = False
-    if state_path.exists():
-        try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            queue = state.setdefault("ingestion_queue", [])
-            for item in queue:
-                if item.get("id") == queue_id:
-                    item["status"] = "done"
-                    item["completed_at"] = datetime.datetime.now().isoformat()
-                    queue_updated = True
-                    break
-            if queue_updated:
-                state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        except Exception as e:
-            return f"Wiki file written, but failed to update state.json queue: {e}"
+    # 4. Sanity-check that the wiki page actually cites queue_id — otherwise
+    #    queue_list will keep reporting this source as 'pending' after this call,
+    #    which would silently defeat the point of calling this tool.
+    queue_id_cited = bool(re.search(rf'^\[\^{re.escape(queue_id)}\]:', content, re.MULTILINE))
 
     # 5. Rebuild search index (if QMD active)
     index_res = ""
@@ -500,9 +476,15 @@ async def complete_source_synthesis(
     except Exception as e:
         audit_res = f"Link checker error: {e}"
 
+    queue_note = (
+        f"✓ '{queue_id}' is cited — research-mcp_queue_list will report it as 'done'."
+        if queue_id_cited else
+        f"⚠️ WARNING: content has no '[^{queue_id}]:' footnote — "
+        f"research-mcp_queue_list will still report '{queue_id}' as 'pending'."
+    )
     res_summary = (
         f"✓ Successfully wrote wiki page to: {wiki_path}\n"
-        f"✓ Queue status for '{queue_id}' updated to 'done': {queue_updated}\n"
+        f"{queue_note}\n"
         f"--- Index Update Output ---\n{index_res}\n"
         f"--- Link Auditor Output ---\n{audit_res}"
     )

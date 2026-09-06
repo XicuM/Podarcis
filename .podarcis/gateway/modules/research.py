@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-TOOLS = ['search_literature', 'download_paper', 'queue_list', 'queue_enqueue', 'queue_dequeue']
+TOOLS = ['search_literature', 'download_paper', 'queue_list']
 
 def register(mcp, root: Path) -> None:
     '''Register research tools and resources with the FastMCP instance.'''
@@ -17,10 +17,7 @@ def register(mcp, root: Path) -> None:
     mcp.add_tool(research_server.search_literature)
     mcp.add_tool(research_server.download_paper)
     mcp.add_tool(research_server.queue_list)
-    mcp.add_tool(research_server.queue_enqueue)
-    mcp.add_tool(research_server.queue_dequeue)
 
-    mcp.add_resource(research_server.resource_state)
     mcp.add_resource(research_server.resource_sources_index)
 
 def unregister(mcp) -> None:

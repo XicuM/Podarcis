@@ -2,17 +2,17 @@
 
 Provides typed async tools for:
   - Searching literature (academic-mcp for multi-provider search)
-  - Download papers: fetches metadata, PDF, extracts text via markitdown,
-    writes sources/ directory structure, and updates sources/state.json — all natively
-    in async Python with httpx, no subprocess boundary.
-  - CRUD operations on the ingestion queue (sources/state.json)
+  - Download papers: fetches metadata, PDF, extracts text via markitdown, and writes
+    sources/ directory structure — all natively in async Python with httpx, no
+    subprocess boundary.
+  - Inspecting synthesis status of ingested sources, derived live from disk (see
+    `queue_list` / `_synthesis_status`) rather than from a hand-maintained manifest.
 
 Set PROJECT_ROOT env var to the repository root.
 """
 from __future__ import annotations
 
 import asyncio
-import datetime
 import json
 import os
 import re
@@ -42,8 +42,8 @@ def _find_root() -> Path:
 
 ROOT = _find_root()
 
-def _resolve_sources_paths(root: Path) -> tuple[Path, Path]:
-    """Return (state_path, sources_lit) based on sources_backend in config.yaml."""
+def _resolve_sources_lit(root: Path) -> Path:
+    """Return the literature sources directory based on sources_backend in config.yaml."""
     pod_yaml = root / ".podarcis" / "config.yaml"
     backend = "gdrive"
     if pod_yaml.exists():
@@ -55,10 +55,10 @@ def _resolve_sources_paths(root: Path) -> tuple[Path, Path]:
         except Exception:
             pass
     if backend == "local":
-        return root / "sources" / "state.json", root / "sources" / "literature"
-    return root / "workspace" / "state.json", root / "workspace" / "literature"
+        return root / "sources" / "literature"
+    return root / "workspace" / "literature"
 
-_STATE_PATH, _SOURCES_LIT = _resolve_sources_paths(ROOT)
+_SOURCES_LIT = _resolve_sources_lit(ROOT)
 
 # API key (Semantic Scholar) — optional, loaded from .podarcis/config.yaml or environment
 def _load_api_key(root: Path) -> str:
@@ -103,15 +103,17 @@ mcp = FastMCP(
     instructions=(
         'Literature discovery and ingestion server. '
         'Use search_literature to find papers across multiple academic providers. '
-        'Use download_paper to fetch, extract, and enqueue them (PDF → raw.md → metadata.md). '
-        'Use queue_* tools to inspect and manage the ingestion queue. '
-        'The queue state file location depends on sources_backend in .podarcis/config.yaml: '
-        '\'gdrive\' → workspace/state.json, \'local\' → sources/state.json.'
+        'Use download_paper to fetch, extract, and ingest them (PDF → raw.md → metadata.md). '
+        'Use queue_list to check synthesis status — it is derived live by checking whether '
+        'each source id is cited (as a `[^id]:` footnote) anywhere in wiki/ or workspace/, '
+        'not read from a manifest, so it can never drift stale. '
+        'The literature directory location depends on sources_backend in .podarcis/config.yaml: '
+        '\'gdrive\' → workspace/literature/, \'local\' → sources/literature/.'
     ),
 )
 
-# Global asyncio lock — shared by download_paper and all queue mutations
-_state_lock = asyncio.Lock()
+# Guards concurrent writes to a shared domain _index.md from parallel downloads.
+_index_lock = asyncio.Lock()
 
 # ── httpx client factory ──────────────────────────────────────────────────────
 
@@ -803,14 +805,13 @@ async def _ingest_paper(
         encoding="utf-8",
     )
 
-    # ── Step 4: update sources/state.json + domain _index.md ─────────────────────────
-    await ctx.report_progress(4, 4, "Updating manifest…")
+    # ── Step 4: update the domain _index.md ──────────────────────────────────
+    await ctx.report_progress(4, 4, "Updating domain index…")
     abstract_summary = (meta.abstract or "").replace("\n", " ").strip()[:200]
     if len(meta.abstract or "") > 200:
         abstract_summary += "..."
 
-    async with _state_lock:
-        _update_state_json(filename_base, domain, meta.title, abstract_summary, meta.year)
+    async with _index_lock:
         _update_domain_index(filename_base, domain, meta.title, abstract_summary, meta.year)
 
     rel_paper_dir = str(paper_dir.relative_to(ROOT)) if paper_dir.is_relative_to(ROOT) else str(paper_dir)
@@ -818,31 +819,8 @@ async def _ingest_paper(
         'status': 'ingested',
         'paper_dir': rel_paper_dir,
         'files': ['original.pdf', 'raw.md', 'metadata.md'],
-        'queued_for_ingest': True,
+        'queued_for_ingest': False,  # synthesis status is now derived live — see queue_list
     }
-
-
-def _update_state_json(filename_base, domain, title, abstract_summary, year):
-    state = {'version': '1.0', 'ingestion_queue': []}
-    if _STATE_PATH.exists():
-        try:
-            state = json.loads(_STATE_PATH.read_text(encoding='utf-8'))
-        except Exception:
-            pass
-    queue = state.setdefault('ingestion_queue', [])
-    raw_file = _SOURCES_LIT / domain / filename_base / 'raw.md'
-    rel_raw = str(raw_file.relative_to(ROOT)) if raw_file.is_relative_to(ROOT) else str(raw_file)
-    if not any(item.get('id') == filename_base for item in queue):
-        queue.append({
-            'id': filename_base,
-            'type': 'Literature',
-            'path': rel_raw,
-            'summary': f'{title} - {abstract_summary}',
-            'enqueued_at': datetime.datetime.now().isoformat(),
-            'status': 'pending',
-            'tags': [domain],
-        })
-        _STATE_PATH.write_text(json.dumps(state, indent=2), encoding='utf-8')
 
 
 def _update_domain_index(filename_base, domain, title, abstract_summary, year):
@@ -1033,10 +1011,12 @@ async def download_paper(
       1. Fetch metadata from the appropriate provider
       2. Download the open-access PDF (with Unpaywall fallback)
       3. Extract text via markitdown → raw.md
-      4. Write metadata.md and update sources/state.json + domain _index.md
+      4. Write metadata.md and update the domain _index.md
 
     Returns paths to the created files. The agent should then git commit.
-    Does NOT add failed papers to the manifest — halts and raises on any error.
+    On any error, the partial directory is removed rather than left as a stub — see
+    CLAUDE.md §No Stubs. Synthesis status is not tracked here; check it later with
+    `queue_list`, which derives it live from wiki/workspace citations.
     """
     # Sanitise filename_base
     if re.search(r"[/\\.]", filename_base):
@@ -1051,88 +1031,94 @@ async def download_paper(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MCP Tools — Ingestion Queue (sources/state.json CRUD)
+# MCP Tools — Synthesis Status (derived live from disk, no manifest)
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# There used to be a hand-maintained sources/state.json manifest here, with enqueue/
+# dequeue tools mutating a "status" field. In practice the dequeue step was never
+# reliably exercised: an audit found 73/82 entries still marked "pending" even
+# though many were already cited in wiki/ — including sources cited for months.
+# A manually-updated status field can only drift from the truth; it can't be kept
+# in sync by construction. So instead of a manifest, "has this source been
+# synthesized" is answered directly from the one place that can't lie about it:
+# whether wiki/ (or workspace/) actually cites the source's id as a footnote.
 
-def _read_state() -> dict:
-    if not _STATE_PATH.exists():
-        return {"version": "1.0", "ingestion_queue": []}
-    return json.loads(_STATE_PATH.read_text(encoding="utf-8"))
+_FOOTNOTE_DEF_RE = re.compile(r'^\[\^([A-Za-z0-9_\-]+)\]:', re.MULTILINE)
+_META_TITLE_RE = re.compile(r'^title:\s*"?(.*?)"?\s*$', re.MULTILINE)
 
 
-def _write_state(state: dict) -> None:
-    _STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+def _cited_source_ids(root: Path) -> set[str]:
+    """Scan wiki/ and workspace/ for footnote definitions (`[^id]:`) whose label is a
+    source id — the OKF spec requires footnote labels to equal `sources[].id`
+    (CLAUDE.md §Footnote Formatting), so this is a direct, un-gameable citation check."""
+    cited: set[str] = set()
+    for base_name in ("wiki", "workspace"):
+        base = root / base_name
+        if not base.exists():
+            continue
+        for md_file in base.rglob("*.md"):
+            try:
+                text = md_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            cited.update(_FOOTNOTE_DEF_RE.findall(text))
+    return cited
+
+
+def _read_meta_title(meta_path: Path) -> str:
+    try:
+        text = meta_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    m = _META_TITLE_RE.search(text)
+    return m.group(1) if m else ""
+
+
+def _synthesis_status(root: Path, sources_lit: Path) -> list[dict]:
+    """Return one entry per fully-ingested literature source (both original.pdf and
+    raw.md present — a partial directory is not a source, per CLAUDE.md §No Stubs),
+    with status derived live via `_cited_source_ids` rather than read from a manifest."""
+    if not sources_lit.exists():
+        return []
+    cited = _cited_source_ids(root)
+    items = []
+    for meta_path in sorted(sources_lit.rglob("metadata.md")):
+        paper_dir = meta_path.parent
+        if not (paper_dir / "raw.md").exists() or not (paper_dir / "original.pdf").exists():
+            continue
+        source_id = paper_dir.name
+        domain = str(paper_dir.parent.relative_to(sources_lit))
+        rel_path = str(meta_path.relative_to(root)) if meta_path.is_relative_to(root) else str(meta_path)
+        items.append({
+            "id": source_id,
+            "title": _read_meta_title(meta_path),
+            "domain": domain,
+            "path": rel_path,
+            "status": "done" if source_id in cited else "pending",
+        })
+    return items
 
 
 @mcp.tool()
 async def queue_list(
     status: Annotated[
-        Literal["pending", "processing", "done", "all"],
-        "Filter by status (default: all)",
+        Literal["pending", "done", "all"],
+        "Filter by synthesis status (default: all)",
     ] = "all",
 ) -> list[dict]:
-    """List items in the ingestion queue from sources/state.json, optionally filtered by status."""
-    async with _state_lock:
-        state = _read_state()
-    queue = state.get("ingestion_queue", [])
+    """List ingested literature sources with synthesis status, derived live by checking
+    whether each source's id is cited as a `[^id]:` footnote anywhere in wiki/ or
+    workspace/. There is no separate manifest — status can never drift stale, because
+    it is recomputed from the citation graph on every call."""
+    items = _synthesis_status(ROOT, _SOURCES_LIT)
     if status == "all":
-        return queue
-    return [item for item in queue if item.get("status") == status]
-
-
-@mcp.tool()
-async def queue_enqueue(
-    id: Annotated[str, "Unique identifier for this queue item"],
-    type: Annotated[str, "Item type (e.g. 'Literature')"],
-    path: Annotated[str, "Relative path to the raw source file"],
-    summary: Annotated[str, "One-line summary of the source"],
-    tags: Annotated[list[str], "Domain tags (e.g. ['nutrition', 'sleep'])"],
-) -> dict:
-    """Append an item to the ingestion queue in sources/state.json."""
-    async with _state_lock:
-        state = _read_state()
-        queue = state.setdefault("ingestion_queue", [])
-        if any(item.get("id") == id for item in queue):
-            return {"status": "already_enqueued", "id": id}
-        entry = {
-            "id": id,
-            "type": type,
-            "path": path,
-            "summary": summary,
-            "enqueued_at": datetime.datetime.now().isoformat(),
-            "status": "pending",
-            "tags": tags,
-        }
-        queue.append(entry)
-        _write_state(state)
-    return {"status": "enqueued", "entry": entry}
-
-
-@mcp.tool()
-async def queue_dequeue(
-    id: Annotated[str, "ID of the queue item to remove after successful ingestion"],
-) -> dict:
-    """Remove a completed item from the ingestion queue in sources/state.json."""
-    async with _state_lock:
-        state = _read_state()
-        queue = state.get("ingestion_queue", [])
-        removed = [item for item in queue if item.get("id") == id]
-        if not removed:
-            raise ValueError(f"No queue item with id '{id}' found.")
-        state["ingestion_queue"] = [item for item in queue if item.get("id") != id]
-        _write_state(state)
-    return {"status": "dequeued", "removed": removed[0]}
+        return items
+    return [item for item in items if item["status"] == status]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Resources
 # ─────────────────────────────────────────────────────────────────────────────
-
-@mcp.resource("research://state")
-def resource_state() -> str:
-    """Live contents of sources/state.json (ingestion queue manifest)."""
-    return _STATE_PATH.read_text(encoding="utf-8") if _STATE_PATH.exists() else "{}"
-
 
 @mcp.resource("research://sources/index")
 def resource_sources_index() -> str:
