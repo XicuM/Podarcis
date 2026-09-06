@@ -132,7 +132,8 @@ def set_engine_status(root_dir: Path, engine_name: str, enabled: bool) -> None:
 
 
 def load_version_info(root_dir: Path) -> tuple[str, str]:
-    '''Read release version from pyproject.toml or VERSION.'''
+    '''Read release version from pyproject.toml and derive date from latest commit.'''
+    import subprocess
     version, date = '1.1.0', '2026-07-25'
     pyproject = root_dir / 'pyproject.toml'
     if pyproject.exists():
@@ -149,6 +150,16 @@ def load_version_info(root_dir: Path) -> tuple[str, str]:
                 version = line.split('=', 1)[1].strip()
             elif line.startswith('date='):
                 date = line.split('=', 1)[1].strip()
+    # Auto-detect date from latest commit if in a git repo
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(root_dir), 'log', '-1', '--format=%ci'],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            commit_date = result.stdout.strip().split()[0]
+            date = commit_date
+    except Exception: pass
     return version, date
 
 
