@@ -142,7 +142,7 @@ def age_group_to_numeric(age_group: str) -> int:
     return nums[0] if nums else 0
 
 
-def _match_age_row(user_age: int, user_stage: str, lsg_series: pd.Series, age_group: str) -> pd.Series:
+def _match_age_row(user_age: int, lsg_series: pd.Series, age_group: str) -> pd.Series:
     """Match the user age to the best row in the life stage group series."""
     norm = lambda s: str(s).replace("–", "-").replace("—", "-").strip().lower()
     age_group_norm = norm(age_group)
@@ -349,7 +349,7 @@ def _extract_profile_intake(
         group_df = table
         
     # Match row by age
-    age_row_mask = _match_age_row(age_group_to_numeric(age_group), stage_lower, group_df[lsg_col], age_group)
+    age_row_mask = _match_age_row(age_group_to_numeric(age_group), group_df[lsg_col], age_group)
     match = group_df[age_row_mask]
     
     if match.empty:

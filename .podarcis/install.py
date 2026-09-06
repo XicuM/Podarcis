@@ -69,7 +69,7 @@ def _bootstrap_venv() -> None:
 _bootstrap_venv()
 
 from banner import display_install_banner
-from common import load_yaml, run_command, save_yaml
+from common import load_yaml, save_yaml
 from console import console, QSTYLE
 
 import questionary

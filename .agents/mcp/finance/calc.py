@@ -7,7 +7,6 @@ portfolio weight analysis) with structured JSON output for agentic consumption.
 """
 import argparse
 import json
-import math
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET

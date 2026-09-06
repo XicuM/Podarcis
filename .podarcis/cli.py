@@ -354,7 +354,7 @@ def cmd_frontend(args: argparse.Namespace) -> int:
     frontend = get_config_value(root_dir, 'frontend', default='none')
     if frontend == 'none':
         return 0
-    return cmd_open_tool('frontend')
+    return cmd_open_tool()
 
 
 def cmd_interactive(args: argparse.Namespace) -> int:
@@ -630,7 +630,7 @@ def cmd_job(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_open_tool(tool_type: str = 'frontend') -> int:
+def cmd_open_tool() -> int:
     '''Open the configured frontend tool at the current directory.'''
     name = get_config_value(root_dir, 'frontend', default='vscode')
     cwd = str(root_dir)

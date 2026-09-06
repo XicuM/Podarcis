@@ -320,34 +320,6 @@ async def wiki_search(
         native_res = await _native_search(query, collection=collection, limit=limit)
         return warning + native_res
 
-# wiki_vsearch: deprecated — use wiki_search(method='semantic') instead.
-# Kept as an internal helper; NOT registered as an MCP tool.
-async def wiki_vsearch(
-    query: Annotated[str, "Natural-language semantic query"],
-    n: Annotated[int, "Number of results to return (default 5)"] = 5,
-    collection: Annotated[
-        Literal["wiki", "protocols", "sources", "all"],
-        "Restrict to a specific collection (default: all)",
-    ] = "all",
-) -> str:
-    """Deprecated internal helper — use wiki_search with method='semantic' instead."""
-    return await wiki_search(query, collection=collection, method="semantic", limit=n)
-
-
-# wiki_query: deprecated — use wiki_search(method='hybrid') instead.
-# Kept as an internal helper; NOT registered as an MCP tool.
-async def wiki_query(
-    query: Annotated[str, "Query string — hybrid BM25 + vector + LLM re-ranking"],
-    collection: Annotated[
-        Literal["wiki", "protocols", "sources", "all"],
-        "Restrict to a specific collection (default: all)",
-    ] = "all",
-    min_score: Annotated[float, "Minimum relevance score threshold (0–1, default 0.0)"] = 0.0,
-) -> str:
-    """Deprecated internal helper — use wiki_search with method='hybrid' instead."""
-    return await wiki_search(query, collection=collection, method="hybrid", min_score=min_score)
-
-
 
 @mcp.tool()
 async def wiki_fetch(

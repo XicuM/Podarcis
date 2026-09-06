@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Optional, List, Set
+from typing import Optional, List
 
 # Regex patterns for credential and secret detection
 RE_PATTERNS = [
