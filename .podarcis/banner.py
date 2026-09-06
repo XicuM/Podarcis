@@ -40,34 +40,6 @@ def _build_subtitle(root_dir: Path) -> Text:
     )
 
 
-def format_cron_readable(schedule: str) -> str:
-    '''Format cron 5-field expression into concise text for cell display.'''
-    parts = schedule.strip().split()
-    if len(parts) != 5:
-        return schedule
-    m, h, dom, mon, dow = parts
-
-    # Daily at HH:MM
-    if m.isdigit() and h.isdigit() and dom == '*' and mon == '*' and dow == '*':
-        return f'{int(h):02d}:{int(m):02d} daily'
-
-    # Weekly on Day at HH:MM
-    days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    if m.isdigit() and h.isdigit() and dom == '*' and mon == '*' and dow.isdigit():
-        d_idx = int(dow) % 7
-        return f'{days[d_idx]} {int(h):02d}:{int(m):02d}'
-
-    # Every N minutes
-    if m.startswith('*/') and h == '*' and dom == '*' and mon == '*' and dow == '*':
-        return f'every {m[2:]}m'
-
-    # Hourly
-    if m.isdigit() and h == '*' and dom == '*' and mon == '*' and dow == '*':
-        return f':{int(m):02d} hourly'
-
-    return schedule
-
-
 def _render_right_cell(
     kind: str,
     title: str,
@@ -180,7 +152,7 @@ def display_project_banner(root_dir: Path, splash: str | None = None, right_w: i
         ('empty', '', '', True),
         ('header', job_hdr, None, True),
         *[
-            ('item', j, format_cron_readable(jobs[j].get('schedule', '')), jobs[j]['enabled'])
+            ('item', j, jobs[j].get('schedule', ''), jobs[j]['enabled'])
             for j in sorted(jobs)
         ],
     ]

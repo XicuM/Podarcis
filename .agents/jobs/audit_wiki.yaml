@@ -1,6 +1,6 @@
 name: audit_wiki
 description: "Run automated link integrity and frontmatter audit across all wiki files"
-schedule: "0 3 * * 0"
+schedule: "Sun *-*-* 03:00:00"
 enabled: false
 type: shell
 command: "./podarcis lint"

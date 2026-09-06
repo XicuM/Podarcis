@@ -1,7 +1,8 @@
-'''Podarcis Modular Jobs Engine & Crontab Synchronization Manager.'''
+"""Podarcis modular jobs engine, scheduled through systemd user timers."""
 
 import datetime
 import importlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,8 +13,10 @@ podarcis_dir = root_dir / '.podarcis'
 if str(podarcis_dir) not in sys.path:
     sys.path.insert(0, str(podarcis_dir))
 
-from common import load_yaml, save_yaml, load_json
+from common import load_yaml, save_yaml
 from console import console
+
+from . import scheduler
 
 
 JOBS_DIR = lambda root: root / '.agents' / 'jobs'
@@ -35,7 +38,7 @@ def discover_jobs(root_dir: Path) -> dict[str, dict]:
             continue
         job_name = data.get('name', file_path.stem)
         default_enabled = data.get('enabled', True)
-        default_schedule = data.get('schedule', '0 2 * * *')
+        default_schedule = data.get('schedule', 'daily')
 
         job_st = st_jobs.get(job_name, {})
         enabled = job_st.get('enabled', default_enabled)
@@ -60,68 +63,29 @@ def discover_jobs(root_dir: Path) -> dict[str, dict]:
     return jobs
 
 
-def _get_crontab_line(root_dir: Path, job_name: str, schedule: str) -> str:
-    '''Construct standard crontab command string for a job.'''
-    py_bin = root_dir / '.venv' / 'bin' / 'python'
-    cli_bin = root_dir / 'podarcis'
-    cmd = f'{py_bin} {cli_bin} job run {job_name}' if py_bin.exists() else f'{cli_bin} job run {job_name}'
-    log_file = root_dir / '.podarcis' / f'job_{job_name}.log'
-    marker = f'# podarcis-job:{job_name}:{root_dir}'
-    return f'{schedule} cd {root_dir} && {cmd} >> {log_file} 2>&1 {marker}'
-
-
-def sync_all_jobs_crontab(root_dir: Path) -> tuple[bool, str]:
-    '''Sync system crontab to match all enabled jobs in .agents/jobs and state.yaml.'''
-    jobs = discover_jobs(root_dir)
-    marker_prefix = f'# podarcis-job:'
-    dir_marker = f':{root_dir}'
-
-    try:
-        proc = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
-        current = proc.stdout if proc.returncode == 0 else ''
-    except Exception as e:
-        return False, f'Failed to access crontab: {e}'
-
-    # Remove all existing podarcis job lines for this root directory
-    lines = [
-        line for line in current.splitlines()
-        if not (marker_prefix in line and dir_marker in line) and line.strip()
-    ]
-
-    # Add active lines for enabled jobs
-    for name, info in jobs.items():
-        if info.get('enabled', False):
-            lines.append(_get_crontab_line(root_dir, name, info.get('schedule', '0 2 * * *')))
-
-    new_crontab = '\n'.join(lines) + '\n' if lines else ''
-
-    try:
-        if new_crontab:
-            proc = subprocess.run(['crontab', '-'], input=new_crontab, text=True, capture_output=True)
-        else:
-            proc = subprocess.run(['crontab', '-r'], capture_output=True, text=True)
-        if proc.returncode == 0:
-            return True, 'Crontab synchronized successfully.'
-        else:
-            return False, f'Crontab error: {proc.stderr.strip()}'
-    except Exception as e:
-        return False, str(e)
-
-
 def set_job_status(root_dir: Path, job_name: str, enabled: bool) -> tuple[bool, str]:
-    '''Enable or disable a job, updating state.yaml and syncing system crontab.'''
+    """Enable or disable a job, installing or removing its systemd timer."""
+    jobs = discover_jobs(root_dir)
+    if job_name not in jobs:
+        return False, f'Job "{job_name}" not found.'
+
+    job = jobs[job_name]
+    if enabled:
+        timeout_s = int((job.get('options') or {}).get('timeout_s', 1800)) + 300
+        ok, msg = scheduler.install(
+            root_dir, job_name, job['schedule'], timeout_s=timeout_s,
+        )
+    else:
+        ok, msg = scheduler.remove(root_dir, job_name)
+
+    if not ok:
+        return False, msg
+
     st_path = root_dir / '.podarcis' / 'state.yaml'
     st = load_yaml(st_path)
-    jobs_st = st.setdefault('jobs', {})
-    job_st = jobs_st.setdefault(job_name, {})
-    job_st['enabled'] = enabled
+    st.setdefault('jobs', {}).setdefault(job_name, {})['enabled'] = enabled
     save_yaml(st_path, st)
-
-    ok, msg = sync_all_jobs_crontab(root_dir)
-    status_str = 'enabled and installed in crontab' if enabled else 'disabled and removed from crontab'
-    if ok:
-        return True, f'Job "{job_name}" {status_str}.'
-    return False, f'Job status updated in state.yaml, but crontab sync failed: {msg}'
+    return True, msg
 
 
 def run_job(root_dir: Path, job_name: str, dry_run: bool = False) -> dict:
@@ -132,12 +96,25 @@ def run_job(root_dir: Path, job_name: str, dry_run: bool = False) -> dict:
         return {'status': 'error', 'message': f'Job "{job_name}" not found'}
 
     job = jobs[job_name]
+    # Without this, an agent job whose prompt mentions running a job would
+    # fork harness processes recursively.
+    if job['type'] == 'agent' and os.environ.get('PODARCIS_JOB_RUN'):
+        return {'status': 'error', 'message': 'Refusing to nest agent jobs.'}
+
     console.print(f'[bold #29b8db]Running Job:[/bold #29b8db] [white]{job_name}[/white] ({job["description"]})')
 
     run_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     res = {'status': 'success'}
-    if job['type'] == 'python':
+    if job['type'] == 'agent':
+        from . import agent
+        try:
+            res = agent.run(root_dir, job, dry_run=dry_run)
+        except Exception as e:
+            console.print(f'[bold red]Error running job {job_name}: {e}[/bold red]')
+            res = {'status': 'error', 'message': str(e)}
+
+    elif job['type'] == 'python':
         handler_name = job['handler']
         try:
             mod = importlib.import_module(f'jobs.{handler_name}')

@@ -1,0 +1,17 @@
+name: nightly_synthesis
+description: "Ingest unsynthesized sources into the OKF wiki, then self-audit"
+schedule: "*-*-* 03:00:00"
+enabled: false
+type: agent
+options:
+  persona: synthesizer
+  autonomy: branch
+  effort: medium
+  timeout_s: 2700
+  max_cost_usd: 5.00
+  prompt: |
+    Call literature_status(status="unsynthesized"). For each source returned, read its
+    raw.md and publish an objective OKF v0.2 concept note with wiki_publish, citing the
+    source by its id. Skip any source lacking both original.pdf and raw.md. Do not
+    invent sources, quotes, or metadata. Finish by running wiki_lint and fixing what it
+    reports.

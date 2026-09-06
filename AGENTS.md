@@ -55,6 +55,7 @@ The coordination is asynchronous, mediated by the file structure:
 * **Workspace (`workspace/` repository)**: Personal profiles, active protocols, feedback, and deliverables.
 * **Temporary Workspace (`tmp/`)**: Scratchpad operations and temporal data edits.
 * **Podarcis Engine (`.podarcis/` & `podarcis` CLI)**: Unified Python CLI and runtime engine for status inspection (`podarcis status`), configuration (`podarcis config`), multi-workspace git/gdrive syncing (`podarcis repo sync`), testing (`podarcis test`), and link linting (`podarcis lint`).
+* **Scheduled Jobs (`.agents/jobs/*.yaml` & `podarcis job`)**: Jobs are declared as YAML and scheduled as **systemd user timers** (`podarcis job enable|disable|run|logs`). `schedule:` is a systemd `OnCalendar` expression (`daily`, `Sun *-*-* 03:00:00`) — not cron. Beyond `type: shell` and `type: python`, a job may be `type: agent`, which runs a persona headlessly through a harness CLI (`.podarcis/jobs/runners/`, currently Claude Code). Each agent job declares an `autonomy` level that Podarcis — never the model — enforces: `report` (read-only; output lands in `tmp/job_reports/`), `branch` (commits to `jobs/<name>`, leaving the working branch untouched), `commit` (commits only if the link/frontmatter audit passes), `push` (commits, audits, then pushes). Agent jobs are never granted `Bash`, so all git work stays with the engine, and `WebSearch`/`WebFetch` are denied outright to keep the citation hierarchy intact.
 
 ### Gateway Tool Reference
 

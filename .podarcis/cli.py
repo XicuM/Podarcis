@@ -130,7 +130,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     console.print('\n[bold white]Jobs:[/bold white]')
     for k, v in status_data['jobs'].items():
         st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
-        sched = f'[{v["schedule"]}]' if v["schedule"] else ''
+        sched = f'({v["schedule"]})' if v["schedule"] else ''
         console.print(f'  • {k:<20} [{st}] {sched}')
 
     console.print('\n[bold white]Repositories:[/bold white]')
@@ -578,7 +578,7 @@ def cmd_research(args: argparse.Namespace) -> int:
 
 def cmd_job(args: argparse.Namespace) -> int:
     '''Manage and execute modular Podarcis jobs (.agents/jobs/*.yaml).'''
-    from jobs import discover_jobs, set_job_status, run_job
+    from jobs import discover_jobs, set_job_status, run_job, scheduler
     action = getattr(args, 'job_action', None) or 'list'
     name = getattr(args, 'name', None)
 
@@ -593,9 +593,14 @@ def cmd_job(args: argparse.Namespace) -> int:
             return 0
         for k, v in discovered.items():
             st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
-            sched = v['schedule']
+            kind = f'[magenta]{v["type"]}[/magenta]'
+            nxt = scheduler.next_elapse(v['schedule']) if v['enabled'] else ''
+            when = f' [dim]→ next {nxt}[/dim]' if nxt else ''
             last = f' [dim](last run: {v["last_run"]})[/dim]' if v['last_run'] else ''
-            console.print(f'  • {k:<20} [{st}] [{sched}]{last}\n    [dim]{v["description"]}[/dim]\n')
+            console.print(
+                f'  • {k:<20} [{st}] {kind} [cyan]({v["schedule"]})[/cyan]{when}{last}'
+                f'\n    [dim]{v["description"]}[/dim]\n'
+            )
         return 0
 
     if action == 'enable':
@@ -625,7 +630,20 @@ def cmd_job(args: argparse.Namespace) -> int:
             console.print('[bold red]Error:[/bold red] Specify job name to run.')
             return 1
         res = run_job(root_dir, name, dry_run=getattr(args, 'dry_run', False))
-        return 0 if res.get('status') != 'error' else 1
+        if res.get('status') == 'error':
+            console.print(f'[bold red]Error:[/bold red] {res.get("message", "")}')
+            return 1
+        return 0
+
+    if action == 'logs':
+        if not name:
+            console.print('[bold red]Error:[/bold red] Specify job name.')
+            return 1
+        unit = f'{scheduler.unit_name(root_dir, name)}.service'
+        return subprocess.run(
+            ['journalctl', '--user', '-u', unit, '-n',
+             str(getattr(args, 'lines', 50)), '--no-pager'],
+        ).returncode
 
     return 0
 
@@ -701,11 +719,15 @@ def main() -> None:
     jr.add_argument('name', nargs='?', help='Job name (e.g. gdrive_sync, audit_wiki)')
     jr.add_argument('--dry-run', action='store_true', help='Preview execution without side effects')
 
-    je = j_sub.add_parser('enable', help='Enable job and install its schedule in crontab')
+    je = j_sub.add_parser('enable', help='Enable job and install its systemd timer')
     je.add_argument('name', help='Job name')
 
-    jd = j_sub.add_parser('disable', help='Disable job and remove its schedule from crontab')
+    jd = j_sub.add_parser('disable', help='Disable job and remove its systemd timer')
     jd.add_argument('name', help='Job name')
+
+    jlog = j_sub.add_parser('logs', help='Show journald output for a job')
+    jlog.add_argument('name', help='Job name')
+    jlog.add_argument('-n', '--lines', type=int, default=50, help='Lines to show')
 
     # config
     config_parser = subparsers.add_parser('config', help='Configure components and repositories')

@@ -102,14 +102,14 @@ def configure_jobs(root: Path, style=None, title=None, description=None) -> None
     if not jobs:
         return console.print('[dim]No jobs discovered.[/dim]')
     selected = questionary.checkbox(
-        'Select Jobs to enable (automatically syncs crontab):',
+        'Select Jobs to enable (installs systemd user timers):',
         choices=build_component_choices(root, 'job', jobs), style=_style(style),
     ).ask()
     if selected is not None:
         s = set(selected)
         for k in jobs:
             set_job_status(root, k, k in s)
-        console.print('[bold green]✓ Job configs and crontab updated.[/bold green]')
+        console.print('[bold green]✓ Job configs and systemd timers updated.[/bold green]')
 
 
 def configure_repositories(root: Path, style=None, title=None, description=None) -> None:

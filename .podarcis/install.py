@@ -186,7 +186,7 @@ def main() -> None:
         description='Podarcis manages knowledge across Open Knowledge Format (OKF v0.2) repositories:\n  • wiki: Objective knowledge base (anonymized concepts & references)\n  • workspace: Actionable deliverables (user profiles, protocols, reviews)')
     _hr()
     configure_jobs(root, title='Scheduled Jobs',
-        description='Jobs automate periodic tasks like GDrive sync and wiki audits. Enable them to schedule automatic background execution via cron.')
+        description='Jobs automate periodic tasks like GDrive sync and wiki audits. Enable them to schedule automatic background execution via systemd user timers.')
     _hr()
     _configure_global_command()
     _hr()

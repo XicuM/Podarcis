@@ -83,6 +83,25 @@ def _remove_global_symlinks(symlinks: list[Path], dry_run: bool) -> int:
     return removed
 
 
+def _remove_timers(dry_run: bool) -> int:
+    """Disable and delete the systemd user units installed for this checkout."""
+    sys.path.insert(0, str(root / '.podarcis'))
+    from jobs import scheduler
+
+    units = scheduler.installed_units(root)
+    if not units:
+        return 0
+    if dry_run:
+        for unit in units:
+            _say(f'  [dim](dry-run)[/dim] Would remove unit [cyan]{unit}[/cyan]')
+        return len(units)
+
+    for job_name in scheduler.job_names(root):
+        scheduler.remove(root, job_name)
+        _say(f'  [green]✓[/green] Removed timer for job [cyan]{job_name}[/cyan]')
+    return len(units)
+
+
 def _remove_venv(dry_run: bool) -> bool:
     '''Remove the .venv directory. Returns True if action was taken.'''
     venv_dir = root / '.venv'
@@ -188,6 +207,11 @@ def _print_preview(symlinks: list[Path], purge: bool) -> None:
 
     table.add_row('build artefacts', str(root), 'egg-info, __pycache__, .pyc, .pytest_cache')
 
+    sys.path.insert(0, str(root / '.podarcis'))
+    from jobs import scheduler
+    for unit in scheduler.installed_units(root):
+        table.add_row('systemd unit', str(unit), 'scheduled job timer')
+
     if purge:
         config_yaml = root / '.podarcis' / 'config.yaml'
         if config_yaml.exists():
@@ -236,6 +260,8 @@ def main() -> None:
             _say('[yellow]Aborted.[/yellow]')
             sys.exit(0)
         _say()
+
+    _remove_timers(dry_run)
 
     # ── 1. symlinks ──────────────────────────────────────────────────────────
     _say('[bold white]Removing global symlink(s)...[/bold white]')
