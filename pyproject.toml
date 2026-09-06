@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "podarcis"
-version = "2.3.0"
+version = "2.4.0"
 description = "Podarcis Open Knowledge Format (OKF v0.2) research agent engine and CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,11 +16,16 @@ dependencies = [
     "pytest",
     "pyyaml>=6.0",
     "yfinance",
-    "markitdown>=0.1.7",
+    "markitdown[pdf]>=0.1.7",
     "scipy>=1.15.3",
     "pandas>=2.0.0",
     "rapidfuzz>=3.0.0",
 ]
+
+[project.optional-dependencies]
+# Headless-browser fallback for publishers behind Cloudflare/bot walls (MDPI,
+# Springer, ScienceDirect). Requires `playwright install chromium` after install.
+browser = ["playwright>=1.40"]
 
 [project.scripts]
 podarcis = "podarcis.cli:main"

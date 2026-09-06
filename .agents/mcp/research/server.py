@@ -370,7 +370,14 @@ async def _fetch_google_books(volume_id: str) -> PaperMetadata | None:
             return None
 
 
-async def _fetch_unpaywall_pdf(doi: str) -> str | None:
+async def _fetch_unpaywall_pdfs(doi: str) -> list[str]:
+    """Return every open-access PDF mirror Unpaywall knows for a DOI, best first.
+
+    Publishers behind bot walls (MDPI, Springer, ScienceDirect) routinely 403 the
+    `best_oa_location`, while a PMC or institutional-repository mirror in
+    `oa_locations` serves the same PDF freely. Returning the full list lets the
+    downloader fall through to a mirror instead of failing the whole ingestion.
+    """
     contact_email = os.environ.get("UNPAYWALL_EMAIL", "")
     if not contact_email:
         # Fallback: read from .podarcis/config.yaml
@@ -384,7 +391,7 @@ async def _fetch_unpaywall_pdf(doi: str) -> str | None:
             except Exception:
                 pass
     if not contact_email:
-        return None  # Unpaywall requires a valid contact email
+        return []  # Unpaywall requires a valid contact email
     url = f"https://api.unpaywall.org/v2/{doi}?email={contact_email}"
     _check_domain(url)
     async with _make_client() as client:
@@ -392,10 +399,38 @@ async def _fetch_unpaywall_pdf(doi: str) -> str | None:
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
-            loc = data.get("best_oa_location") or {}
-            return loc.get("url_for_pdf")
         except Exception:
-            return None
+            return []
+
+    urls: list[str] = []
+    locations = [data.get("best_oa_location") or {}] + list(data.get("oa_locations") or [])
+    for loc in locations:
+        for key in ("url_for_pdf", "url"):
+            candidate = _normalize_pdf_url((loc or {}).get(key))
+            if candidate and candidate not in urls:
+                urls.append(candidate)
+    return urls
+
+
+_PMC_LANDING_RE = re.compile(
+    r"^https?://(?:www\.)?(?:pmc\.ncbi\.nlm\.nih\.gov|ncbi\.nlm\.nih\.gov/pmc)/articles/(PMC)?(\d+)/?$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_pdf_url(url: str | None) -> str | None:
+    """Rewrite known landing-page URLs to their direct PDF path.
+
+    Unpaywall frequently returns a PMC *article* URL in `url` where the PDF lives
+    one segment deeper. Fetching the landing page yields HTML, which the content
+    check correctly rejects — losing an otherwise freely available paper.
+    """
+    if not url:
+        return url
+    m = _PMC_LANDING_RE.match(url.strip())
+    if m:
+        return f"https://pmc.ncbi.nlm.nih.gov/articles/PMC{m.group(2)}/pdf/"
+    return url
 
 
 async def _fetch_local(paper_id: str) -> PaperMetadata | None:
@@ -563,12 +598,19 @@ def _publisher_oa_url(doi: str) -> str | None:
     return None
 
 
+_PLAYWRIGHT_HINT = (
+    "headless-browser fallback unavailable (playwright not installed — "
+    "`uv pip install 'podarcis[browser]' && playwright install chromium`)"
+)
+
+
 async def _download_pdf_playwright(url: str, dest: Path) -> bool:
-    """Attempt PDF download via headless browser (handles Cloudflare challenges)."""
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        return False
+    """Attempt PDF download via headless browser (handles Cloudflare challenges).
+
+    Raises ImportError when playwright is absent so the caller can report the
+    missing fallback instead of silently swallowing it.
+    """
+    from playwright.async_api import async_playwright
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
@@ -578,47 +620,56 @@ async def _download_pdf_playwright(url: str, dest: Path) -> bool:
             page = await context.new_page()
             # Navigate to the PDF URL; Cloudflare will auto-redirect through JS challenge
             response = await page.goto(url, wait_until="networkidle", timeout=30000)
-            if response is None:
+            if response is None or not response.ok:
                 return False
-            content_type = response.headers.get("content-type", "")
-            if "application/pdf" in content_type:
-                pdf_bytes = await response.body()
-                dest.write_bytes(pdf_bytes)
-                return True
-            # If not a direct PDF, try to get page content as PDF
-            # Some publishers render the PDF inline
-            await page.wait_for_timeout(2000)
-            body = await page.content()
-            if "cf-mitigated" in body or "Checking your browser" in body:
-                # Cloudflare challenge still active - try waiting longer
-                await page.wait_for_timeout(5000)
-                body = await page.content()
-                if len(body) < 2000:
-                    return False
-            page_pdf = await page.pdf()
-            dest.write_bytes(page_pdf)
+            # Only ever accept a PDF the server actually served. Rendering the page
+            # with page.pdf() is deliberately NOT done: it turns a Cloudflare
+            # challenge, a 404, or a paywall notice into a byte-valid PDF that
+            # passes every downstream check and enters sources/ as fabricated
+            # evidence. A missed download is recoverable; a fake source is not.
+            if "application/pdf" not in response.headers.get("content-type", ""):
+                return False
+            pdf_bytes = await response.body()
+            if not pdf_bytes.lstrip()[:5].startswith(b"%PDF-"):
+                return False
+            dest.write_bytes(pdf_bytes)
             return True
         finally:
             await browser.close()
     return False
 
 
-async def _download_pdf(url: str, dest: Path, doi: str | None = None) -> None:
-    """Stream a PDF to disk with retries. Falls back to Playwright on 403/bot-block."""
-    _check_domain(url)
-    publisher_url = _publisher_oa_url(doi) if doi else None
-    urls_to_try: list[str] = [url]
-    if publisher_url and "europepmc.org" in url:
-        urls_to_try = [publisher_url, url]
-    elif publisher_url:
-        urls_to_try = [publisher_url, url]
+async def _download_pdf(url: str | None, dest: Path, doi: str | None = None) -> str:
+    """Stream a PDF to disk with retries; return the URL that actually served it.
 
-    last_error = None
+    Falls back to Playwright on 403/bot-block.
+
+    Candidates are tried in order: the publisher-native OA URL derived from the DOI,
+    the resolver-supplied URL, then every Unpaywall mirror. Every candidate here is
+    vetted by an OA resolver (Semantic Scholar / OpenAlex / Unpaywall / arXiv), so the
+    publisher allow-list that guards the API endpoints is deliberately not applied —
+    it cannot enumerate the long tail of institutional repositories and was rejecting
+    legitimate open-access hosts. HTTPS and PDF magic bytes are enforced instead,
+    which is a stronger guarantee than a hostname list: it verifies the content.
+    """
+    publisher_url = _publisher_oa_url(doi) if doi else None
+    urls_to_try: list[str] = []
+    for candidate in (publisher_url, url):
+        if candidate and candidate not in urls_to_try:
+            urls_to_try.append(candidate)
+    if doi:
+        for mirror in await _fetch_unpaywall_pdfs(doi):
+            if mirror not in urls_to_try:
+                urls_to_try.append(mirror)
+
+    attempts: list[str] = []
     async with _make_client() as client:
         for try_url in urls_to_try:
+            if not try_url.lower().startswith("https://"):
+                attempts.append(f"{try_url} → skipped (not https)")
+                continue
             for attempt in range(3):
                 try:
-                    _check_domain(try_url)
                     async with client.stream(
                         "GET", try_url,
                         headers={
@@ -627,33 +678,52 @@ async def _download_pdf(url: str, dest: Path, doi: str | None = None) -> None:
                         },
                     ) as resp:
                         if resp.status_code in (403, 404):
+                            attempts.append(f"{try_url} → HTTP {resp.status_code}")
                             break  # try next URL
                         if resp.status_code == 429 or resp.status_code >= 500:
                             await asyncio.sleep(2 ** attempt + 1)
                             continue
                         resp.raise_for_status()
-                        with dest.open("wb") as f:
-                            async for chunk in resp.aiter_bytes(chunk_size=65536):
-                                f.write(chunk)
-                    return  # success
+                        body = bytearray()
+                        async for chunk in resp.aiter_bytes(chunk_size=65536):
+                            body.extend(chunk)
+                    if not bytes(body).lstrip()[:5].startswith(b"%PDF-"):
+                        ctype = resp.headers.get("content-type", "unknown")
+                        attempts.append(
+                            f"{try_url} → HTTP 200 but not a PDF "
+                            f"(content-type: {ctype}, {len(body)} bytes — likely a landing page)"
+                        )
+                        break  # try next URL rather than saving HTML as original.pdf
+                    dest.write_bytes(bytes(body))
+                    return try_url  # success
                 except httpx.HTTPStatusError as exc:
-                    last_error = exc
-                    if exc.response.status_code not in (429,) and exc.response.status_code < 500:
+                    code = exc.response.status_code
+                    attempts.append(f"{try_url} → HTTP {code}")
+                    if code != 429 and code < 500:
                         break
                     await asyncio.sleep(2 ** attempt + 1)
                 except httpx.TransportError as exc:
-                    last_error = exc
+                    attempts.append(f"{try_url} → {type(exc).__name__}: {exc}")
                     await asyncio.sleep(2 ** attempt)
 
     # ── httpx failed on all URLs → try Playwright fallback ───────────────────
+    playwright_missing = False
     for try_url in urls_to_try:
         try:
             if await _download_pdf_playwright(try_url, dest):
-                return
-        except Exception:
-            pass
+                if dest.exists() and dest.read_bytes().lstrip()[:5].startswith(b"%PDF-"):
+                    return try_url
+                attempts.append(f"{try_url} → playwright returned a non-PDF")
+                dest.unlink(missing_ok=True)
+        except ImportError:
+            playwright_missing = True
+            break
+        except Exception as exc:
+            attempts.append(f"{try_url} → playwright: {type(exc).__name__}: {exc}")
 
-    raise RuntimeError(f"Failed to download PDF after trying {urls_to_try}: {last_error}")
+    detail = "; ".join(attempts) or "no candidate URLs available"
+    suffix = f". Note: {_PLAYWRIGHT_HINT}" if playwright_missing else ""
+    raise RuntimeError(f"Failed to download PDF. Tried {len(urls_to_try)} URL(s): {detail}{suffix}")
 
 
 async def _ingest_paper(
@@ -685,18 +755,23 @@ async def _ingest_paper(
         shutil.copy2(meta.local_path, pdf_path)
         pdf_source_url = f"file://{meta.local_path}"
     else:
-        if not meta.pdf_url:
-            # Try Unpaywall
-            if meta.doi:
-                meta.pdf_url = await _fetch_unpaywall_pdf(meta.doi)
-        if not meta.pdf_url:
+        if not meta.pdf_url and meta.doi:
+            # Try Unpaywall — take the best mirror; _download_pdf tries the rest.
+            mirrors = await _fetch_unpaywall_pdfs(meta.doi)
+            meta.pdf_url = mirrors[0] if mirrors else None
+        if not meta.pdf_url and not meta.doi:
             shutil.rmtree(paper_dir, ignore_errors=True)
             raise ValueError(
                 "No open-access PDF found via any provider. "
                 "Please supply the PDF manually and use a local: paper_id."
             )
-        await _download_pdf(meta.pdf_url, pdf_path, doi=meta.doi)
-        pdf_source_url = meta.pdf_url
+        try:
+            pdf_source_url = await _download_pdf(meta.pdf_url, pdf_path, doi=meta.doi)
+        except Exception:
+            # Never leave a half-built stub behind — a directory without both
+            # original.pdf and raw.md is not an ingested source (CLAUDE.md §No Stubs).
+            shutil.rmtree(paper_dir, ignore_errors=True)
+            raise
 
     # ── Step 2: extract text ─────────────────────────────────────────────────
     await ctx.report_progress(2, 4, "Extracting text with markitdown…")
