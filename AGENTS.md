@@ -12,7 +12,7 @@ Subagent personas are defined as markdown files in `.agents/agents/*.md`. Each p
 
 There is deliberately **no delegation tool and no per-persona prompt**. An MCP tool cannot spawn an isolated process, so such a tool could only inline a multi-KB system prompt into the caller's own context — the opposite of what delegation is for.
 
-Personas are enabled by default from git-tracked gateway defaults (`.podarcis/gateway/router.py`). The `agents:` section of `.podarcis/config.yaml` can override those defaults per persona (e.g. `auditor: { enabled: false }`), and per-file frontmatter flags (`disable-model-invocation: true`, `user-invocable: false`, `disabled: true`) gate individual personas regardless of config.
+Personas are enabled by default from git-tracked gateway defaults (`.podarcis/gateway/router.py`). There is no interactive toggle for personas or skills: the harness loads only their one-line description until something invokes them, so gating one saves ~60 tokens — not worth a config surface, and the old toggle wrote disable flags into git-tracked files, turning a local preference into a repo diff. To retire a persona or skill permanently, set a frontmatter flag in its own file (`disable-model-invocation: true`, `user-invocable: false`, `disabled: true`); the `agents:` / `skills:` sections of `.podarcis/config.yaml` are still read as overrides if hand-written. Only **gateway tool modules** are toggleable (`podarcis config enable|disable mcp <name>`, or `podarcis config` → Tools), because their tool schemas load into every session up front whether used or not.
 
 ### Invocation
 

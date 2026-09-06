@@ -26,8 +26,6 @@ from components import (
     discover_components,
     get_enabled_mcp_servers,
     set_mcp_server_status,
-    set_skill_status,
-    set_agent_status,
 )
 
 from repos import (
@@ -112,20 +110,19 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     console.print('[bold #29b8db]Podarcis Configuration Status[/bold #29b8db]\n')
 
-    console.print('[bold white]MCP Servers:[/bold white]')
-    for k, v in status_data['mcp_servers'].items():
+    # Tool modules are the only context cost paid up front, so they get the budget.
+    live_tk = sum(v['tokens'] for v in status_data['mcp_servers'].values() if v['enabled'])
+    console.print(f'[bold white]Gateway tool modules:[/bold white] [dim]{live_tk:,} tokens per session[/dim]')
+    for k, v in sorted(status_data['mcp_servers'].items(), key=lambda i: -i[1]['tokens']):
         st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
         console.print(f'  • {k:<20} [{st}] ({v["tokens"]} tokens)')
 
-    console.print('\n[bold white]Skills:[/bold white]')
-    for k, v in status_data['skills'].items():
-        st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
-        console.print(f'  • {k:<20} [{st}] ({v["tokens"]} tokens)')
-
-    console.print('\n[bold white]Agents:[/bold white]')
-    for k, v in status_data['agents'].items():
-        st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
-        console.print(f'  • {k:<20} [{st}] ({v["tokens"]} tokens)')
+    # Skills and personas load on invocation, so there is no per-session budget
+    # and nothing to toggle — list them, don't imply a switch.
+    for label, section in (('Personas', 'agents'), ('Skills', 'skills')):
+        console.print(f'\n[bold white]{label}:[/bold white] [dim]loaded on demand[/dim]')
+        for k, v in status_data[section].items():
+            console.print(f'  • {k:<20} [dim]({v["tokens"]} tokens when invoked)[/dim]')
 
     console.print('\n[bold white]Jobs:[/bold white]')
     for k, v in status_data['jobs'].items():
@@ -142,49 +139,41 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_config_set_status(args: argparse.Namespace, enable: bool) -> int:
-    '''Enable or disable a component (mcp, skill, agent).'''
+    '''Enable or disable a gateway tool module.'''
     ctype = args.type.lower()
     name = args.name
-    mcp_servers, skills, agents = discover_components(root_dir)
+    mcp_servers, _, _ = discover_components(root_dir)
 
-    if ctype == 'mcp':
-        if name not in mcp_servers:
-            console.print(f'[bold red]Error:[/bold red] MCP server "{name}" not found. Available: {", ".join(mcp_servers.keys())}')
-            return 1
-        set_mcp_server_status(root_dir, name, enable, mcp_servers[name])
-        msg = f'[bold green]✓ Enabled[/bold green]' if enable else '[yellow]Disabled[/yellow]'
-        console.print(f'{msg} MCP server "{name}".')
-
-    elif ctype == 'skill':
-        if name not in skills:
-            console.print(f'[bold red]Error:[/bold red] Skill "{name}" not found. Available: {", ".join(skills.keys())}')
-            return 1
-        set_skill_status(root_dir, name, enable, skills[name])
-        msg = f'[bold green]✓ Enabled[/bold green]' if enable else '[yellow]Disabled[/yellow]'
-        console.print(f'{msg} skill "{name}".')
-
-    elif ctype == 'agent':
-        if name not in agents:
-            console.print(f'[bold red]Error:[/bold red] Agent "{name}" not found. Available: {", ".join(agents.keys())}')
-            return 1
-        set_agent_status(root_dir, name, enable, agents[name])
-        msg = f'[bold green]✓ Enabled[/bold green]' if enable else '[yellow]Disabled[/yellow]'
-        console.print(f'{msg} agent "{name}".')
-
-    else:
-        console.print(f'[bold red]Error:[/bold red] Unknown component type "{ctype}". Must be one of: mcp, skill, agent')
+    if ctype in ('skill', 'agent'):
+        console.print(
+            f'[bold red]Error:[/bold red] {ctype.capitalize()}s are not toggleable. '
+            f'The harness loads only their description until invoked, so gating them '
+            f'saves ~60 tokens each. To retire one, set [bold]disabled: true[/bold] in '
+            f'its frontmatter.'
+        )
         return 1
 
+    if ctype != 'mcp':
+        console.print(f'[bold red]Error:[/bold red] Unknown component type "{ctype}". Must be: mcp')
+        return 1
+
+    if name not in mcp_servers:
+        console.print(f'[bold red]Error:[/bold red] Tool module "{name}" not found. Available: {", ".join(mcp_servers)}')
+        return 1
+
+    set_mcp_server_status(root_dir, name, enable, mcp_servers[name])
+    msg = '[bold green]✓ Enabled[/bold green]' if enable else '[yellow]Disabled[/yellow]'
+    console.print(f'{msg} tool module "{name}".')
     return 0
 
 
 def cmd_config_enable(args: argparse.Namespace) -> int:
-    '''Enable a component (mcp, skill, agent).'''
+    '''Enable a gateway tool module.'''
     return _cmd_config_set_status(args, True)
 
 
 def cmd_config_disable(args: argparse.Namespace) -> int:
-    '''Disable a component (mcp, skill, agent).'''
+    '''Disable a gateway tool module.'''
     return _cmd_config_set_status(args, False)
 
 
@@ -738,14 +727,16 @@ def main() -> None:
     cfg_list.add_argument('--json', action='store_true', help='Output status in JSON format')
 
     # config enable
-    cfg_enable = config_sub.add_parser('enable', help='Enable a component (mcp|skill|agent)')
-    cfg_enable.add_argument('type', choices=['mcp', 'skill', 'agent'], help='Component type')
-    cfg_enable.add_argument('name', help='Component name')
+    cfg_enable = config_sub.add_parser('enable', help='Enable a gateway tool module')
+    # No argparse `choices`: 'skill'/'agent' reach the handler so it can explain
+    # why they are no longer toggleable instead of erroring out opaquely.
+    cfg_enable.add_argument('type', metavar='mcp', help='Component type (mcp)')
+    cfg_enable.add_argument('name', help='Tool module name')
 
     # config disable
-    cfg_disable = config_sub.add_parser('disable', help='Disable a component (mcp|skill|agent)')
-    cfg_disable.add_argument('type', choices=['mcp', 'skill', 'agent'], help='Component type')
-    cfg_disable.add_argument('name', help='Component name')
+    cfg_disable = config_sub.add_parser('disable', help='Disable a gateway tool module')
+    cfg_disable.add_argument('type', metavar='mcp', help='Component type (mcp)')
+    cfg_disable.add_argument('name', help='Tool module name')
 
     # config repo
     cfg_repo = config_sub.add_parser('repo', help='Configure repository Git remotes or local paths')

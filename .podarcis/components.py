@@ -117,12 +117,6 @@ def build_component_choices(root: Path, comp_type: str, items: dict, enabled_set
         if comp_type == 'mcp':
             desc = items[k].get('desc') or get_mcp_desc(root, items[k]['dir_name'], k)
             checked = (k in enabled_set) if enabled_set is not None else False
-        elif comp_type == 'skill':
-            desc = get_skill_desc(root, k)
-            checked = items[k].get('enabled', False)
-        elif comp_type == 'agent':
-            desc = get_agent_desc(root, k)
-            checked = items[k].get('enabled', False)
         elif comp_type == 'job':
             desc = f"{items[k].get('description', '')} [{items[k].get('schedule', '')}]"
             checked = items[k].get('enabled', False)
@@ -231,12 +225,13 @@ def discover_components(root: Path) -> tuple[dict, dict]:
 
     mcp_servers = {}
     if (mcp_dir := root/'.agents'/'mcp').exists():
-        for d in mcp_dir.iterdir():
-            if d.is_dir():
+        for d in sorted(mcp_dir.iterdir()):
+            # A module is its server.py. Requiring it keeps deleted modules deleted:
+            # a leftover __pycache__/ or data/ dir is not a phantom module.
+            if (server_py := d/'server.py').is_file():
                 key = d.name if d.name.endswith('-mcp') else f'{d.name}-mcp'
                 req_file = d / 'requirements.txt'
-                server_py = d / 'server.py'
-                mtime = server_py.stat().st_mtime if server_py.exists() else 0
+                mtime = server_py.stat().st_mtime
                 cache_key = f'mcp:{d.name}'
 
                 cached = token_cache.get(cache_key)
@@ -322,6 +317,16 @@ def discover_components(root: Path) -> tuple[dict, dict]:
                     'words': len(content.split())
                 }
 
+    # Drop cache entries for components deleted from disk, so the cache tracks
+    # reality instead of growing a tail of every module ever removed.
+    live_keys = (
+        {f'mcp:{v["dir_name"]}' for v in mcp_servers.values()} |
+        {f'skill:{k}' for k in skills} | {f'agent:{k}' for k in agents}
+    )
+    if stale := set(token_cache) - live_keys:
+        for k in stale: del token_cache[k]
+        cache_modified = True
+
     if cache_modified: save_json(root/'.agents'/'token_cache.json', token_cache)
 
     return mcp_servers, skills, agents
@@ -364,87 +369,5 @@ def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: d
     if enable and mcp_info.get('req'):
         install_deps(root, str(mcp_info['req']), True, f'Verifying deps for {server_key}...')
         console.print(f'[green]✓ Dependencies verified for {server_key}.[/green]')
-
-
-def set_skill_status(root: Path, skill_name: str, enable: bool, skill_info: dict) -> None:
-    '''Update SKILL.md frontmatter flags and .podarcis/config.yaml.'''
-    from common import load_yaml, save_yaml
-
-    cfg_path = root / '.podarcis' / 'config.yaml'
-    data = load_yaml(cfg_path)
-    skills_cfg = data.setdefault('skills', {})
-    skill_entry = skills_cfg.setdefault(skill_name, {})
-    if isinstance(skill_entry, dict):
-        skill_entry['enabled'] = enable
-    else:
-        skills_cfg[skill_name] = {'enabled': enable}
-    save_yaml(cfg_path, data)
-
-    if not (skill_file := skill_info['path']/'SKILL.md').exists(): return
-
-    content = skill_file.read_text(encoding='utf-8')
-    if not content.startswith('---'):
-        if not enable:
-            content = f'---\ndisable-model-invocation: true\nuser-invocable: false\ndisabled: true\n---\n\n{content}'
-    else:
-        parts = content.split('---', 2)
-        if len(parts) >= 3:
-            fm_lines = parts[1].strip().splitlines()
-            new_fm = [
-                line for line in fm_lines
-                if (line.split(':')[0].strip() if ':' in line else line.strip()) not in (
-                    'disable-model-invocation', 'user-invocable', 'disabled'
-                )
-            ]
-            if not enable:
-                new_fm.extend(['disable-model-invocation: true', 'user-invocable: false', 'disabled: true'])
-            body = parts[2].lstrip('\r\n')
-            content = f'---\n{"\n".join(new_fm)}\n---\n\n{body}'
-
-    skill_file.write_text(content, encoding='utf-8')
-    if enable and skill_info.get('req'):
-        install_deps(root, str(skill_info['req']), True, f'Installing dependencies for skill {skill_name}...')
-
-
-def set_agent_status(root: Path, agent_name: str, enable: bool, agent_info: dict) -> None:
-    '''Update agent frontmatter flags and .podarcis/config.yaml.'''
-    from common import load_yaml, save_yaml
-
-    cfg_path = root / '.podarcis' / 'config.yaml'
-    data = load_yaml(cfg_path)
-    agents_cfg = data.setdefault('agents', {})
-    agent_entry = agents_cfg.setdefault(agent_name, {})
-    if isinstance(agent_entry, dict):
-        agent_entry['enabled'] = enable
-    else:
-        agents_cfg[agent_name] = {'enabled': enable}
-    save_yaml(cfg_path, data)
-
-    agent_file = agent_info['path']
-    if not agent_file.exists():
-        return
-
-    content = agent_file.read_text(encoding='utf-8')
-    if not content.startswith('---'):
-        if not enable:
-            content = f'---\ndisable-model-invocation: true\nuser-invocable: false\ndisabled: true\n---\n\n{content}'
-    else:
-        parts = content.split('---', 2)
-        if len(parts) >= 3:
-            fm_lines = parts[1].strip().splitlines()
-            new_fm = [
-                line for line in fm_lines
-                if (line.split(':')[0].strip() if ':' in line else line.strip()) not in (
-                    'disable-model-invocation', 'user-invocable', 'disabled'
-                )
-            ]
-            if not enable:
-                new_fm.extend(['disable-model-invocation: true', 'user-invocable: false', 'disabled: true'])
-
-            body = parts[2].lstrip('\r\n')
-            content = f'---\n{"\n".join(new_fm)}\n---\n\n{body}'
-
-    agent_file.write_text(content, encoding='utf-8')
-
 
 

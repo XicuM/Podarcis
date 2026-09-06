@@ -8,8 +8,7 @@ from rich.panel import Panel
 from common import get_config_value, set_config_value
 from components import (
     discover_components, get_enabled_mcp_servers,
-    build_component_choices, run_mcp_setup,
-    set_agent_status, set_mcp_server_status, set_skill_status,
+    build_component_choices, run_mcp_setup, set_mcp_server_status,
 )
 from console import console, QSTYLE
 from repos import get_repo_names, get_repo_url, prompt_configure_repo
@@ -61,38 +60,6 @@ def configure_mcp_servers(root: Path, style=None, title=None, description=None) 
             console.print(f'[yellow]Disabled {key}.[/yellow]\n')
         elif act == 'Configure':
             run_mcp_setup(root, key)
-
-
-def configure_skills(root: Path, style=None, title=None, description=None) -> None:
-    _header(title, description)
-    _, skills, _ = discover_components(root)
-    if not skills:
-        return console.print('[dim]No skills discovered.[/dim]')
-    selected = questionary.checkbox(
-        'Select Skills to enable:',
-        choices=build_component_choices(root, 'skill', skills), style=_style(style),
-    ).ask()
-    if selected is not None:
-        s = set(selected)
-        for k, info in skills.items():
-            set_skill_status(root, k, k in s, info)
-        console.print('[bold green]✓ Skill configs updated.[/bold green]')
-
-
-def configure_agents(root: Path, style=None, title=None, description=None) -> None:
-    _header(title, description)
-    _, _, agents = discover_components(root)
-    if not agents:
-        return console.print('[dim]No agents discovered.[/dim]')
-    selected = questionary.checkbox(
-        'Select Agents to enable:',
-        choices=build_component_choices(root, 'agent', agents), style=_style(style),
-    ).ask()
-    if selected is not None:
-        s = set(selected)
-        for k, info in agents.items():
-            set_agent_status(root, k, k in s, info)
-        console.print('[bold green]✓ Agent configs updated.[/bold green]')
 
 
 def configure_jobs(root: Path, style=None, title=None, description=None) -> None:

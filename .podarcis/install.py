@@ -166,18 +166,12 @@ def main() -> None:
     _hr()
 
     from config_wizard import (
-        configure_mcp_servers, configure_skills, configure_agents, configure_jobs,
+        configure_mcp_servers, configure_jobs,
         configure_frontend, configure_repositories,
     )
 
-    configure_mcp_servers(root, title='MCP Servers Configuration',
-        description='Model Context Protocol (MCP) servers equip Podarcis subagents with external tool capabilities and data source integrations.')
-    _hr()
-    configure_skills(root, title='Agent Skills Configuration',
-        description='Skills extend subagents with specialized workflows, Python code execution, and domain capabilities.')
-    _hr()
-    configure_agents(root, title='Subagent Personas Configuration',
-        description='Personas configure autonomous subagents under .agents/agents/ for multi-agent literature discovery, protocol architecture, and OKF concept verification.')
+    configure_mcp_servers(root, title='Gateway Tool Modules',
+        description='The podarcis-mcp gateway binds these tool modules into every session. Their schemas cost context up front whether or not you use them, so disable what you will not need.\nSkills and personas need no setup: the harness loads only their one-line description until something invokes them.')
     _hr()
     configure_frontend(root, title='Frontend Tool',
         description='The frontend is the editor or knowledge-base viewer for wiki and workspace files.\nObsidian: markdown vault viewer. VSCode: full IDE.')

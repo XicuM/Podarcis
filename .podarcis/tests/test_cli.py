@@ -20,29 +20,23 @@ def test_cli_status_json(capsys):
     assert 'repositories' in data
 
 
-def test_cli_config_enable_disable_skill(tmp_path, monkeypatch):
-    '''Test enabling and disabling skills via CLI commands.'''
+def test_cli_config_rejects_skill_and_agent_toggles(tmp_path, monkeypatch):
+    """Skills and agents are not toggleable; the CLI must say so, not rewrite frontmatter."""
     import cli
     monkeypatch.setattr(cli, 'root_dir', tmp_path)
 
     skills_dir = tmp_path / '.agents' / 'skills' / 'sample-skill'
     skills_dir.mkdir(parents=True)
     skill_file = skills_dir / 'SKILL.md'
-    skill_file.write_text('---\ndescription: Sample Skill\n---\n\nSample body.', encoding='utf-8')
+    original = '---\ndescription: Sample Skill\n---\n\nSample body.'
+    skill_file.write_text(original, encoding='utf-8')
 
-    # Disable skill via CLI
-    args_dis = Namespace(type='skill', name='sample-skill')
-    res_dis = cmd_config_disable(args_dis)
-    assert res_dis == 0
-    content = skill_file.read_text(encoding='utf-8')
-    assert 'disable-model-invocation: true' in content
+    for ctype in ('skill', 'agent'):
+        assert cmd_config_disable(Namespace(type=ctype, name='sample-skill')) == 1
+        assert cmd_config_enable(Namespace(type=ctype, name='sample-skill')) == 1
 
-    # Enable skill via CLI
-    args_en = Namespace(type='skill', name='sample-skill')
-    res_en = cmd_config_enable(args_en)
-    assert res_en == 0
-    content_en = skill_file.read_text(encoding='utf-8')
-    assert 'disable-model-invocation: true' not in content_en
+    # The git-tracked source file must be left byte-for-byte untouched.
+    assert skill_file.read_text(encoding='utf-8') == original
 
 
 def test_cli_config_repo(tmp_path, monkeypatch):

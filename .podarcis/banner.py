@@ -1,4 +1,11 @@
-'''Header banner and lore rendering for the TUI application.'''
+'''Header banner and lore rendering for the TUI application.
+
+The banner answers three questions and deliberately no others: what is costing
+context, what is scheduled to run, and whether the knowledge repos are in sync.
+Skills and personas appear nowhere: the harness loads only their one-line
+description until something invokes them, so there is nothing to toggle and
+nothing to budget.
+'''
 
 # Standard library imports
 import random
@@ -9,264 +16,242 @@ from pathlib import Path
 from common import load_one_liners, load_version_info, get_config_value
 from components import discover_components, get_enabled_mcp_servers
 from console import console
-from repos import get_repo_names, get_repo_url
+from repos import get_repo_status
+from rich.cells import cell_len
 from rich.text import Text
 
 BORDER_STYLE = 'bold #29b8db'
+ACCENT = '#29b8db'
 
-
-def _center_text(t: Text, width: int) -> Text:
-    padding = max(0, width - len(t))
-    left = padding // 2
-    right = padding - left
-    result = Text(' ' * left)
-    result.append(t)
-    result.append(' ' * right)
-    return result
-
+LEFT_W, COL_GAP, RIGHT_W = 26, 4, 38
+INNER_W = LEFT_W + COL_GAP + RIGHT_W
 
 _FRONTEND_DISPLAY = {'vscode': 'VSCode', 'obsidian': 'Obsidian'}
 
 
-def _build_subtitle(root_dir: Path) -> Text:
-    frontend = _FRONTEND_DISPLAY.get(
-        get_config_value(root_dir, 'frontend'), 'No frontend',
-    )
+def _pad(text: str, width: int) -> str:
+    '''Pad or trim to an exact terminal cell width, honouring Braille/Unicode widths.'''
+    while cell_len(text) > width:
+        text = text[:-1]
+    return text + ' ' * (width - cell_len(text))
+
+
+def _fmt_schedule(expr: str, width: int = 14) -> str:
+    '''Compact a systemd OnCalendar expression for display.
+
+    `Sun *-*-* 03:00:00` -> `Sun 03:00`, `*-*-* 03:00:00` -> `daily 03:00`.
+    The raw form overflows the status column and breaks the box border.
+    '''
+    raw = (expr or '').strip()
+    if not raw:
+        return ''
+    toks = raw.split()
+    time = ''
+    if ':' in toks[-1]:
+        time = ':'.join(toks[-1].split(':')[:2])
+        toks = toks[:-1]
+    day = ' '.join(t for t in toks if t != '*-*-*')
+    label = f'{day or ("daily" if time else "")} {time}'.strip() or raw
+    return label if len(label) <= width else label[: width - 1] + '…'
+
+
+def _row(content: Text | str, style: str = '') -> None:
+    '''Print one bordered banner row.'''
+    row = Text('│ ', style=BORDER_STYLE)
+    if isinstance(content, Text):
+        row.append(content)
+    else:
+        row.append(_pad(content, INNER_W), style=style)
+    row.append(' │', style=BORDER_STYLE)
+    console.print(row)
+
+
+def _centered(t: Text, width: int) -> Text:
+    pad = max(0, width - cell_len(t.plain))
+    left = pad // 2
+    return Text(' ' * left) + t + Text(' ' * (pad - left))
+
+
+def _subtitle(root_dir: Path) -> Text:
+    frontend = _FRONTEND_DISPLAY.get(get_config_value(root_dir, 'frontend'), 'No frontend')
     path_str = str(root_dir).replace(str(Path.home()), '~')
     return (Text()
         .append(frontend, style='white')
-        .append(' — ', style='cyan')
+        .append(' · ', style=ACCENT)
         .append(path_str, style='white')
     )
 
 
-def _render_right_cell(
-    kind: str,
-    title: str,
-    extra: str | int | None,
-    enabled: bool,
-    width: int = 38,
-    offset: int = 24,
-    tok_w: int = 12,
-) -> Text:
-    '''Format right-hand MCP, skill, agent, or job item cell for side-by-side layout.'''
-    cell = Text()
-    if kind == 'header':
-        if extra:
-            max_title = width - 2 - tok_w
-            if len(title) > max_title: title = title[:max(max_title - 3, 0)] + '...'
-        cell.append(title, style=BORDER_STYLE)
-        extra_str = str(extra) if extra else ''
-        if extra_str:
-            sp = max(2, offset - len(title))
-            tok_formatted = extra_str.rjust(tok_w)
-            cell.append(' ' * sp + tok_formatted, style='dim white')
-            used = len(title) + sp + len(tok_formatted)
-        else: used = len(title)
-        cell.append(' ' * max(0, width - used))
-    elif kind == 'item':
-        dot_style = 'bold green' if enabled else 'bold red'
-        if extra is not None:
-            max_title = width - 2 - 2 - tok_w
-            if len(title) > max_title: title = title[:max(max_title - 3, 0)] + '...'
-        else:
-            max_title = width - 2
-            if len(title) > max_title: title = title[:max(max_title - 3, 0)] + '...'
-        cell.append('● ' if enabled else '○ ', style=dot_style)
-        cell.append(title, style='bold white')
-        used = 2 + len(title)
-        if extra is not None:
-            tok_str = f'{extra:,} tk' if isinstance(extra, int) else str(extra)
-            sp = max(2, offset - used)
-            tok_formatted = tok_str.rjust(tok_w)
-            cell.append(' ' * sp + tok_formatted, style='dim white')
-            used += sp + len(tok_formatted)
-        cell.append(' ' * max(0, width - used))
-    else: cell.append(' ' * width)
-    return cell
+def _print_header(root_dir: Path, splash: str | None) -> None:
+    '''Render the title border, splash one-liner, and frontend/path subtitle.
 
-
-from rich.cells import cell_len
-
-
-def _pad_cell(text: str, width: int) -> str:
-    '''Pad text to exact terminal cell width taking Unicode/Braille display widths into account.'''
-    w = cell_len(text)
-    if w > width:
-        while text and cell_len(text) > width:
-            text = text[:-1]
-        w = cell_len(text)
-    return text + ' ' * max(0, width - w)
-
-
-def display_project_banner(root_dir: Path, splash: str | None = None, right_w: int = 38) -> None:
-    '''Render side-by-side logo and component status header box.'''
-    logo_path = Path(__file__).resolve().parent/'logo.txt'
-    logo_lines = ([
-        l.replace('\u2800', ' ').rstrip()
-        for l in logo_path.read_text('utf-8').splitlines()
-    ] if logo_path.exists() else [])
-
+    Shared by the project and install banners so the two cannot drift.
+    '''
     version, date_str = load_version_info(root_dir)
-    mcp_servers, skills, agents = discover_components(root_dir)
-    enabled_mcp = get_enabled_mcp_servers(root_dir)
-    from jobs import discover_jobs
-    jobs = discover_jobs(root_dir)
-
-    left_w, col_gap = 26, 4
-    total_inner_w = left_w + col_gap + right_w
-
-    # Count active components and tokens for display
-    mcp_active = sum(1 for m in mcp_servers if m in enabled_mcp)
-    mcp_tokens = sum(v.get('tokens', 0) for m, v in mcp_servers.items() if m in enabled_mcp)
-    skill_active = sum(1 for v in skills.values() if v.get('enabled'))
-    skill_tokens = sum(v.get('tokens', 0) for v in skills.values() if v.get('enabled'))
-    agent_active = sum(1 for v in agents.values() if v.get('enabled'))
-    agent_tokens = sum(v.get('tokens', 0) for v in agents.values() if v.get('enabled'))
-    job_active = sum(1 for v in jobs.values() if v.get('enabled'))
-
-    mcp_hdr = f'MCP Servers ({mcp_active}/{len(mcp_servers)})'
-    skill_hdr = f'Skills ({skill_active}/{len(skills)})'
-    agent_hdr = f'Agents ({agent_active}/{len(agents)})'
-    job_hdr = f'Jobs ({job_active}/{len(jobs)})'
-
-    # Components for the right column
-    right_items = [
-        ('header', mcp_hdr, f'{mcp_tokens:,} tk', True),
-        *[
-            ('item', m, mcp_servers[m].get('tokens', 0), m in enabled_mcp)
-            for m in sorted(mcp_servers)
-        ],
-        ('empty', '', '', True),
-        ('header', skill_hdr, f'{skill_tokens:,} tk', True),
-        *[
-            ('item', s, skills[s].get('tokens', 0), skills[s]['enabled'])
-            for s in sorted(skills)
-        ],
-        ('empty', '', '', True),
-        ('header', agent_hdr, f'{agent_tokens:,} tk', True),
-        *[
-            ('item', a, agents[a].get('tokens', 0), agents[a]['enabled'])
-            for a in sorted(agents)
-        ],
-        ('empty', '', '', True),
-        ('header', job_hdr, None, True),
-        *[
-            ('item', j, jobs[j].get('schedule', ''), jobs[j]['enabled'])
-            for j in sorted(jobs)
-        ],
-    ]
-
     title = f' Podarcis — The Research Agent v{version} ({date_str}) '
-    dash_count = max(4, (total_inner_w + 2) - len(title))
-    d_left, d_right = dash_count // 2, dash_count - (dash_count // 2)
+    dashes = max(4, (INNER_W + 2) - len(title))
 
-    splash_text = splash or random.choice(load_one_liners(root_dir))
-    formatted_splash = f'★ {splash_text} ★'
-    if len(formatted_splash) > total_inner_w:
-        formatted_splash = formatted_splash[: total_inner_w - 3] + '...'
-
-    def print_row(content: Text | str, style: str = '') -> None:
-        row = Text().append('│ ', style=BORDER_STYLE)
-        if isinstance(content, Text):
-            row.append(content)
-        else:
-            row.append(content, style=style)
-        row.append(' │', style=BORDER_STYLE)
-        console.print(row)
-
-    # Top border & splash section
     console.print(Text()
         .append('╭', style=BORDER_STYLE)
-        .append('─' * d_left, style='#29b8db')
-        .append(title, style='bold white on #29b8db')
-        .append('─' * d_right, style='#29b8db')
+        .append('─' * (dashes // 2), style=ACCENT)
+        .append(title, style=f'bold white on {ACCENT}')
+        .append('─' * (dashes - dashes // 2), style=ACCENT)
         .append('╮', style=BORDER_STYLE)
     )
 
-    print_row(formatted_splash.center(total_inner_w), style='italic dim')
+    splash_text = splash or random.choice(load_one_liners(root_dir))
+    _row(f'★ {splash_text} ★'.center(INNER_W), style='italic dim')
+    _row(_centered(_subtitle(root_dir), INNER_W))
 
-    subtitle = _build_subtitle(root_dir)
-    if len(subtitle) > total_inner_w:
-        subtitle = subtitle[: total_inner_w - 3]
-        subtitle.append('...', style='dim white')
 
-    print_row(_center_text(subtitle, total_inner_w))
-    print_row(' ' * total_inner_w)
+def _status_rows(root_dir: Path) -> list[tuple]:
+    '''Build the right-hand status rows: gateway tool budget, then scheduled jobs.'''
+    from jobs import discover_jobs
 
-    # Side-by-side logo and component status rendering
-    left_lines = [_pad_cell(line, left_w) for line in logo_lines]
-    fill_item = ('empty', '', '', True)
-    for left_line, item in zip_longest(left_lines, right_items, fillvalue=fill_item):
-        left_str = left_line if isinstance(left_line, str) else ' ' * left_w
-        item_tuple = item if isinstance(item, tuple) and len(item) == 4 else fill_item
-        kind, item_title, extra, enabled = item_tuple
+    mcp_servers, _, _ = discover_components(root_dir)
+    enabled_mcp = get_enabled_mcp_servers(root_dir)
+    jobs = discover_jobs(root_dir)
 
-        console.print(Text()
-            .append('│ ', style=BORDER_STYLE)
-            .append(left_str, style='#29b8db')
-            .append(' ' * col_gap)
-            .append(_render_right_cell(kind, item_title, extra, enabled, right_w))
-            .append(' │', style=BORDER_STYLE)
+    live = {k: v for k, v in mcp_servers.items() if k in enabled_mcp}
+    total_tk = sum(v.get('tokens', 0) for v in live.values())
+
+    # Tool modules are ordered by what they cost: the budget is the point.
+    modules = sorted(mcp_servers, key=lambda k: -mcp_servers[k].get('tokens', 0))
+
+    rows: list[tuple] = [
+        ('header', f'Gateway tools ({len(live)}/{len(mcp_servers)})', f'{total_tk:,} tk'),
+        *[
+            ('item', k.removesuffix('-mcp'), f'{mcp_servers[k].get("tokens", 0):,} tk',
+             k in enabled_mcp)
+            for k in modules
+        ],
+    ]
+
+    if jobs:
+        job_on = sum(1 for v in jobs.values() if v.get('enabled'))
+        rows += [
+            ('empty',),
+            ('header', f'Jobs ({job_on}/{len(jobs)})', ''),
+            *[
+                ('item', j, _fmt_schedule(jobs[j].get('schedule', '')), jobs[j]['enabled'])
+                for j in sorted(jobs)
+            ],
+        ]
+
+    return rows
+
+
+def _render_status(row: tuple, width: int = RIGHT_W) -> Text:
+    '''Format one right-column row: label on the left, value right-aligned.'''
+    kind = row[0]
+    if kind == 'empty':
+        return Text(' ' * width)
+
+    label, value = row[1], str(row[2] or '')
+    cell = Text()
+    if kind == 'header':
+        prefix, label_style = '', BORDER_STYLE
+    else:
+        prefix, label_style = ('● ' if row[3] else '○ '), 'bold white'
+        cell.append(prefix, style='bold green' if row[3] else 'bold red')
+
+    avail = width - len(prefix) - (len(value) + 2 if value else 0)
+    label = label if len(label) <= avail else label[: max(avail - 1, 0)] + '…'
+    cell.append(label, style=label_style)
+    gap = width - len(prefix) - len(label) - len(value)
+    cell.append(' ' * max(1, gap))
+    cell.append(value, style='dim white')
+    return cell
+
+_REPO_STATE = {
+    'synced':         ('synced',  'green'),
+    'modified':       (None,      'yellow'),   # label carries the change count
+    'ahead':          (None,      ACCENT),
+    'behind':         (None,      'yellow'),
+    'missing':        ('missing', 'bold red'),
+    'gdrive_managed': ('gdrive',  'dim white'),
+    'ready':          ('ready',   'dim white'),
+}
+
+NAME_W, BRANCH_W, STATE_W = 11, 9, 13
+
+
+def _short_remote(url: str) -> str:
+    '''Trim a git remote to the part that identifies it.'''
+    if not url or url in ('local', 'gdrive'):
+        return url or 'local'
+    for prefix in ('git@github.com:', 'https://github.com/', 'git@', 'https://'):
+        if url.startswith(prefix):
+            url = url[len(prefix):]
+            break
+    return url.removesuffix('.git')
+
+
+def _repo_state(info: dict) -> tuple[str, str]:
+    '''Human-readable tracking state and its style for one repository.'''
+    status = info.get('status', 'ready')
+    label, style = _REPO_STATE.get(status, ('ready', 'dim white'))
+    if label is None:
+        if status == 'modified':
+            n = info.get('changes', 0)
+            label = f'{n} change' + ('' if n == 1 else 's')
+        else:
+            label = f'{"↑" if status == "ahead" else "↓"}{info.get(status, 0)}'
+    # A dirty tree can also be out of step with its upstream; say both.
+    if status == 'modified':
+        if info.get('ahead'): label += f' ↑{info["ahead"]}'
+        if info.get('behind'): label += f' ↓{info["behind"]}'
+    return label, style
+
+
+def _repo_rows(root_dir: Path) -> list[Text]:
+    '''Render one tracking row per configured repository.
+
+    Costs a handful of local `git` calls per render via get_repo_status; that is
+    the price of showing live state instead of the static configured URL.
+    '''
+    rows = []
+    for info in get_repo_status(root_dir):
+        label, style = _repo_state(info)
+        rows.append(Text()
+            .append('  ' + _pad(info['repo'], NAME_W), style=f'bold {ACCENT}')
+            .append(_pad(info.get('branch') or '—', BRANCH_W), style='white')
+            .append(_pad(label, STATE_W), style=style)
+            .append(
+                _pad(_short_remote(info.get('url', '')), INNER_W - 2 - NAME_W - BRANCH_W - STATE_W),
+                style='dim white',
+            )
+        )
+    return rows
+
+
+def display_project_banner(root_dir: Path, splash: str | None = None) -> None:
+    '''Render side-by-side logo and gateway/job status header box.'''
+    logo_path = Path(__file__).resolve().parent/'logo.txt'
+    logo_lines = ([
+        l.replace('⠀', ' ').rstrip()
+        for l in logo_path.read_text('utf-8').splitlines()
+    ] if logo_path.exists() else [])
+
+    _print_header(root_dir, splash)
+    _row('')
+
+    rows = _status_rows(root_dir)
+    for logo_line, row in zip_longest(logo_lines, rows, fillvalue=None):
+        _row(Text()
+            .append(_pad(logo_line or '', LEFT_W), style=ACCENT)
+            .append(' ' * COL_GAP)
+            .append(_render_status(row or ('empty',)))
         )
 
-    print_row(' ' * total_inner_w)
+    _row('')
+    for repo_row in _repo_rows(root_dir):
+        _row(repo_row)
 
-    # Repository links (2-column: cyan name column, dim white remote column)
-    name_w = 12
-    rem_w = total_inner_w - name_w - 2
-    for r_name in get_repo_names(root_dir):
-        url = get_repo_url(root_dir, r_name) or 'local'
-        name_str = r_name[:name_w].ljust(name_w)
-        disp_url = url if len(url) <= rem_w else url[: rem_w - 3] + '...'
-        url_str = disp_url.ljust(rem_w)
-
-        print_row(Text()
-            .append(f'  {name_str}', style='bold #29b8db')
-            .append(url_str, style='dim white')
-        )
-
-    # Bottom border
-    console.print(Text('╰' + '─' * (total_inner_w + 2) + '╯', style=BORDER_STYLE))
+    console.print(Text('╰' + '─' * (INNER_W + 2) + '╯', style=BORDER_STYLE))
 
 
 def display_install_banner(root_dir: Path, splash: str | None = None) -> None:
     '''Render clean minimal installation header box.'''
-    version, date_str = load_version_info(root_dir)
-    total_inner_w = 68
-
-    title = f' Podarcis — The Research Agent v{version} ({date_str}) '
-    dash_count = max(4, (total_inner_w + 2) - len(title))
-    d_left, d_right = dash_count // 2, dash_count - (dash_count // 2)
-
-    splash_text = splash or random.choice(load_one_liners(root_dir))
-    formatted_splash = f'★ {splash_text} ★'
-    if len(formatted_splash) > total_inner_w:
-        formatted_splash = formatted_splash[: total_inner_w - 3] + '...'
-
-    def print_row(content: Text | str, style: str = '') -> None:
-        row = Text('│ ', style=BORDER_STYLE)
-        if isinstance(content, str): row.append(content, style=style)
-        else: row.append(content)
-        row.append(' │', style=BORDER_STYLE)
-        console.print(row)
-
-    # Top border & header
-    top_border = Text('╭', style=BORDER_STYLE)
-    top_border.append('─' * d_left, style='#29b8db')
-    top_border.append(title, style='bold white on #29b8db')
-    top_border.append('─' * d_right, style='#29b8db')
-    top_border.append('╮', style=BORDER_STYLE)
-    console.print(top_border)
-
-    print_row(formatted_splash.center(total_inner_w), style='italic dim')
-
-    subtitle = _build_subtitle(root_dir)
-    if len(subtitle) > total_inner_w:
-        subtitle = subtitle[: total_inner_w - 3]
-        subtitle.append('...', style='dim white')
-    print_row(_center_text(subtitle, total_inner_w))
-
-    # Bottom border
-    bot_border = Text('╰' + '─' * (total_inner_w + 2) + '╯', style=BORDER_STYLE)
-    console.print(bot_border)
+    _print_header(root_dir, splash)
+    console.print(Text('╰' + '─' * (INNER_W + 2) + '╯', style=BORDER_STYLE))
