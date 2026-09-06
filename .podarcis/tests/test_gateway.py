@@ -11,14 +11,46 @@ def test_gateway_dynamic_routing():
     async def run():
         root = Path('.').resolve()
         mcp, watcher = create_gateway(root)
-        tools = await mcp.list_tools()
-        tool_names = [t.name for t in tools]
+        tool_names = [t.name for t in await mcp.list_tools()]
         assert 'wiki_search' in tool_names
         assert 'literature_search' in tool_names
         assert 'diagnostics_log' in tool_names
-        assert 'agent_delegate' in tool_names
 
     asyncio.run(run())
+
+
+def test_personas_exposed_as_resources_only():
+    '''Personas reach agents through their harness's native subagent mechanism
+    (.claude/agents, .opencode/agents — both this same directory), which gives
+    real context isolation. The MCP resource is a read-only fallback for clients
+    without one. No delegation tool: MCP cannot spawn an isolated process, so
+    such a tool could only inline the persona into the caller's own context.'''
+    async def run():
+        root = Path('.').resolve()
+        mcp, watcher = create_gateway(root)
+
+        tool_names = [t.name for t in await mcp.list_tools()]
+        assert 'agent_delegate' not in tool_names
+
+        prompt_names = [p.name for p in await mcp.list_prompts()]
+        assert not [p for p in prompt_names if p.startswith('agent_')]
+
+        uris = {str(r.uri) for r in await mcp.list_resources()}
+        assert 'podarcis://agents/synthesizer.md' in uris
+        assert 'podarcis://agents/researcher.md' in uris
+
+    asyncio.run(run())
+
+
+def test_persona_content_is_backend_agnostic():
+    '''sources_backend (gdrive vs local) must NOT be resolved at bind time. Each
+    persona reads .podarcis/config.yaml at runtime and picks the matching skill,
+    so one static persona serves every instance. If the binder ever specialised
+    per backend, a gdrive instance would silently receive local instructions.'''
+    persona = (Path('.').resolve() / '.agents' / 'agents' / 'synthesizer.md').read_text()
+    assert 'sources_backend' in persona
+    assert 'synthesizer-gdrive' in persona
+    assert 'synthesizer-local' in persona
 
 
 def test_default_agents_enabled_without_config(tmp_path):

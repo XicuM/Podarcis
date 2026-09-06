@@ -80,7 +80,3 @@ def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
                             mcp.add_tool(mod.run, name=tool_name)
                 except Exception:
                     pass
-
-def unregister(mcp) -> None:
-    '''Unregister skill prompts and resources.'''
-    _REGISTERED_SKILLS.clear()

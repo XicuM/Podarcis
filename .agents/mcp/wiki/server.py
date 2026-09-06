@@ -40,8 +40,7 @@ for _p in (_WIKI_DIR,):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-# Import lint scripts directly (they expose importable functions)
-import check_links   # noqa: E402
+# Lint scripts are executed as subprocesses by path (see _run_script), not imported.
 
 # ── Server ────────────────────────────────────────────────────────────────────
 

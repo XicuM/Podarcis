@@ -1,24 +1,41 @@
 '''Agents binder for Podarcis MCP Gateway.
 
-Exposes subagent personas from .agents/agents/*.md as MCP Prompts, Resources, and Delegation tools.
+Exposes subagent personas from .agents/agents/*.md as MCP Resources.
+
+Personas are delivered to agents by their harness, natively and with real context
+isolation — Claude Code reads .claude/agents/, OpenCode reads .opencode/agents/,
+and both resolve to this same .agents/agents/ directory. The resource below is a
+read-only fallback for clients that have no native subagent mechanism; it is not
+the primary path and costs nothing until something reads it.
+
+Deliberately NOT registered here:
+
+  * A prompt per persona. It returned byte-identical content to the resource, so
+    it was a second transport for the same static file.
+
+  * A delegation tool. An MCP tool cannot spawn an isolated subagent process, so
+    the old agent_delegate could only return the persona text with instructions
+    to adopt it for the rest of the current task — folding a 4KB system prompt
+    into the caller's context, which is the opposite of what delegation is for.
+    Its own response told callers to use the native Agent tool instead.
+
+Per-instance workflow differences (notably sources_backend: gdrive vs local) are
+NOT decided here and never were. Each persona reads .podarcis/config.yaml at
+runtime and selects the matching skill — see the "Active Skill Check" table in
+synthesizer.md. This binder serves the same static markdown to every instance.
 '''
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from typing import Annotated
 
-_REGISTERED_AGENTS: dict[str, str] = {}
 
 def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
-    '''Discover and register enabled subagent personas as MCP prompts, resources, and delegation tools.'''
+    '''Discover and register enabled subagent personas as MCP resources.'''
     agents_dir = root / '.agents' / 'agents'
     if not agents_dir.exists():
         return
 
-    from components import is_agent_enabled, get_agent_desc
-
-    _REGISTERED_AGENTS.clear()
+    from components import is_agent_enabled
 
     for agent_file in sorted(agents_dir.glob('*.md')):
         agent_name = agent_file.stem
@@ -29,10 +46,6 @@ def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
             continue
 
         content = agent_file.read_text(encoding='utf-8')
-        _REGISTERED_AGENTS[agent_name] = content
-
-        # 1. Register Resource: podarcis://agents/<name>.md
-        resource_uri = f'podarcis://agents/{agent_name}.md'
 
         def _make_resource_fn(text: str, name: str):
             def resource_fn() -> str:
@@ -41,53 +54,8 @@ def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
             return resource_fn
 
         try:
-            mcp.resource(resource_uri)(_make_resource_fn(content, agent_name))
+            mcp.resource(f'podarcis://agents/{agent_name}.md')(
+                _make_resource_fn(content, agent_name)
+            )
         except Exception:
             pass
-
-        # 2. Register Prompt: agent_<name>
-        prompt_name = f'agent_{agent_name.replace("-", "_")}'
-
-        def _make_prompt_fn(text: str, name: str):
-            def prompt_fn() -> str:
-                return text
-            prompt_fn.__doc__ = f"System prompt for subagent {name}"
-            return prompt_fn
-
-        try:
-            mcp.prompt(name=prompt_name)(_make_prompt_fn(content, agent_name))
-        except Exception:
-            pass
-
-    # 3. Register Delegation Tool: agent_delegate
-    @mcp.tool(name='agent_delegate')
-    def delegate_task(
-        agent: Annotated[str, "Target subagent persona name (e.g. 'researcher', 'synthesizer', 'protocol-architect', 'auditor')"],
-        task: Annotated[str, "Clear, specific task prompt to delegate to the subagent"],
-    ) -> str:
-        '''Delegate a sub-task to an active Podarcis subagent persona.'''
-        if agent not in _REGISTERED_AGENTS:
-            available = ", ".join(sorted(_REGISTERED_AGENTS.keys()))
-            return f"Error: Agent '{agent}' is not available or disabled. Active agents: {available}"
-
-        persona_prompt = _REGISTERED_AGENTS[agent]
-        return (
-            f"=== DELEGATED TASK: ADOPT PERSONA [{agent}] ===\n"
-            f"This MCP tool cannot spawn an isolated subagent process itself. "
-            f"To execute this delegation, adopt the persona below as your operating "
-            f"instructions for the remainder of this task, then carry out the task.\n\n"
-            f"Task: {task}\n\n"
-            f"=== Persona System Prompt ({len(persona_prompt)} chars) ===\n{persona_prompt}\n"
-            f"=== End Persona System Prompt ===\n\n"
-            f"Note: on Claude Code, prefer the native Agent tool with "
-            f"subagent_type: \"{agent}\" instead of this tool — it runs the persona "
-            f"in an isolated context rather than folding it into the current one."
-        )
-
-def unregister(mcp) -> None:
-    '''Unregister agent delegation tools.'''
-    _REGISTERED_AGENTS.clear()
-    try:
-        mcp.remove_tool('agent_delegate')
-    except Exception:
-        pass
