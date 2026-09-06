@@ -662,17 +662,25 @@ def main() -> None:
         prog='podarcis',
         description='Podarcis OKF v0.2 Research Agent engine & CLI configuration tool',
     )
-    try:
-        _version = version('podarcis')
-    except PackageNotFoundError:
-        # Fallback for dev/editable installs: read directly from pyproject.toml
-        _pyproject = Path(__file__).resolve().parent.parent / 'pyproject.toml'
+    # pyproject.toml wins over installed dist metadata. AGENTS.md requires every
+    # platform commit to bump it precisely so drift between instances is visible
+    # here — but an editable install caches the version at install time, so
+    # importlib.metadata kept reporting whatever was current when `pip install -e`
+    # last ran, defeating the check it exists to serve.
+    _pyproject = Path(__file__).resolve().parent.parent / 'pyproject.toml'
+    _version = None
+    if _pyproject.exists():
         try:
             import tomllib  # Python 3.11+
         except ImportError:
             import tomli as tomllib  # type: ignore[no-redef]
         with open(_pyproject, 'rb') as _f:
             _version = tomllib.load(_f)['project']['version']
+    if _version is None:
+        try:
+            _version = version('podarcis')
+        except PackageNotFoundError:
+            _version = 'unknown'
     parser.add_argument('-v', '--version', action='version', version=f'podarcis {_version}')
     parser.add_argument('-i', '--interactive', action='store_true', help='Launch interactive TUI menu')
 

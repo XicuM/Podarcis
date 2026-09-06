@@ -1,17 +1,31 @@
 '''Skills binder for Podarcis MCP Gateway.
 
-Exposes enabled skills from .agents/skills/ as MCP Prompts, Resources, and script tools.
+Exposes enabled skills from .agents/skills/ as MCP Resources.
+
+Like personas, skills are loaded by the harness natively — Claude Code reads
+.claude/skills/, OpenCode reads .opencode/skills/, and both resolve to this same
+.agents/skills/ directory. The resource below is a read-only fallback for clients
+with no native skill mechanism; it costs nothing until something reads it.
+
+Deliberately NOT registered here:
+
+  * A prompt per skill. It returned byte-identical content to the resource, so it
+    was a second transport for the same static file — and a third copy of what the
+    harness had already loaded.
+
+  * Tools built from scripts/*.py. That block exec'd every script at gateway
+    startup looking for a `run` attribute, under a bare `except: pass`. No shipped
+    script defines one, so it registered zero tools while executing arbitrary
+    module-level code on every config reload. The scripts are invoked the way they
+    were designed to be — as commands, via Bash (see the self-improvement skill).
 '''
 from __future__ import annotations
 
-import sys
-import importlib.util
 from pathlib import Path
 
-_REGISTERED_SKILLS: set[str] = set()
 
 def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
-    '''Discover and register enabled skills as MCP resources, prompts, and tools.'''
+    '''Discover and register enabled skills as MCP resources.'''
     skills_dir = root / '.agents' / 'skills'
     if not skills_dir.exists():
         return
@@ -33,12 +47,8 @@ def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
         if not skill_file.exists():
             continue
 
-        _REGISTERED_SKILLS.add(skill_name)
         content = skill_file.read_text(encoding='utf-8')
 
-        # 1. Register Resource: podarcis://skills/<name>
-        resource_uri = f'podarcis://skills/{skill_name}'
-        
         def _make_resource_fn(text: str, name: str):
             def resource_fn() -> str:
                 return text
@@ -46,37 +56,8 @@ def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
             return resource_fn
 
         try:
-            mcp.resource(resource_uri)(_make_resource_fn(content, skill_name))
+            mcp.resource(f'podarcis://skills/{skill_name}')(
+                _make_resource_fn(content, skill_name)
+            )
         except Exception:
             pass
-
-        # 2. Register Prompt: skill_<name>
-        prompt_name = f'skill_{skill_name.replace("-", "_")}'
-
-        def _make_prompt_fn(text: str, name: str):
-            def prompt_fn() -> str:
-                return text
-            prompt_fn.__doc__ = f"Skill prompt for {name}"
-            return prompt_fn
-
-        try:
-            mcp.prompt(name=prompt_name)(_make_prompt_fn(content, skill_name))
-        except Exception:
-            pass
-
-        # 3. Register helper scripts as MCP tools if present under scripts/
-        scripts_dir = skill_path / 'scripts'
-        if scripts_dir.exists():
-            for script_file in scripts_dir.glob('*.py'):
-                tool_name = f'skill_{skill_name.replace("-", "_")}_{script_file.stem}'
-                if str(scripts_dir) not in sys.path:
-                    sys.path.insert(0, str(scripts_dir))
-                try:
-                    spec = importlib.util.spec_from_file_location(script_file.stem, script_file)
-                    if spec and spec.loader:
-                        mod = importlib.util.module_from_spec(spec)
-                        spec.loader.exec_module(mod)
-                        if hasattr(mod, 'run'):
-                            mcp.add_tool(mod.run, name=tool_name)
-                except Exception:
-                    pass

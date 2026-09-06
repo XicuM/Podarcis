@@ -19,8 +19,8 @@ logger = logging.getLogger('podarcis.gateway.router')
 MODULE_PATHS = {
     'wiki': '.agents/mcp/wiki/server.py',
     'research': '.agents/mcp/research/server.py',
+    'repo': '.agents/mcp/repo/server.py',
     'menumaker': '.agents/mcp/menumaker/server.py',
-    'finance': '.agents/mcp/finance/server.py',
     'diagnostics': '.agents/mcp/diagnostics/server.py',
 }
 
@@ -61,11 +61,20 @@ def load_server_mcp(root: Path, rel_path: str) -> Any | None:
 DEFAULT_MCP_MODULES = {
     'wiki': {'enabled': True},
     'research': {'enabled': True},
+    'repo': {'enabled': True},
+    'menumaker': {'enabled': True},
     'diagnostics': {'enabled': True},
 }
 
+# Every skill shipped in .agents/skills/. Both synthesizer backends must be
+# enabled: the Synthesizer picks one at runtime from sources_backend, so gating
+# either here would silently strand instances running that backend.
 DEFAULT_SKILLS = {
     'self-improvement': {'enabled': True},
+    'menumaker': {'enabled': True},
+    'synthesizer-local': {'enabled': True},
+    'synthesizer-gdrive': {'enabled': True},
+    'python-skill': {'enabled': True},
 }
 
 DEFAULT_AGENTS = {
@@ -124,8 +133,8 @@ def sync_gateway(mcp: Any, root: Path, config_path: Path | None = None) -> dict[
                 is_enabled = mod_val.get('enabled', True)
             elif isinstance(mod_val, bool):
                 is_enabled = mod_val
-        elif name in ('wiki', 'research', 'diagnostics'):
-            is_enabled = True
+        elif name in DEFAULT_MCP_MODULES:
+            is_enabled = DEFAULT_MCP_MODULES[name].get('enabled', True)
 
         src_mcp = load_server_mcp(root, rel_path)
         if not src_mcp:

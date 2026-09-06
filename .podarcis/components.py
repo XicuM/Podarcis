@@ -329,22 +329,20 @@ def discover_components(root: Path) -> tuple[dict, dict]:
 
 
 def get_enabled_mcp_servers(root: Path) -> set[str]:
-    '''Retrieve set of active MCP module identifiers from .podarcis/config.yaml.'''
-    from common import load_yaml
-    cfg = load_yaml(root / '.podarcis' / 'config.yaml')
-    mcp_mods = cfg.get('mcp_modules', {})
+    '''Retrieve set of active MCP module identifiers, both bare and -mcp suffixed.
+
+    Delegates to the gateway's own config loader so `podarcis status` can never
+    disagree with what `podarcis-mcp` actually binds. Previously this held a third
+    hardcoded copy of the default module set, which silently drifted from
+    DEFAULT_MCP_MODULES and reported live modules as disabled.
+    '''
+    from podarcis.gateway.router import load_gateway_config
+
+    mcp_mods = load_gateway_config(root).get('mcp_modules', {})
     enabled = set()
-
     for k, v in mcp_mods.items():
-        is_on = v.get('enabled', True) if isinstance(v, dict) else bool(v)
-        if is_on:
-            enabled.add(k)
-            enabled.add(f'{k}-mcp')
-
-    # Defaults if config empty
-    if not enabled:
-        enabled = {'wiki', 'wiki-mcp', 'research', 'research-mcp', 'diagnostics', 'diagnostics-mcp'}
-
+        if v.get('enabled', True) if isinstance(v, dict) else bool(v):
+            enabled |= {k, f'{k}-mcp'}
     return enabled
 
 

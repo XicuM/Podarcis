@@ -6,7 +6,6 @@ Set PROJECT_ROOT env var to the repository root.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import shutil
@@ -50,8 +49,7 @@ mcp = FastMCP(
         "Knowledge base querier and auditor for the agentic wiki. "
         "wiki_search finds documents, wiki_fetch batch-retrieves them, wiki_publish "
         "commits a synthesis, wiki_lint audits, and wiki_reindex rebuilds the search "
-        "index. All wiki_* tools span wiki/, workspace/protocols/ and sources/literature/. "
-        "repo_sync synchronises the configured workspace repositories."
+        "index. All wiki_* tools span wiki/, workspace/protocols/ and sources/literature/."
     ),
 )
 
@@ -482,43 +480,6 @@ async def wiki_publish(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Workspace Synchronization & Repository Tools
-# ─────────────────────────────────────────────────────────────────────────────
-
-@mcp.tool()
-async def repo_sync(
-    action: Annotated[
-        str,
-        "Action to perform: 'pull' (sync/pull remotes and gdrive), 'push' (push local commits to remotes), or 'all'.",
-    ] = "pull",
-    auto_commit: Annotated[
-        bool,
-        "Automatically commit uncommitted local changes before pushing (only applicable for action='push' or 'all').",
-    ] = False,
-    message: Annotated[
-        str,
-        "Commit message for auto_commit.",
-    ] = "chore: sync workspace changes",
-) -> str:
-    """Synchronize all configured workspace repositories (clones missing repos, pulls remote origins, ingests Google Drive deltas, and updates backend configs)."""
-    podarcis_dir = ROOT / ".podarcis"
-    if str(podarcis_dir) not in sys.path:
-        sys.path.insert(0, str(podarcis_dir))
-    from repos import sync_repos_full, push_repos, get_repo_status
-    from components import sync_all_backends
-
-    results = {}
-    if action in ("pull", "all"):
-        sync_all_backends(ROOT)
-        results["pull"] = sync_repos_full(ROOT)
-    if action in ("push", "all"):
-        results["push"] = push_repos(ROOT, auto_commit=auto_commit, message=message)
-
-    results["status"] = get_repo_status(ROOT)
-    return json.dumps(results, indent=2)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Lint / Audit Tools
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -541,46 +502,6 @@ async def wiki_lint(
     return await _run_script("check_links.py", *args)
 
 
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Resources
-# ─────────────────────────────────────────────────────────────────────────────
-
-@mcp.resource("wiki://collections/wiki")
-def resource_wiki_index() -> str:
-    """Directory listing of all pages in the wiki collection."""
-    wiki_dir = ROOT / "wiki"
-    files = sorted(wiki_dir.rglob("*.md"))
-    lines = [f"# Wiki Collection ({len(files)} pages)\n"]
-    for f in files:
-        rel = f.relative_to(ROOT)
-        lines.append(f"- [{rel}]({rel})")
-    return "\n".join(lines)
-
-
-@mcp.resource("wiki://collections/protocols")
-def resource_protocols_index() -> str:
-    """Directory listing of all pages in the protocols collection."""
-    proto_dir = ROOT / "workspace" / "protocols"
-    files = sorted(proto_dir.rglob("*.md")) if proto_dir.exists() else []
-    lines = [f"# Protocols Collection ({len(files)} pages)\n"]
-    for f in files:
-        rel = f.relative_to(ROOT)
-        lines.append(f"- [{rel}]({rel})")
-    return "\n".join(lines)
-
-
-@mcp.resource("wiki://collections/sources")
-def resource_sources_index() -> str:
-    """Directory listing of all pages in the sources/literature collection."""
-    src_dir = ROOT / "sources" / "literature"
-    files = sorted(src_dir.rglob("*.md")) if src_dir.exists() else []
-    lines = [f"# Sources Collection ({len(files)} pages)\n"]
-    for f in files:
-        rel = f.relative_to(ROOT)
-        lines.append(f"- [{rel}]({rel})")
-    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

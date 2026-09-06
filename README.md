@@ -31,7 +31,7 @@ graph TD
 ```text
 ├── .agents/                 # Core agent personas, MCP servers, and skills
 │   ├── agents/              # Subagent personas (researcher, synthesizer, protocol-architect, auditor)
-│   ├── mcp/                 # MCP servers (wiki, research, finance, menumaker, gdrive, diagnostics, zoom2okf-mcp)
+│   ├── mcp/                 # MCP servers (wiki, research, repo, menumaker, diagnostics)
 │   └── skills/              # Domain knowledge (menumaker, self-improvement, python-skill)
 ├── .opencode/               # OpenCode adapter configuration
 │   └── agents -> ../.agents/agents  # Relative symlink for OpenCode subagent integration
@@ -49,7 +49,7 @@ graph TD
 ## 🛠 Features & Capabilities
 
 * **Subagent Architecture**: Four specialized subagents (`Researcher`, `Synthesizer`, `Protocol Architect`, `Auditor`) auto-invoked by the primary agent based on task context.
-* **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `finance-mcp`, `menumaker`, `gdrive`, `diagnostics`, `zoom2okf-mcp`) enable literature search, knowledge base queries, nutritional math, and video processing.
+* **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `repo-mcp`, `menumaker-mcp`, `diagnostics-mcp`) enable literature search, knowledge base queries, nutritional math, and video processing.
 * **Modular Podarcis Engine**: The `.podarcis/` Python package provides interactive setup, CLI tools (`podarcis status`, `podarcis test`, `podarcis lint`), and background jobs engine.
 * **Hermetic Repositories**: `wiki/`, `workspace/`, and `sources/` are decoupled git repositories ensuring clear separation between objective knowledge and user privacy.
 * **Team Habitat & Multi-User Support**: Use [**PodarcisNest**](https://github.com/XicuM/PodarcisNest) for multi-user container orchestration, dynamic reverse proxying, shared OKF knowledge mounts, and Slack research bots.
@@ -77,7 +77,25 @@ cd Podarcis
 ```
 This automatically configures the virtual environment, installs dependencies, sets up credentials, links the `podarcis` CLI tool, and clones sub-repositories.
 
-### 3. CLI Quick Reference
+### 3. Optional External Engines
+
+**qmd** — local-first hybrid retrieval (BM25 + vector + cross-encoder rerank + HyDE) backing `wiki_search`'s semantic modes and `wiki_reindex`. Without it, `wiki_search` degrades to keyword-only, which your agent harness already provides as `Grep` — so the semantic modes are the entire reason the tool exists. Enable with `engines: { qmd: true }` in `.podarcis/config.yaml`.
+
+It is a Node package, `@tobilu/qmd`, not a Python dependency — `podarcis install` does not fetch it. Install it yourself:
+
+```bash
+# Arch / CachyOS (AUR)
+paru -S qmd          # provides /usr/lib/node_modules/@tobilu/qmd, verified against 2.8.3-1
+
+# Anywhere else
+npm install -g @tobilu/qmd
+```
+
+First `podarcis` run after install downloads the GGUF models (EmbeddingGemma-300M, Qwen3-Reranker-0.6B) and builds the index; expect ~30 min for a few thousand documents. Index roots are configured in `.qmd/index.yml` — verify the paths point at your actual `wiki/`, `workspace/protocols/`, and `sources/` directories, since a wrong path silently indexes zero files.
+
+**playwright** (`pip install -e '.[browser]'` + `playwright install chromium`) — headless-browser fallback for publishers behind Cloudflare/bot walls during `literature_download`.
+
+### 4. CLI Quick Reference
 
 | Command | Description |
 |---|---|
@@ -87,7 +105,7 @@ This automatically configures the virtual environment, installs dependencies, se
 | `podarcis test` | Run test suite across all MCP servers and skills |
 | `podarcis lint` | Run link integrity check across wiki markdown files |
 
-### 4. Subagent Quick Reference
+### 5. Subagent Quick Reference
 
 | Command | What it does |
 |---|---|
