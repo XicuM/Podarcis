@@ -135,3 +135,34 @@ def test_config_overrides_default_agents(tmp_path):
     assert cfg['agents']['researcher']['enabled'] is True
     assert cfg['skills']['self-improvement']['enabled'] is False
 
+
+
+# Rules that live in AGENTS.md §3-4 and were previously restated verbatim inside
+# personas. AGENTS.md is symlinked as CLAUDE.md and loads into subagent context
+# automatically (verified empirically), so a persona copy is dead weight that
+# drifts — `agent_delegate` and `gemini-3.6-flash` both survived in persona
+# bodies long after the thing they described was gone.
+_SHARED_RULES = [
+    'diagnostics_log',
+    'No Manual Line Wrapping',
+    'Surgical Edits',
+    'Snake_case filenames',
+    'No Web Search',
+]
+
+
+@pytest.mark.parametrize('persona', sorted(
+    p.name for p in (Path('.').resolve() / '.agents' / 'agents').glob('*.md')))
+def test_personas_do_not_restate_shared_conventions(persona):
+    body = (Path('.').resolve() / '.agents' / 'agents' / persona).read_text()
+    assert 'Shared conventions' in body, (
+        f'{persona} must point at AGENTS.md rather than restating it')
+    for rule in _SHARED_RULES:
+        assert rule not in body, (
+            f'{persona} restates the AGENTS.md rule {rule!r}; keep it in one place')
+
+
+def test_snake_case_convention_has_exactly_one_home():
+    '''It lived only in two persona bodies (one spelling it "Filnaming") and was
+    absent from AGENTS.md, so the shared rulebook was missing a real convention.'''
+    assert 'Snake_case Filenames' in (Path('.').resolve() / 'AGENTS.md').read_text()
