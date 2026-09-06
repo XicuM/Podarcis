@@ -112,7 +112,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     # Tool modules are the only context cost paid up front, so they get the budget.
     live_tk = sum(v['tokens'] for v in status_data['mcp_servers'].values() if v['enabled'])
-    console.print(f'[bold white]Gateway tool modules:[/bold white] [dim]{live_tk:,} tokens per session[/dim]')
+    console.print(f'[bold white]MCP tool modules:[/bold white] [dim]{live_tk:,} tokens per session[/dim]')
     for k, v in sorted(status_data['mcp_servers'].items(), key=lambda i: -i[1]['tokens']):
         st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
         console.print(f'  • {k:<20} [{st}] ({v["tokens"]} tokens)')
@@ -139,7 +139,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_config_set_status(args: argparse.Namespace, enable: bool) -> int:
-    '''Enable or disable a gateway tool module.'''
+    '''Enable or disable an MCP tool module.'''
     ctype = args.type.lower()
     name = args.name
     mcp_servers, _, _ = discover_components(root_dir)
@@ -168,12 +168,12 @@ def _cmd_config_set_status(args: argparse.Namespace, enable: bool) -> int:
 
 
 def cmd_config_enable(args: argparse.Namespace) -> int:
-    '''Enable a gateway tool module.'''
+    '''Enable an MCP tool module.'''
     return _cmd_config_set_status(args, True)
 
 
 def cmd_config_disable(args: argparse.Namespace) -> int:
-    '''Disable a gateway tool module.'''
+    '''Disable an MCP tool module.'''
     return _cmd_config_set_status(args, False)
 
 
@@ -727,14 +727,14 @@ def main() -> None:
     cfg_list.add_argument('--json', action='store_true', help='Output status in JSON format')
 
     # config enable
-    cfg_enable = config_sub.add_parser('enable', help='Enable a gateway tool module')
+    cfg_enable = config_sub.add_parser('enable', help='Enable an MCP tool module')
     # No argparse `choices`: 'skill'/'agent' reach the handler so it can explain
     # why they are no longer toggleable instead of erroring out opaquely.
     cfg_enable.add_argument('type', metavar='mcp', help='Component type (mcp)')
     cfg_enable.add_argument('name', help='Tool module name')
 
     # config disable
-    cfg_disable = config_sub.add_parser('disable', help='Disable a gateway tool module')
+    cfg_disable = config_sub.add_parser('disable', help='Disable an MCP tool module')
     cfg_disable.add_argument('type', metavar='mcp', help='Component type (mcp)')
     cfg_disable.add_argument('name', help='Tool module name')
 

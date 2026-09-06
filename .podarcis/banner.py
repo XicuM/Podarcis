@@ -105,7 +105,7 @@ def _print_header(root_dir: Path, splash: str | None) -> None:
 
 
 def _status_rows(root_dir: Path) -> list[tuple]:
-    '''Build the right-hand status rows: gateway tool budget, then scheduled jobs.'''
+    '''Build the right-hand status rows: MCP tool budget, then scheduled jobs.'''
     from jobs import discover_jobs
 
     mcp_servers, _, _ = discover_components(root_dir)
@@ -119,7 +119,7 @@ def _status_rows(root_dir: Path) -> list[tuple]:
     modules = sorted(mcp_servers, key=lambda k: -mcp_servers[k].get('tokens', 0))
 
     rows: list[tuple] = [
-        ('header', f'Gateway tools ({len(live)}/{len(mcp_servers)})', f'{total_tk:,} tk'),
+        ('header', f'MCP tools ({len(live)}/{len(mcp_servers)})', f'{total_tk:,} tk'),
         *[
             ('item', k.removesuffix('-mcp'), f'{mcp_servers[k].get("tokens", 0):,} tk',
              k in enabled_mcp)

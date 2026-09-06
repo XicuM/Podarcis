@@ -170,7 +170,7 @@ def main() -> None:
         configure_frontend, configure_repositories,
     )
 
-    configure_mcp_servers(root, title='Gateway Tool Modules',
+    configure_mcp_servers(root, title='MCP Tool Modules',
         description='The podarcis-mcp gateway binds these tool modules into every session. Their schemas cost context up front whether or not you use them, so disable what you will not need.\nSkills and personas need no setup: the harness loads only their one-line description until something invokes them.')
     _hr()
     configure_frontend(root, title='Frontend Tool',

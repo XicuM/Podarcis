@@ -45,7 +45,7 @@ def test_discover_components_token_fields(tmp_path):
 
 
 def test_banner_and_calculator_run(tmp_path, capsys):
-    """Banner renders the gateway tool budget and the on-demand summary line."""
+    """Banner renders the MCP tool budget and the on-demand summary line."""
     skills_dir = tmp_path / '.agents' / 'skills' / 'test-skill'
     skills_dir.mkdir(parents=True)
     (skills_dir / 'SKILL.md').write_text('# Test Skill\nSome content.', encoding='utf-8')
@@ -56,7 +56,7 @@ def test_banner_and_calculator_run(tmp_path, capsys):
 
     display_project_banner(tmp_path)
     captured = capsys.readouterr()
-    assert 'Gateway tools' in captured.out
+    assert 'MCP tools' in captured.out
     # Skills and personas are not shown at all: nothing to toggle, nothing to budget.
     assert 'Skills' not in captured.out
     assert 'personas' not in captured.out
