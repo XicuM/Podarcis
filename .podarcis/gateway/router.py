@@ -110,10 +110,12 @@ def load_gateway_config(root: Path, config_path: Path | None = None) -> dict[str
         'skills': _merge_section(DEFAULT_SKILLS, on_disk.get('skills')),
         'agents': _merge_section(DEFAULT_AGENTS, on_disk.get('agents')),
     }
-    for key, value in on_disk.items():
-        if key not in merged:
-            merged[key] = value
-    return merged
+    return on_disk | merged
+
+def _is_enabled(val: Any) -> bool:
+    '''True unless explicitly disabled, in either `{'enabled': bool}` or bare-bool form.'''
+    return val.get('enabled', True) if isinstance(val, dict) else bool(val)
+
 
 def sync_gateway(mcp: Any, root: Path, config_path: Path | None = None) -> dict[str, Any]:
     '''Synchronize FastMCP server tools, resources, and prompts with configuration.'''
@@ -126,15 +128,7 @@ def sync_gateway(mcp: Any, root: Path, config_path: Path | None = None) -> dict[
 
     # 1. Sync internal capability modules
     for name, rel_path in MODULE_PATHS.items():
-        is_enabled = False
-        if name in mcp_cfgs:
-            mod_val = mcp_cfgs[name]
-            if isinstance(mod_val, dict):
-                is_enabled = mod_val.get('enabled', True)
-            elif isinstance(mod_val, bool):
-                is_enabled = mod_val
-        elif name in DEFAULT_MCP_MODULES:
-            is_enabled = DEFAULT_MCP_MODULES[name].get('enabled', True)
+        is_enabled = _is_enabled(mcp_cfgs[name])
 
         src_mcp = load_server_mcp(root, rel_path)
         if not src_mcp:
@@ -161,33 +155,23 @@ def sync_gateway(mcp: Any, root: Path, config_path: Path | None = None) -> dict[
                         pass
         else:
             # Unbind tools
-            if name in _CURRENT_BOUND_TOOLS:
-                for tname in list(_CURRENT_BOUND_TOOLS[name]):
-                    try:
-                        mcp.remove_tool(tname)
-                        state_changed = True
-                    except Exception:
-                        pass
-                del _CURRENT_BOUND_TOOLS[name]
-
-            if name in _CURRENT_BOUND_RESOURCES:
-                del _CURRENT_BOUND_RESOURCES[name]
+            for tname in _CURRENT_BOUND_TOOLS.pop(name, ()):
+                try:
+                    mcp.remove_tool(tname)
+                    state_changed = True
+                except Exception:
+                    pass
+            _CURRENT_BOUND_RESOURCES.pop(name, None)
 
     # 2. Sync skills binder
-    enabled_skills = {
-        k for k, v in skills_cfgs.items()
-        if (v.get('enabled', True) if isinstance(v, dict) else bool(v))
-    }
+    enabled_skills = {k for k, v in skills_cfgs.items() if _is_enabled(v)}
     try:
         skills_binder.register(mcp, root, enabled_skills)
     except Exception as e:
         logger.error(f"Failed to sync skills binder: {e}")
 
     # 3. Sync agents binder
-    enabled_agents = {
-        k for k, v in agents_cfgs.items()
-        if (v.get('enabled', True) if isinstance(v, dict) else bool(v))
-    }
+    enabled_agents = {k for k, v in agents_cfgs.items() if _is_enabled(v)}
     try:
         agents_binder.register(mcp, root, enabled_agents)
     except Exception as e:
