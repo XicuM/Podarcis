@@ -51,6 +51,9 @@ uv.lock
 
 # Server runtime data & container build artifacts
 data/
+# ...but the menumaker USDA/price dataset is shipped, not runtime state.
+!.podarcis/menumaker/data/
+!.podarcis/menumaker/data/**
 /tmp/
 *.tar
 

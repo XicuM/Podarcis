@@ -216,22 +216,6 @@ def cmd_config_repo(args: argparse.Namespace) -> int:
 
 
 # Claudian Obsidian plugin ID
-def cmd_config_sync(args: argparse.Namespace) -> int:
-    '''Synchronize workspace repositories and Google Drive deltas.'''
-    console.print('[bold #29b8db]Synchronizing workspace repositories...[/bold #29b8db]\n')
-    repo_results = sync_repos_full(root_dir)
-    for rname, rinfo in repo_results.items():
-        st = rinfo.get('status')
-        msg = rinfo.get('message')
-        if st == 'ok':
-            console.print(f'  [green]✓[/green] [bold]{rname:<12}[/bold] {msg}')
-        elif st == 'warning':
-            console.print(f'  [yellow]⚠️[/yellow] [bold]{rname:<12}[/bold] {msg}')
-        else:
-            console.print(f'  [red]✗[/red] [bold]{rname:<12}[/bold] {msg}')
-    return 0
-
-
 def cmd_repo(args: argparse.Namespace) -> int:
     '''Manage and synchronize workspace repositories (workspace, wiki, sources).'''
     from rich.table import Table
@@ -428,20 +412,16 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     diag_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(diag_mod)
 
-    resolve_id = getattr(args, 'resolve', None)
-    if resolve_id:
-        if hasattr(diag_mod, 'resolve_issue_by_id'):
-            ok = diag_mod.resolve_issue_by_id(resolve_id, base_dir=root_dir)
-            if ok:
-                console.print(f'[bold green]✓ Marked pain point [{resolve_id}] as resolved.[/bold green]')
-                return 0
-            else:
-                console.print(f'[bold red]Error:[/bold red] Pain point ID [{resolve_id}] not found or already resolved.')
-                return 1
-
-    if getattr(args, 'clear', False):
-        cleared = diag_mod.clear_issues(base_dir=root_dir)
-        console.print(f'[bold green]Cleared {cleared} logged platform issue(s).[/bold green]')
+    resolve_id, resolve_cat = getattr(args, 'resolve', None), getattr(args, 'resolve_category', None)
+    if resolve_id or resolve_cat or getattr(args, 'clear', False):
+        resolved = diag_mod.resolve_issues(
+            base_dir=root_dir, ids=[resolve_id] if resolve_id else (),
+            category=resolve_cat or '', sweep=getattr(args, 'clear', False),
+        )
+        if not resolved:
+            console.print('[bold yellow]No unresolved pain points matched.[/bold yellow]')
+            return 1
+        console.print(f"[bold green]✓ Resolved {len(resolved)} pain point(s): {', '.join(resolved)}[/bold green]")
         return 0
 
     log_sess = getattr(args, 'log_session', None)
@@ -563,6 +543,88 @@ def cmd_research(args: argparse.Namespace) -> int:
 
 
 
+
+
+def cmd_menu(args: argparse.Namespace) -> int:
+    '''Nutrient targets, USDA food lookups, and cost-optimized menus.'''
+    from rich.table import Table
+
+    # menumaker imports stay inside each branch: pandas/scipy cost ~1s that
+    # every other subcommand avoids paying.
+    data_dir = Path(os.environ.get('MENUMAKER_DATA_DIR', podarcis_dir / 'menumaker' / 'data'))
+    food_csv, prices_csv = str(data_dir / 'food_data' / 'food_data.csv'), str(data_dir / 'mercadona.csv')
+
+    def emit(payload: dict, table: 'Table') -> int:
+        print(json.dumps(payload, indent=2)) if args.json else console.print(table)
+        return 0
+
+    if args.menu_action == 'intake':
+        from podarcis.menumaker.intake import compute_daily_intake
+        result = compute_daily_intake(args.age, args.gender, args.stage)
+        table = Table(title=f'Daily Intake Targets — {args.age}y {args.gender}, {args.stage}', border_style='cyan')
+        table.add_column('Nutrient', style='bold white')
+        table.add_column('Recommended', justify='right', style='green')
+        table.add_column('Tolerable', justify='right', style='yellow')
+        for n in result['nutrients']:
+            table.add_row(n['nutrient'], _num(n.get('recommended')), _num(n.get('tolerable')))
+        return emit(result, table)
+
+    if args.menu_action == 'food-search':
+        from podarcis.menumaker.food_db import load_food_db, search_foods
+        matches = search_foods(args.query, load_food_db(food_csv)).head(args.limit)
+        macros = ['Energy', 'Protein', 'Carbohydrate, by difference', 'Total lipid (fat)']
+        cols = [c for c in macros if c in matches.columns]
+        table = Table(title=f'Food Search: {args.query!r} ({len(matches)} shown)', border_style='cyan')
+        table.add_column('Food', style='bold white')
+        for c in cols:
+            table.add_column(c, justify='right')
+        for name in matches.index:
+            table.add_row(name, *(_num(matches.loc[name, c]) for c in cols))
+        return emit({'query': args.query, 'results': matches.to_dict('index')}, table)
+
+    if args.menu_action == 'food':
+        from podarcis.menumaker.food_db import load_food_db, get_food_nutrients
+        data = get_food_nutrients(args.name, load_food_db(food_csv))
+        table = Table(title=f"{data['name']} — per 100g", border_style='cyan')
+        table.add_column('Nutrient', style='bold white')
+        table.add_column('Amount', justify='right', style='green')
+        for k, v in sorted(data['nutrients'].items()):
+            table.add_row(k, _num(v))
+        return emit(data, table)
+
+    if args.menu_action == 'optimize':
+        from podarcis.menumaker.intake import compute_daily_intake
+        from podarcis.menumaker.optimizer import optimize_menu
+        result = optimize_menu(food_csv, compute_daily_intake(args.age, args.gender, args.stage), prices_csv)
+        if 'error' in result:
+            console.print(f"[bold red]Error:[/bold red] {result['error']}")
+            return 1
+        table = Table(
+            title=f"Optimal Daily Menu — {result['total_daily_cost_eur']:.4f} EUR/day, "
+                  f"{result['total_monthly_cost_eur']:.2f} EUR/month, {result['food_count']} foods",
+            border_style='cyan',
+        )
+        table.add_column('Food', style='bold white')
+        table.add_column('Grams/day', justify='right', style='green')
+        for food, grams in sorted(result['menu'].items(), key=lambda kv: -kv[1]):
+            table.add_row(food, f'{grams:.1f}')
+        return emit(result, table)
+
+    from podarcis.menumaker.pricing import price_menu
+    result = price_menu(json.loads(args.items_json), prices_csv)
+    totals = result['comparison']['totals']
+    table = Table(title='Menu Price Comparison', border_style='cyan')
+    table.add_column('Metric', style='bold white')
+    for shop in totals:
+        table.add_column(shop, justify='right', style='green')
+    for label, key in (('Daily (EUR)', 'total_price_eur'), ('Monthly (EUR)', 'total_monthly_eur')):
+        table.add_row(label, *(f'{totals[shop][key]:.2f}' for shop in totals))
+    return emit(result, table)
+
+
+def _num(value) -> str:
+    '''Format a nutrient amount, tolerating missing values and NaN.'''
+    return f'{value:.2f}' if isinstance(value, float) and value == value else str(value or '—')
 
 
 def cmd_job(args: argparse.Namespace) -> int:
@@ -772,7 +834,6 @@ def main() -> None:
     repo_cfg.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
 
     # sync (top-level)
-    subparsers.add_parser('sync', help='Synchronize workspace repos and Google Drive deltas')
 
     # frontend
     subparsers.add_parser('frontend', help='Open the configured frontend tool')
@@ -806,9 +867,31 @@ def main() -> None:
     # diagnose
     diag_parser = subparsers.add_parser('diagnose', help='Display current platform pain points and logged issues')
     diag_parser.add_argument('--json', action='store_true', help='Output issues in JSON format')
-    diag_parser.add_argument('--clear', action='store_true', help='Clear or resolve current logged issues')
-    diag_parser.add_argument('--resolve', type=str, help='Mark a specific pain point ID as resolved')
+    diag_parser.add_argument('--clear', action='store_true', help='Resolve every unresolved pain point')
+    diag_parser.add_argument('--resolve', type=str, metavar='ID', help='Mark a specific pain point ID as resolved')
+    diag_parser.add_argument('--resolve-category', type=str, metavar='CAT', help='Resolve every unresolved pain point in a category')
     diag_parser.add_argument('--log-session', type=str, metavar='PATH', help='Parse and log pain points for a transcript file')
+
+    # menu
+    menu_parser = subparsers.add_parser('menu', help='Nutrient targets, USDA food lookups, and cost-optimized menus')
+    menu_parser.add_argument('--json', action='store_true', help='Output raw result in JSON format')
+    menu_sub = menu_parser.add_subparsers(dest='menu_action', required=True, help='Menu action')
+
+    for name, helptext in (('intake', 'Compute daily nutrient targets (RDA and upper limits)'),
+                           ('optimize', 'Solve for the cheapest foods meeting all daily requirements')):
+        sp = menu_sub.add_parser(name, help=helptext)
+        sp.add_argument('--age', type=int, required=True, help='Age in years')
+        sp.add_argument('--gender', required=True, choices=['male', 'female'], help='Biological gender')
+        sp.add_argument('--stage', default='adult', choices=['adult', 'child', 'pregnancy', 'lactation'], help='Life stage')
+
+    m_search = menu_sub.add_parser('food-search', help='Search the USDA food database by name')
+    m_search.add_argument('query', help='Food name substring (case-insensitive)')
+    m_search.add_argument('--limit', type=int, default=10, help='Maximum results (default 10)')
+
+    menu_sub.add_parser('food', help='Full nutrient profile for one food').add_argument('name', help='Exact food name')
+
+    m_price = menu_sub.add_parser('price', help='Price a menu across Mercadona and Dia')
+    m_price.add_argument('--items-json', required=True, metavar='JSON', help='Menu as JSON, e.g. \'{"Oats, raw": 100}\'')
 
     # research
     research_parser = subparsers.add_parser('research', help='Search peer-reviewed literature and ingest papers into sources/')
@@ -838,10 +921,10 @@ def main() -> None:
 
     if args.subcommand in ('repo', 'repos'):
         sys.exit(cmd_repo(args))
-    elif args.subcommand == 'sync':
-        sys.exit(cmd_config_sync(args))
     elif args.subcommand in ('job',):
         sys.exit(cmd_job(args))
+    elif args.subcommand == 'menu':
+        sys.exit(cmd_menu(args))
     elif args.subcommand == 'research':
         sys.exit(cmd_research(args))
     elif args.subcommand == 'status':
@@ -864,8 +947,6 @@ def main() -> None:
             sys.exit(cmd_config_frontend(args))
         elif args.config_action == 'interactive':
             sys.exit(cmd_interactive(args))
-        elif args.config_action == 'sync':
-            sys.exit(cmd_config_sync(args))
         else:
             sys.exit(cmd_interactive(args))
 

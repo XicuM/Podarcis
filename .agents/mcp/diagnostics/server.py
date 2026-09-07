@@ -41,7 +41,8 @@ mcp = FastMCP(
     instructions=(
         "Platform diagnostic logger and issue inspector. "
         "Call diagnostics_log whenever you encounter tool errors, execution failures, user corrections, or results that fail to meet user expectations. "
-        "Call diagnostics_list to retrieve active issues when instructed to improve the platform."
+        "Call diagnostics_list to retrieve active issues when instructed to improve the platform, "
+        "Resolving them is the operator job, via `podarcis diagnose --resolve <id>`."
     ),
 )
 
@@ -49,6 +50,18 @@ _DIAG_DIR = Path(__file__).resolve().parent
 if str(_DIAG_DIR) not in sys.path:
     sys.path.insert(0, str(_DIAG_DIR))
 from sanitizer import sanitize_text
+
+
+def _read_records() -> list[dict]:
+    """Every pain point record, oldest first.
+
+    A malformed line raises rather than being skipped: diagnostics_resolve
+    rewrites the whole file from this list, so swallowing a bad line would
+    silently delete it.
+    """
+    lines = PAIN_POINTS_FILE.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
+
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
@@ -93,54 +106,11 @@ def diagnostics_list(
     if not PAIN_POINTS_FILE.exists():
         return "No active platform pain points found."
 
-    issues = []
-    with open(PAIN_POINTS_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                if not data.get("resolved", False):
-                    if not category or data.get("category") == category:
-                        issues.append(data)
-            except json.JSONDecodeError:
-                continue
-
-    if not issues:
-        return "No active platform pain points found."
-
-    return json.dumps(issues, indent=2)
-
-
-@mcp.tool()
-def diagnostics_clear() -> str:
-    """Mark all recorded platform pain points as resolved."""
-    _ensure_dirs()
-    if not PAIN_POINTS_FILE.exists():
-        return "No pain points to clear."
-
-    count = 0
-    updated_lines = []
-    with open(PAIN_POINTS_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                if not data.get("resolved", False):
-                    data["resolved"] = True
-                    count += 1
-                updated_lines.append(json.dumps(data))
-            except json.JSONDecodeError:
-                continue
-
-    with open(PAIN_POINTS_FILE, "w", encoding="utf-8") as f:
-        for line in updated_lines:
-            f.write(line + "\n")
-
-    return f"Marked {count} platform pain point(s) as resolved."
+    issues = [
+        r for r in _read_records()
+        if not r["resolved"] and category in ("", r["category"])
+    ]
+    return json.dumps(issues, indent=2) if issues else "No active platform pain points found."
 
 
 if __name__ == "__main__":

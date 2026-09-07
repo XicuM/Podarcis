@@ -1,9 +1,11 @@
 '''Unit tests for podarcis CLI subcommands and non-interactive status/configuration actions.'''
 
+import importlib
 import json
+import pytest
 from argparse import Namespace
 from pathlib import Path
-from cli import cmd_status, cmd_config_enable, cmd_config_disable, cmd_config_repo
+from cli import cmd_status, cmd_config_enable, cmd_config_disable, cmd_config_repo, cmd_menu
 
 
 def test_cli_status_json(capsys):
@@ -176,3 +178,23 @@ def test_cli_diagnose_resolve_id(tmp_path, monkeypatch):
 
 
 
+
+
+@pytest.mark.parametrize('module', ['intake', 'food_db', 'optimizer', 'pricing', 'wiki', 'prices_update'])
+def test_menumaker_modules_import(module):
+    '''Every menumaker module must import under its package name.
+
+    cmd_menu imports these lazily inside each branch, so a stale bare import
+    (`from intake import ...`) is invisible until that one subcommand runs.
+    '''
+    importlib.import_module(f'podarcis.menumaker.{module}')
+
+
+def test_cli_menu_food_search(capsys):
+    '''podarcis menu food-search --json reaches the real USDA database.'''
+    args = Namespace(menu_action='food-search', query='oats', limit=2, json=True)
+    assert cmd_menu(args) == 0
+
+    data = json.loads(capsys.readouterr().out)
+    assert data['query'] == 'oats'
+    assert data['results'] and all('oats' in name.lower() for name in data['results'])

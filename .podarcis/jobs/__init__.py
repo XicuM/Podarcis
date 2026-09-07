@@ -70,8 +70,19 @@ def set_job_status(root_dir: Path, job_name: str, enabled: bool) -> tuple[bool, 
         return False, f'Job "{job_name}" not found.'
 
     job = jobs[job_name]
+    opts = job.get('options') or {}
     if enabled:
-        timeout_s = int((job.get('options') or {}).get('timeout_s', 1800)) + 300
+        # A timer that fires into an unrunnable job is worse than no timer, so
+        # say so now rather than leaving it to a silent 03:00 failure.
+        if job['type'] == 'agent' and not opts.get('harness'):
+            from .runners import available_harnesses
+            installed = ', '.join(available_harnesses()) or 'none installed'
+            console.print(
+                f'[yellow]Warning:[/yellow] agent job "{job_name}" declares no '
+                f'options.harness in {job["file_path"].name} and will fail when '
+                f'the timer fires. Installed harnesses: {installed}.'
+            )
+        timeout_s = int(opts.get('timeout_s', 1800)) + 300
         ok, msg = scheduler.install(
             root_dir, job_name, job['schedule'], timeout_s=timeout_s,
         )

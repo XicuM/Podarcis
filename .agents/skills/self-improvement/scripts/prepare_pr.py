@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # Import sanitization and validation utilities
 sys.path.insert(0, str(PROJECT_ROOT / '.agents' / 'mcp' / 'diagnostics'))
 from sanitizer import sanitize_text, validate_pr_scope, FORBIDDEN_PR_PREFIXES, ALLOWED_PR_PREFIXES
-from diagnose_session import clear_issues, get_active_issues
+from diagnose_session import resolve_issues, get_active_issues
 
 
 def get_git_status_files(base_dir: Optional[Path] = None) -> List[str]:
@@ -133,7 +133,7 @@ def prepare_pr(
 
         # 6. Clear resolved pain points
         if auto_clear:
-            clear_issues(base_dir=root)
+            resolve_issues(base_dir=root, sweep=True)
 
         msg = f'Successfully created branch [{branch_name}] and committed platform fix.'
         if pr_url:

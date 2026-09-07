@@ -54,12 +54,15 @@ The coordination is asynchronous, mediated by the file structure:
 * **Wiki (`wiki/` repository)**: Objective, anonymized knowledge base written in OKF v0.2 format.
 * **Workspace (`workspace/` repository)**: Personal profiles, active protocols, feedback, and deliverables.
 * **Temporary Workspace (`tmp/`)**: Scratchpad operations and temporal data edits.
+* **Market Data (`market-mcp`)**: Batched Yahoo Finance quotes, history, and fundamentals for portfolio work in `workspace/finance/`. It supplies **facts only** — no optimizers, no backtests. Portfolio judgement is the agent's, weighing these numbers against `wiki/` knowledge and the constraints in `workspace/profile.md`; a canned mean-variance solve or SMA backtest would substitute false precision for that reasoning. Market data is a live fact, not a citable source: it belongs in `workspace/`, never in `wiki/`, and must carry the `as_of` date it was fetched with.
 * **Podarcis Engine (`.podarcis/` & `podarcis` CLI)**: Unified Python CLI and runtime engine for status inspection (`podarcis status`), configuration (`podarcis config`), multi-workspace git/gdrive syncing (`podarcis repo sync`), testing (`podarcis test`), and link linting (`podarcis lint`).
-* **Scheduled Jobs (`.agents/jobs/*.yaml` & `podarcis job`)**: Jobs are declared as YAML and scheduled as **systemd user timers** (`podarcis job enable|disable|run|logs`). `schedule:` is a systemd `OnCalendar` expression (`daily`, `Sun *-*-* 03:00:00`) — not cron. Beyond `type: shell` and `type: python`, a job may be `type: agent`, which runs a persona headlessly through a harness CLI (`.podarcis/jobs/runners/`, currently Claude Code). Each agent job declares an `autonomy` level that Podarcis — never the model — enforces: `report` (read-only; output lands in `tmp/job_reports/`), `branch` (commits to `jobs/<name>`, leaving the working branch untouched), `commit` (commits only if the link/frontmatter audit passes), `push` (commits, audits, then pushes). Agent jobs are never granted `Bash`, so all git work stays with the engine, and `WebSearch`/`WebFetch` are denied outright to keep the citation hierarchy intact.
+* **Scheduled Jobs (`.agents/jobs/*.yaml` & `podarcis job`)**: Jobs are declared as YAML and scheduled as **systemd user timers** (`podarcis job enable|disable|run|logs`). `schedule:` is a systemd `OnCalendar` expression (`daily`, `Sun *-*-* 03:00:00`) — not cron. Beyond `type: shell` and `type: python`, a job may be `type: agent`, which runs a persona headlessly through the harness CLI named by its `options.harness` (`.podarcis/jobs/runners/`, currently `claude` only). There is no default: a job that omits `options.harness` fails rather than guessing, and `podarcis job enable` warns when it is missing. Each agent job declares an `autonomy` level that Podarcis — never the model — enforces: `report` (read-only; output lands in `tmp/job_reports/`), `branch` (commits to `jobs/<name>`, leaving the working branch untouched), `commit` (commits only if the link/frontmatter audit passes), `push` (commits, audits, then pushes). Agent jobs are never granted `Bash`, so all git work stays with the engine, and `WebSearch`/`WebFetch` are denied outright to keep the citation hierarchy intact.
 
 ### MCP Tool Reference
 
 Every tool the `podarcis-mcp` gateway binds. Anything not listed here does not exist — use your native tools (`Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash`) for everything else.
+
+The surface is deliberately **exactly what a Bash-less agent job can reach** (`.podarcis/jobs/agent.py`), enforced by a test. Anything a human runs *around* a task is a CLI subcommand instead — `podarcis repo sync`, `podarcis diagnose --resolve <id>`, `podarcis menu optimize|intake|food|food-search|price` (add `--json` for raw output). Read the **menumaker** skill before using `podarcis menu`.
 
 | Tool | Use it for |
 |---|---|
@@ -71,11 +74,11 @@ Every tool the `podarcis-mcp` gateway binds. Anything not listed here does not e
 | `literature_search(query, …)` | Discover peer-reviewed papers. The only sanctioned academic search path. |
 | `literature_download(paper_id, domain)` | Full ingestion pipeline: fetch PDF, extract via markitdown, write `sources/literature/<domain>/<id>/`. |
 | `literature_status(status)` | Which ingested sources are not yet cited in `wiki/`. Derived live from the citation graph. |
-| `repo_sync(action, …)` | Clone/pull/push the configured `wiki`, `workspace`, and `sources` repositories. Equivalent to `podarcis repo sync`. |
 | `diagnostics_log(…)` | Record a failure, tool error, or user correction. See §4. |
-| `diagnostics_list()` | Read back unresolved pain points. |
-| `diagnostics_clear()` | Mark **all** pain points resolved. Non-destructive but indiscriminate — for a single entry, edit `.podarcis/diagnostics/pain_points.jsonl` directly. |
-| `intake_targets`, `food_search`, `food_nutrients`, `menu_optimize`, `menu_price` | Nutrition and menu optimization. Read the **menumaker** skill before using these. |
+| `diagnostics_list()` | Read back unresolved pain points. Resolving them is a human action: `podarcis diagnose --resolve <id>`. |
+| `market_quote(tickers)` | Live price, trading currency, and 1d/1m/6m/1y returns for many tickers in one call. Also handles FX (`EURUSD=X`) and indexes (`^GSPC`). |
+| `market_history(tickers, period, interval)` | Aligned close-price series for computing correlation, volatility, and drawdown yourself. Defaults to weekly — daily over many tickers is a large payload. |
+| `market_fundamentals(tickers)` | Sector, industry, country, market cap, P/E, dividend yield, beta — for reasoning about concentration and valuation. |
 
 ---
 

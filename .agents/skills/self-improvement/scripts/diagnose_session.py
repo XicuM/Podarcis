@@ -8,7 +8,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Sequence
 
 # Ensure project root is in sys.path
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -120,91 +120,60 @@ def log_pain_points(points: List[Dict[str, Any]], base_dir: Optional[Path] = Non
     return log_file
 
 
+def _log_file(base_dir: Path | None = None) -> Path:
+    '''Path to pain_points.jsonl for a repo root (or the module default).'''
+    return ((base_dir / '.podarcis' / 'diagnostics') if base_dir else DIAGNOSTICS_DIR) / 'pain_points.jsonl'
+
+
+def _read_records(base_dir: Path | None = None) -> list[dict]:
+    '''Every pain point record, oldest first.
+
+    A malformed line raises rather than being skipped: resolving rewrites the
+    whole file from this list, so swallowing a bad line would delete it.
+    '''
+    lines = _log_file(base_dir).read_text(encoding='utf-8').splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
+
+
 def get_active_issues(base_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
-    '''Read all unresolved pain points from .podarcis/diagnostics/pain_points.jsonl.'''
-    diag_dir = (base_dir / '.podarcis' / 'diagnostics') if base_dir else DIAGNOSTICS_DIR
-    log_file = diag_dir / 'pain_points.jsonl'
-    
+    '''Unresolved pain points, oldest first.'''
+    if not _log_file(base_dir).exists():
+        return []
+    return [r for r in _read_records(base_dir) if not r['resolved']]
+
+
+def resolve_issues(
+    base_dir: Path | None = None,
+    ids: Sequence[str] = (),
+    category: str = '',
+    sweep: bool = False,
+) -> list[str]:
+    '''Mark pain points resolved by id, by category, or all of them.
+
+    Returns the ids actually resolved. Exactly one selector is expected; the
+    callers (CLI flags) enforce that, so an empty selection here just means
+    nothing matched.
+    '''
+    log_file = _log_file(base_dir)
     if not log_file.exists():
         return []
 
-    issues: List[Dict[str, Any]] = []
-    with open(log_file, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                item = json.loads(line)
-                if not item.get('resolved', False):
-                    issues.append(item)
-            except json.JSONDecodeError:
-                continue
-    return issues
+    records = _read_records(base_dir)
+    unresolved = [r for r in records if not r['resolved']]
+    targets = (
+        [r for r in unresolved if r['id'] in set(ids)] if ids
+        else [r for r in unresolved if r['category'] == category] if category
+        else unresolved if sweep else []
+    )
+    if not targets:
+        return []
 
-
-def clear_issues(base_dir: Optional[Path] = None) -> int:
-    '''Mark all issues as resolved in pain_points.jsonl.'''
-    diag_dir = (base_dir / '.podarcis' / 'diagnostics') if base_dir else DIAGNOSTICS_DIR
-    log_file = diag_dir / 'pain_points.jsonl'
-    
-    if not log_file.exists():
-        return 0
-
-    count = 0
-    updated_lines = []
-    with open(log_file, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                item = json.loads(line)
-                if not item.get('resolved', False):
-                    item['resolved'] = True
-                    count += 1
-                updated_lines.append(json.dumps(item))
-            except json.JSONDecodeError:
-                continue
-
-    with open(log_file, 'w', encoding='utf-8') as f:
-        for l in updated_lines:
-            f.write(l + '\n')
-
-    return count
-
-
-def resolve_issue_by_id(issue_id: str, base_dir: Optional[Path] = None) -> bool:
-    '''Mark a specific issue as resolved by its ID.'''
-    diag_dir = (base_dir / '.podarcis' / 'diagnostics') if base_dir else DIAGNOSTICS_DIR
-    log_file = diag_dir / 'pain_points.jsonl'
-
-    if not log_file.exists():
-        return False
-
-    found = False
-    updated_lines = []
-    with open(log_file, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                item = json.loads(line)
-                if item.get('id') == issue_id and not item.get('resolved', False):
-                    item['resolved'] = True
-                    found = True
-                updated_lines.append(json.dumps(item))
-            except json.JSONDecodeError:
-                continue
-
-    if found:
-        with open(log_file, 'w', encoding='utf-8') as f:
-            for l in updated_lines:
-                f.write(l + '\n')
-
-    return found
-
+    # targets aliases into records, so this mutation is what gets written back.
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    for record in targets:
+        record |= {'resolved': True, 'resolved_at': now}
+    log_file.write_text(''.join(f'{json.dumps(r)}\n' for r in records), encoding='utf-8')
+    return [r['id'] for r in targets]
 
 
 def main() -> int:
@@ -218,7 +187,7 @@ def main() -> int:
     ensure_diagnostics_dirs()
 
     if args.clear:
-        cleared = clear_issues()
+        cleared = len(resolve_issues(sweep=True))
         print(f'Cleared {cleared} issue(s).')
         return 0
 

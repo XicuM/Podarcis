@@ -19,14 +19,9 @@ logger = logging.getLogger('podarcis.gateway.router')
 MODULE_PATHS = {
     'wiki': '.agents/mcp/wiki/server.py',
     'research': '.agents/mcp/research/server.py',
-    'repo': '.agents/mcp/repo/server.py',
-    'menumaker': '.agents/mcp/menumaker/server.py',
     'diagnostics': '.agents/mcp/diagnostics/server.py',
+    'market': '.agents/mcp/market/server.py',
 }
-
-_CURRENT_BOUND_TOOLS: dict[str, set[str]] = {}
-_CURRENT_BOUND_RESOURCES: dict[str, set[str]] = {}
-_CURRENT_BOUND_PROMPTS: dict[str, set[str]] = {}
 
 def load_server_mcp(root: Path, rel_path: str) -> Any | None:
     '''Dynamically load standalone MCP server entrypoint.'''
@@ -34,13 +29,11 @@ def load_server_mcp(root: Path, rel_path: str) -> Any | None:
     if not p.exists():
         return None
 
+    # Always exec a fresh module. importlib.reload() cannot work here: these
+    # names are synthetic and off sys.path, so reload's finder raises "spec not
+    # found" and every tool silently unbinds on the watcher's next re-sync.
     module_name = f'podarcis_mod_{p.parent.name}'
     try:
-        if module_name in sys.modules:
-            mod = sys.modules[module_name]
-            importlib.reload(mod)
-            return getattr(mod, 'mcp', None)
-
         spec = importlib.util.spec_from_file_location(module_name, p)
         if not spec or not spec.loader:
             return None
@@ -61,9 +54,8 @@ def load_server_mcp(root: Path, rel_path: str) -> Any | None:
 DEFAULT_MCP_MODULES = {
     'wiki': {'enabled': True},
     'research': {'enabled': True},
-    'repo': {'enabled': True},
-    'menumaker': {'enabled': True},
     'diagnostics': {'enabled': True},
+    'market': {'enabled': True},
 }
 
 # Every skill shipped in .agents/skills/. Both synthesizer backends must be
@@ -126,42 +118,31 @@ def sync_gateway(mcp: Any, root: Path, config_path: Path | None = None) -> dict[
 
     state_changed = False
 
-    # 1. Sync internal capability modules
+    # 1. Sync internal capability modules.
+    # What is bound is read back off `mcp` rather than tracked in module state:
+    # a second gateway in one process starts empty, and cached bookkeeping would
+    # tell it everything was already bound, leaving it with no tools at all.
     for name, rel_path in MODULE_PATHS.items():
-        is_enabled = _is_enabled(mcp_cfgs[name])
-
         src_mcp = load_server_mcp(root, rel_path)
         if not src_mcp:
             continue
 
-        if is_enabled:
-            # Bind tools
-            bound_tools = _CURRENT_BOUND_TOOLS.setdefault(name, set())
+        live_tools = mcp._tool_manager._tools
+        live_resources = mcp._resource_manager._resources
+        if _is_enabled(mcp_cfgs[name]):
             for tname, tool in src_mcp._tool_manager._tools.items():
-                if tname not in bound_tools:
+                if tname not in live_tools:
                     mcp.add_tool(tool.fn, name=tname)
-                    bound_tools.add(tname)
                     state_changed = True
-
-            # Bind resources
-            bound_res = _CURRENT_BOUND_RESOURCES.setdefault(name, set())
             for uri, res in src_mcp._resource_manager._resources.items():
-                if uri not in bound_res:
-                    try:
-                        mcp.add_resource(res)
-                        bound_res.add(uri)
-                        state_changed = True
-                    except Exception:
-                        pass
+                if uri not in live_resources:
+                    mcp.add_resource(res)
+                    state_changed = True
         else:
-            # Unbind tools
-            for tname in _CURRENT_BOUND_TOOLS.pop(name, ()):
-                try:
+            for tname in src_mcp._tool_manager._tools:
+                if tname in live_tools:
                     mcp.remove_tool(tname)
                     state_changed = True
-                except Exception:
-                    pass
-            _CURRENT_BOUND_RESOURCES.pop(name, None)
 
     # 2. Sync skills binder
     enabled_skills = {k for k, v in skills_cfgs.items() if _is_enabled(v)}
@@ -179,7 +160,7 @@ def sync_gateway(mcp: Any, root: Path, config_path: Path | None = None) -> dict[
 
     return {
         'changed': state_changed,
-        'enabled_modules': [k for k in _CURRENT_BOUND_TOOLS.keys()],
+        'enabled_modules': [k for k in MODULE_PATHS if _is_enabled(mcp_cfgs[k])],
         'enabled_skills': list(enabled_skills),
         'enabled_agents': list(enabled_agents),
     }

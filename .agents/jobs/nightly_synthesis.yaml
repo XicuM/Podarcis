@@ -4,6 +4,7 @@ schedule: "*-*-* 03:00:00"
 enabled: false
 type: agent
 options:
+  harness: claude
   persona: synthesizer
   autonomy: branch
   effort: medium

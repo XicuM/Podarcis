@@ -18,7 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from console import console
 from repos import get_repo_names, push_repos
 
-from .runners import RunResult, RunSpec, get_runner
+from .runners import (
+    RunResult, RunSpec, available_harnesses, get_runner,
+)
 
 # Read-only surface: native inspection plus the gateway's search/audit tools.
 READ_TOOLS = (
@@ -26,6 +28,8 @@ READ_TOOLS = (
     'mcp__podarcis__wiki_search', 'mcp__podarcis__wiki_fetch',
     'mcp__podarcis__wiki_lint', 'mcp__podarcis__literature_search',
     'mcp__podarcis__literature_status', 'mcp__podarcis__diagnostics_list',
+    'mcp__podarcis__market_quote', 'mcp__podarcis__market_history',
+    'mcp__podarcis__market_fundamentals',
 )
 
 WRITE_TOOLS = (
@@ -130,6 +134,15 @@ def run(root_dir: Path, job: dict, dry_run: bool = False) -> dict:
                        f'{", ".join(AUTONOMY_LEVELS)}.',
         }
 
+    harness = opts.get('harness')
+    if not harness:
+        installed = ', '.join(available_harnesses()) or 'none installed'
+        return {
+            'status': 'error',
+            'message': f'Agent job declares no harness. Set options.harness '
+                       f'in the job YAML (installed: {installed}).',
+        }
+
     allowed, permission_mode = _tools_for(autonomy)
     spec = RunSpec(
         prompt=prompt,
@@ -144,7 +157,10 @@ def run(root_dir: Path, job: dict, dry_run: bool = False) -> dict:
         max_cost_usd=opts.get('max_cost_usd'),
         env={'PODARCIS_JOB_RUN': '1'},
     )
-    runner = get_runner(opts.get('harness', 'claude'))
+    try:
+        runner = get_runner(harness)
+    except RuntimeError as exc:
+        return {'status': 'error', 'message': str(exc)}
 
     if dry_run:
         console.print(f'[dim]{" ".join(runner.build_argv(spec))}[/dim]')

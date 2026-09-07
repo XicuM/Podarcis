@@ -11,7 +11,7 @@ spec.loader.exec_module(server)
 
 
 def test_diagnostics_mcp_tools(tmp_path, monkeypatch):
-    """Test diagnostics_log, diagnostics_list, and diagnostics_clear tools."""
+    """Test diagnostics_log, diagnostics_list, and diagnostics_resolve tools."""
     monkeypatch.setattr(server, "ROOT", tmp_path)
     monkeypatch.setattr(server, "DIAGNOSTICS_DIR", tmp_path / ".podarcis" / "diagnostics")
     monkeypatch.setattr(server, "PAIN_POINTS_FILE", tmp_path / ".podarcis" / "diagnostics" / "pain_points.jsonl")
@@ -35,12 +35,7 @@ def test_diagnostics_mcp_tools(tmp_path, monkeypatch):
     # 3. Filter by category
     assert "No active platform pain points found" in server.diagnostics_list(category="user_correction")
 
-    # 4. Clear issues
-    clear_res = server.diagnostics_clear()
-    assert "Marked 1 platform pain point(s) as resolved" in clear_res
-
-    # 5. Verify empty
-    assert "No active platform pain points found" in server.diagnostics_list()
+    # 4. Resolution is a CLI action now: see test_diagnose.py.
 
 
 def test_diagnostics_sanitization(tmp_path, monkeypatch):
@@ -72,3 +67,19 @@ def test_diagnostics_sanitization(tmp_path, monkeypatch):
     assert str(tmp_path) not in logged["details"]
     assert "<PROJECT_ROOT>" in logged["details"]
 
+
+
+def test_malformed_line_raises_rather_than_vanishing(tmp_path, monkeypatch):
+    """A corrupt line must raise, not be silently skipped on read."""
+    monkeypatch.setattr(server, "ROOT", tmp_path)
+    monkeypatch.setattr(server, "DIAGNOSTICS_DIR", tmp_path / ".podarcis" / "diagnostics")
+    pp = tmp_path / ".podarcis" / "diagnostics" / "pain_points.jsonl"
+    monkeypatch.setattr(server, "PAIN_POINTS_FILE", pp)
+
+    server.diagnostics_log(category="friction", summary="real issue")
+    with open(pp, "a", encoding="utf-8") as f:
+        f.write("{not json at all\n")
+
+    with pytest.raises(json.JSONDecodeError):
+        server.diagnostics_list()
+    assert "{not json at all" in pp.read_text(encoding="utf-8")

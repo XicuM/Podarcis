@@ -43,7 +43,7 @@ def create_gateway(root: Path, config_path: Path | None = None, port: int = 8000
             "Podarcis Gateway MCP server. Enforces strict 3-tier source hierarchy "
             "(workspace -> wiki -> sources, where sources reside in sources/ or Google Drive). "
             "Provides wiki searching & auditing, literature discovery & paper ingestion, "
-            "workspace syncing, nutrition menumaker, financial calculations, "
+            "market data, "
             "platform diagnostics, skills, and subagent persona prompts."
         ),
         port=port,

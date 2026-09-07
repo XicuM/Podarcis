@@ -14,7 +14,7 @@ from diagnose_session import (
     parse_transcript,
     log_pain_points,
     get_active_issues,
-    clear_issues,
+    resolve_issues,
 )
 
 
@@ -47,7 +47,7 @@ def test_parse_transcript_and_logging(tmp_path):
     assert len(issues) == 2
     assert issues[0]['resolved'] is False
 
-    cleared = clear_issues(base_dir=tmp_path)
+    cleared = len(resolve_issues(base_dir=tmp_path, sweep=True))
     assert cleared == 2
     assert len(get_active_issues(base_dir=tmp_path)) == 0
 
@@ -100,3 +100,50 @@ def test_prepare_pr_dry_run(tmp_path, monkeypatch):
     assert '[REDACTED_EMAIL]' in msg
     assert '<HOME>' in msg
 
+
+
+def _point(pid: str, category: str, summary: str) -> dict:
+    '''A pain point in the shape parse_transcript and diagnostics_log write.'''
+    return {
+        'id': pid, 'timestamp': '2026-09-07T00:00:00+00:00', 'category': category,
+        'summary': summary, 'details': '', 'severity': 'medium', 'resolved': False,
+    }
+
+
+def test_resolve_selectors_leave_unrelated_issues_untouched(tmp_path):
+    '''Resolving by id or category must not sweep the whole log.'''
+    log_pain_points([
+        _point('diag-1', 'command_failure', 'lint crashed'),
+        _point('diag-2', 'user_correction', 'wrong footnote style'),
+        _point('diag-3', 'user_correction', 'missing frontmatter'),
+    ], base_dir=tmp_path)
+    assert len(get_active_issues(base_dir=tmp_path)) == 3
+
+    assert resolve_issues(base_dir=tmp_path, ids=['diag-nope']) == []
+    assert len(get_active_issues(base_dir=tmp_path)) == 3
+
+    assert len(resolve_issues(base_dir=tmp_path, category='user_correction')) == 2
+    remaining = get_active_issues(base_dir=tmp_path)
+    assert [r['category'] for r in remaining] == ['command_failure']
+
+    log_file = tmp_path / '.podarcis' / 'diagnostics' / 'pain_points.jsonl'
+    records = [json.loads(l) for l in log_file.read_text().splitlines() if l.strip()]
+    assert len(records) == 3, 'resolved records must be retained, not deleted'
+    assert all('resolved_at' in r for r in records if r['resolved'])
+
+    assert len(resolve_issues(base_dir=tmp_path, sweep=True)) == 1
+    assert get_active_issues(base_dir=tmp_path) == []
+
+
+def test_malformed_line_is_never_dropped_on_rewrite(tmp_path):
+    '''A corrupt line must raise, not vanish when the log is rewritten.'''
+    log_pain_points([_point('diag-1', 'friction', 'real issue')], base_dir=tmp_path)
+    log_file = tmp_path / '.podarcis' / 'diagnostics' / 'pain_points.jsonl'
+    with open(log_file, 'a', encoding='utf-8') as f:
+        f.write('{not json at all\n')
+
+    with pytest.raises(json.JSONDecodeError):
+        resolve_issues(base_dir=tmp_path, sweep=True)
+
+    text = log_file.read_text(encoding='utf-8')
+    assert '{not json at all' in text and 'real issue' in text

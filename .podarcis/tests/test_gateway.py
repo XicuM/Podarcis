@@ -1,5 +1,6 @@
 '''Unit tests for Podarcis Gateway server and router integration.'''
 
+import sys
 import pytest
 import asyncio
 from pathlib import Path
@@ -117,7 +118,7 @@ def test_default_agents_enabled_without_config(tmp_path):
                if (d / 'SKILL.md').exists()}
     assert set(cfg['skills']) == on_disk
     assert all(v.get('enabled', True) for v in cfg['skills'].values())
-    assert set(cfg['mcp_modules']) == {'wiki', 'research', 'repo', 'menumaker', 'diagnostics'}
+    assert set(cfg['mcp_modules']) == {'wiki', 'research', 'diagnostics', 'market'}
     # Non-gateway keys are carried through unchanged
     assert cfg['repositories']['wiki'] == 'git@example.com/wiki.git'
 
@@ -166,3 +167,29 @@ def test_snake_case_convention_has_exactly_one_home():
     '''It lived only in two persona bodies (one spelling it "Filnaming") and was
     absent from AGENTS.md, so the shared rulebook was missing a real convention.'''
     assert 'Snake_case Filenames' in (Path('.').resolve() / 'AGENTS.md').read_text()
+
+
+def test_mcp_surface_is_exactly_the_bash_less_job_surface():
+    '''Every bound tool must be callable by an agent job.
+
+    Jobs are denied Bash, so a tool they cannot reach is one a human could
+    have run as `podarcis ...` instead — and an unreachable MCP copy rots
+    silently, as repo_sync did (it imported a helper deleted in 0868a00 and
+    would have raised ImportError on every pull).
+    '''
+    sys.path.insert(0, str(Path('.').resolve() / '.podarcis'))
+    from jobs.agent import READ_TOOLS, WRITE_TOOLS
+
+    async def run():
+        mcp, watcher = create_gateway(Path('.').resolve())
+        bound = {t.name for t in await mcp.list_tools()}
+        reachable = {
+            t.removeprefix('mcp__podarcis__')
+            for t in READ_TOOLS + WRITE_TOOLS if t.startswith('mcp__podarcis__')
+        }
+        assert bound == reachable, (
+            f'bound but unreachable by any job: {sorted(bound - reachable)}; '
+            f'allow-listed but not bound: {sorted(reachable - bound)}'
+        )
+
+    asyncio.run(run())

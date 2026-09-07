@@ -10,9 +10,8 @@ They are **not** run standalone. The `podarcis-mcp` gateway (`.podarcis/gateway/
 |---|---|---|
 | **wiki-mcp** | Knowledge base search, publishing, and linting | `wiki/server.py` |
 | **research-mcp** | Academic literature discovery and ingestion | `research/server.py` |
-| **repo-mcp** | Git / Google Drive repository synchronization | `repo/server.py` |
-| **menumaker-mcp** | Nutritional optimization and menu pricing | `menumaker/server.py` |
 | **diagnostics-mcp** | Platform pain-point logging | `diagnostics/server.py` |
+| **market-mcp** | Batched Yahoo Finance quotes, history, fundamentals | `market/server.py` |
 
 ## Configuration
 
@@ -58,25 +57,11 @@ Dependencies install from the project root: `.venv/bin/pip install -e .`
 **Resources**
 - `research://sources/index` - Live contents of the sources catalogue.
 
-### repo-mcp
-
-**Tools**
-- `repo_sync` - Clone missing repos, pull remotes, ingest Google Drive deltas, optionally commit and push. Equivalent to `podarcis repo sync`.
-
-### menumaker-mcp
-
-**Tools**
-- `intake_targets(age, gender, stage)` - Compute daily nutrient intake targets (RDA + Upper Limits).
-- `food_search(query, limit)`, `food_nutrients(food_name)` - Search and retrieve USDA food profiles.
-- `menu_optimize(age, gender, stage)` - Linear programming solver for the cheapest menu meeting all requirements.
-- `menu_price(items)` - Calculate menu cost from supermarket price data.
-
 ### diagnostics-mcp
 
 **Tools**
 - `diagnostics_log` - Record a failure, tool error, user correction, or unmet expectation.
 - `diagnostics_list` - Read back unresolved pain points.
-- `diagnostics_clear` - Mark **all** pain points resolved. Indiscriminate; for a single entry, edit `.podarcis/diagnostics/pain_points.jsonl` directly.
 
 ## Development & Conventions
 
@@ -85,3 +70,4 @@ Dependencies install from the project root: `.venv/bin/pip install -e .`
 - **No Fabrication**: `literature_search` returns empty lists if no results are found; never hallucinates papers.
 - **Strict Ingestion**: `literature_download` halts on failure and cleans up; agents must provide PDFs manually (`local:<path>`) if open-access fetching fails. It only ever accepts a PDF the server actually served — never a rendered HTML page.
 - **Don't duplicate the harness**: A tool or resource earns its place only by doing something the agent's native tools cannot. Directory listings, file reads, and literal-string search do not qualify.
+- **Don't duplicate the CLI**: The bound surface is exactly what a Bash-less agent job (`.podarcis/jobs/agent.py`) can reach, enforced by `test_mcp_surface_is_exactly_the_bash_less_job_surface`. Anything a human runs around a task belongs in `podarcis`, not here. The menumaker library moved to `.podarcis/menumaker/` (imported as `podarcis.menumaker`) when `podarcis menu` took over from `menumaker-mcp`.

@@ -49,7 +49,7 @@ graph TD
 ## 🛠 Features & Capabilities
 
 * **Subagent Architecture**: Four specialized subagents (`Researcher`, `Synthesizer`, `Protocol Architect`, `Auditor`) auto-invoked by the primary agent based on task context.
-* **Model Context Protocol (MCP)**: Native servers (`research-mcp`, `wiki-mcp`, `repo-mcp`, `menumaker-mcp`, `diagnostics-mcp`) enable literature search, knowledge base queries, nutritional math, and video processing.
+* **Model Context Protocol (MCP)**: Native servers (`wiki-mcp`, `research-mcp`, `diagnostics-mcp`, `market-mcp`) enable knowledge base queries, literature search, pain-point logging, and market data. The bound surface is exactly what a Bash-less agent job can reach; everything a human drives — repo syncing, menu optimization, resolving pain points — is a `podarcis` subcommand instead.
 * **Modular Podarcis Engine**: The `.podarcis/` Python package provides interactive setup, CLI tools (`podarcis status`, `podarcis test`, `podarcis lint`), and background jobs engine.
 * **Hermetic Repositories**: `wiki/`, `workspace/`, and `sources/` are decoupled git repositories ensuring clear separation between objective knowledge and user privacy.
 * **Team Habitat & Multi-User Support**: Use [**PodarcisNest**](https://github.com/XicuM/PodarcisNest) for multi-user container orchestration, dynamic reverse proxying, shared OKF knowledge mounts, and Slack research bots.

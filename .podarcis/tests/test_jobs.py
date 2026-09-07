@@ -78,6 +78,33 @@ def test_unknown_autonomy_is_rejected(tmp_path):
     assert res['status'] == 'error' and 'yolo' in res['message']
 
 
+def test_missing_harness_is_rejected(tmp_path):
+    """No default harness: an unspecified one must fail, not guess."""
+    job = {
+        'name': 'x', 'type': 'agent',
+        'options': {'prompt': 'hi', 'autonomy': 'report'},
+    }
+    from jobs import agent
+    res = agent.run(tmp_path, job)
+    assert res['status'] == 'error' and 'harness' in res['message']
+
+
+def test_unknown_harness_is_reported_as_error_dict(tmp_path):
+    job = {
+        'name': 'x', 'type': 'agent',
+        'options': {'prompt': 'hi', 'harness': 'nonexistent'},
+    }
+    from jobs import agent
+    res = agent.run(tmp_path, job)
+    assert res['status'] == 'error' and 'Unknown harness' in res['message']
+
+
+def test_shipped_agent_jobs_declare_a_harness():
+    for name, job in discover_jobs(root_dir).items():
+        if job['type'] == 'agent':
+            assert (job['options'] or {}).get('harness'), name
+
+
 def test_claude_argv_omits_unset_fields():
     argv = ClaudeRunner().build_argv(RunSpec(prompt='go', cwd=root_dir))
     assert '--agent' not in argv and '--model' not in argv
