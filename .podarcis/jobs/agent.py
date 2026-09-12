@@ -13,10 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from console import console
-from repos import get_repo_names, push_repos
+from podarcis.console import console
+from podarcis.repos import get_repo_names, push_repos
 
 from .runners import (
     RunResult, RunSpec, available_harnesses, get_runner,
@@ -28,8 +26,6 @@ READ_TOOLS = (
     'mcp__podarcis__wiki_search', 'mcp__podarcis__wiki_fetch',
     'mcp__podarcis__wiki_lint', 'mcp__podarcis__literature_search',
     'mcp__podarcis__literature_status', 'mcp__podarcis__diagnostics_list',
-    'mcp__podarcis__market_quote', 'mcp__podarcis__market_history',
-    'mcp__podarcis__market_fundamentals',
 )
 
 WRITE_TOOLS = (

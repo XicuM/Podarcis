@@ -10,6 +10,9 @@ from rich.text import Text
 
 console = Console()
 
+# Diagnostics and warnings go here so `--json` output on stdout stays parseable.
+err_console = Console(stderr=True)
+
 QSTYLE = [
     ('qmark', 'fg:#e5c07b bold'),
     ('question', 'bold white'),

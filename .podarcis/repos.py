@@ -4,8 +4,8 @@
 import subprocess
 from pathlib import Path
 
-from common import load_json, load_yaml, save_yaml
-from console import console
+from podarcis.common import config_path, load_config, save_yaml
+from podarcis.console import console
 
 DEFAULT_REPO_NAMES = ['sources', 'wiki', 'workspace']
 
@@ -13,17 +13,8 @@ DEFAULT_REPO_NAMES = ['sources', 'wiki', 'workspace']
 
 def load_repos_config(root: Path) -> dict:
     '''Load repository URLs from .podarcis/config.yaml.'''
-    pod_cfg = load_yaml(root/'.podarcis'/'config.yaml')
-    repos = pod_cfg.get('repositories', {})
-    if not isinstance(repos, dict): repos = {}
-
-    if not repos:
-        legacy_path = Path(root) / '.agents' / 'repos.json'
-        legacy_cfg = load_json(legacy_path)
-        if legacy_cfg and 'repositories' in legacy_cfg and isinstance(legacy_cfg['repositories'], dict):
-            repos = legacy_cfg['repositories']
-
-    return {'repositories': repos}
+    repos = load_config(root).get('repositories')
+    return {'repositories': repos if isinstance(repos, dict) else {}}
 
 
 def get_repo_names(root: Path | str | None = None) -> list[str]:
@@ -45,14 +36,10 @@ def get_repo_names(root: Path | str | None = None) -> list[str]:
 
 def save_repos_config(root: Path, config: dict) -> None:
     '''Persist repository configuration to .podarcis/config.yaml.'''
-    yaml_path = Path(root) / '.podarcis' / 'config.yaml'
-    yaml_path.parent.mkdir(parents=True, exist_ok=True)
-    pod_cfg = load_yaml(yaml_path) if yaml_path.exists() else {}
-    if not isinstance(pod_cfg, dict): pod_cfg = {}
-
-    repos = config.get('repositories', {})
-    pod_cfg['repositories'] = repos
-    save_yaml(yaml_path, pod_cfg)
+    root_path = Path(root)
+    pod_cfg = load_config(root_path)
+    pod_cfg['repositories'] = config.get('repositories', {})
+    save_yaml(config_path(root_path), pod_cfg)
 
 
 def ensure_local_git_repo(root: Path | str, repo_name: str) -> None:
@@ -99,7 +86,7 @@ def set_repo_url(root: Path | str, repo_name: str, url: str, update_remote: bool
 def prompt_configure_repo(root: Path | str, repo_name: str, style=None) -> None:
     '''Interactive prompt to select and configure repository mode (Local, Remote, or GDrive for sources).'''
     import questionary
-    from common import set_config_value
+    from podarcis.common import set_config_value
     root_path = Path(root)
     current_url = get_repo_url(root_path, repo_name)
     is_git = bool(current_url and current_url not in ('local', 'gdrive'))
@@ -365,7 +352,7 @@ def sync_repos_full(root: Path | str | None = None) -> dict:
 
         if url == 'gdrive':
             try:
-                from jobs import run_job
+                from podarcis.jobs import run_job
                 job_res = run_job(root_path, 'gdrive_sync', dry_run=False)
                 results[name] = {'status': 'ok', 'message': f'GDrive sync completed ({job_res.get("status", "ok")})'}
             except Exception as e:

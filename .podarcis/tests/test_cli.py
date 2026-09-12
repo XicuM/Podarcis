@@ -5,7 +5,7 @@ import json
 import pytest
 from argparse import Namespace
 from pathlib import Path
-from cli import cmd_status, cmd_config_enable, cmd_config_disable, cmd_config_repo, cmd_menu
+from podarcis.cli import cmd_status, cmd_config_enable, cmd_config_disable, cmd_config_repo
 
 
 def test_cli_status_json(capsys):
@@ -19,15 +19,93 @@ def test_cli_status_json(capsys):
     assert 'mcp_servers' in data
     assert 'skills' in data
     assert 'agents' in data
+    assert 'external_skills' in data
     assert 'repositories' in data
+    assert all('ok' in v for v in data['external_skills'].values())
+
+
+def _deploy(root, name, *, pyproject=None, package_json=None):
+    """Write a skill bundle into the .agents/skills deploy root, as APM would."""
+    d = root / '.agents' / 'skills' / name
+    d.mkdir(parents=True)
+    (d / 'SKILL.md').write_text(f'---\nname: {name}\n---\n', encoding='utf-8')
+    if pyproject:
+        (d / 'pyproject.toml').write_text(pyproject, encoding='utf-8')
+    if package_json:
+        (d / 'package.json').write_text(json.dumps(package_json), encoding='utf-8')
+    return d
+
+
+def test_external_skills_excludes_what_this_repo_authors(tmp_path):
+    """.apm/skills is authored; the deploy roots hold authored and vendored alike."""
+    from podarcis.components import external_skills
+
+    (tmp_path / '.apm' / 'skills' / 'mine').mkdir(parents=True)
+    _deploy(tmp_path, 'mine')          # same skill, deployed
+    _deploy(tmp_path, 'theirs')        # a dependency
+
+    assert set(external_skills(tmp_path)) == {'theirs'}
+
+
+def test_external_skills_reads_python_console_scripts(tmp_path):
+    from podarcis.components import external_skills
+
+    _deploy(tmp_path, 'tool', pyproject=(
+        '[project]\nname = "tool"\n\n[project.scripts]\n'
+        'thing = "tool.cli:main"\nother = "tool.cli:other"\n'))
+    assert set(external_skills(tmp_path)['tool']['executables']) == {'thing', 'other'}
+
+
+@pytest.mark.parametrize('bin_field, expected', [
+    ({'cli-name': 'dist/index.js'}, {'cli-name'}),
+    ('dist/index.js', {'node-tool'}),
+])
+def test_external_skills_reads_node_bin(tmp_path, bin_field, expected):
+    """package.json `bin` is a map of names, or a bare string.
+
+    The string form names the binary after the package's `name`, not after the
+    path it points at — reading the path as a command name would report a
+    binary that could never exist.
+    """
+    from podarcis.components import external_skills
+
+    _deploy(tmp_path, 'node-tool', package_json={'name': 'node-tool', 'bin': bin_field})
+    assert set(external_skills(tmp_path)['node-tool']['executables']) == expected
+
+
+def test_external_skills_reports_a_missing_executable(tmp_path):
+    """The whole point: a deployed skill whose CLI was never installed.
+
+    APM deploys files but installs no runtime, and a failing lifecycle script
+    does not fail `apm install` — so nothing upstream of status notices.
+    """
+    from podarcis.components import external_skills
+
+    _deploy(tmp_path, 'tool', pyproject=(
+        '[project]\nname = "tool"\n\n[project.scripts]\n'
+        'definitely-not-on-this-system = "tool.cli:main"\n'))
+    assert external_skills(tmp_path)['tool']['executables'] == {
+        'definitely-not-on-this-system': ''}
+
+
+def test_external_skills_prefers_the_project_venv_over_path(tmp_path):
+    """A CLI installed into .venv must win; PATH may hold a different version."""
+    from podarcis.components import external_skills
+
+    venv_bin = tmp_path / '.venv' / 'bin'
+    venv_bin.mkdir(parents=True)
+    (venv_bin / 'python').write_text('', encoding='utf-8')  # certainly also on PATH
+    _deploy(tmp_path, 'tool', pyproject=(
+        '[project]\nname = "tool"\n\n[project.scripts]\npython = "tool.cli:main"\n'))
+    assert external_skills(tmp_path)['tool']['executables']['python'] == str(venv_bin / 'python')
 
 
 def test_cli_config_rejects_skill_and_agent_toggles(tmp_path, monkeypatch):
     """Skills and agents are not toggleable; the CLI must say so, not rewrite frontmatter."""
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+    from podarcis import cli
+    monkeypatch.setattr(cli, 'ROOT_DIR', tmp_path)
 
-    skills_dir = tmp_path / '.agents' / 'skills' / 'sample-skill'
+    skills_dir = tmp_path / '.apm' / 'skills' / 'sample-skill'
     skills_dir.mkdir(parents=True)
     skill_file = skills_dir / 'SKILL.md'
     original = '---\ndescription: Sample Skill\n---\n\nSample body.'
@@ -43,15 +121,15 @@ def test_cli_config_rejects_skill_and_agent_toggles(tmp_path, monkeypatch):
 
 def test_cli_config_repo(tmp_path, monkeypatch):
     '''Test repo configuration CLI command for wiki, user, workspace, and custom paths.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+    from podarcis import cli
+    monkeypatch.setattr(cli, 'ROOT_DIR', tmp_path)
 
     # Configure wiki
     args_repo = Namespace(repo_name='wiki', url='https://github.com/example/wiki.git', path=None, local=False)
     res = cmd_config_repo(args_repo)
     assert res == 0
 
-    from repos import get_repo_url
+    from podarcis.repos import get_repo_url
     assert get_repo_url(tmp_path, 'wiki') == 'https://github.com/example/wiki.git'
 
     # Configure workspace repository via path or url
@@ -70,13 +148,13 @@ def test_cli_config_repo(tmp_path, monkeypatch):
 
 def test_cli_diagnose(tmp_path, monkeypatch, capsys):
     '''Test podarcis diagnose subcommand output.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+    from podarcis import cli
+    monkeypatch.setattr(cli, 'ROOT_DIR', tmp_path)
 
     # Copy actual diagnose_session.py to tmp_path structure so import works in test
-    script_dir = tmp_path / '.agents' / 'skills' / 'self-improvement' / 'scripts'
+    script_dir = tmp_path / '.apm' / 'skills' / 'self-improvement' / 'scripts'
     script_dir.mkdir(parents=True)
-    real_script = Path(__file__).resolve().parent.parent.parent / '.agents' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
+    real_script = Path(__file__).resolve().parent.parent.parent / '.apm' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
     (script_dir / 'diagnose_session.py').write_text(real_script.read_text(encoding='utf-8'), encoding='utf-8')
 
     # Run status check when no issues exist
@@ -90,13 +168,13 @@ def test_cli_diagnose(tmp_path, monkeypatch, capsys):
 
 def test_config_frontend_obsidian(tmp_path, monkeypatch):
     '''Test configuring frontend to obsidian.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+    from podarcis import cli
+    monkeypatch.setattr(cli, 'ROOT_DIR', tmp_path)
 
     args = Namespace(frontend_name='obsidian')
     res = cli.cmd_config_frontend(args)
     assert res == 0
-    from common import get_config_value
+    from podarcis.common import get_config_value
     assert get_config_value(tmp_path, 'frontend') == 'obsidian'
 
 
@@ -104,8 +182,8 @@ def test_config_frontend_obsidian(tmp_path, monkeypatch):
 
 def test_cli_default_opens_frontend(tmp_path, monkeypatch):
     '''Verify that running podarcis without subcommands opens frontend directly.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+    from podarcis import cli
+    monkeypatch.setattr(cli, 'ROOT_DIR', tmp_path)
 
     opened = []
     monkeypatch.setattr(cli, 'cmd_frontend', lambda args: opened.append(True) or 0)
@@ -121,8 +199,8 @@ def test_cli_default_opens_frontend(tmp_path, monkeypatch):
 
 def test_cli_research_search_json(capsys, monkeypatch):
     '''Test podarcis research search --json subcommand.'''
-    import cli
-    res_script = cli.root_dir / '.agents' / 'mcp' / 'research' / 'server.py'
+    from podarcis import cli
+    res_script = cli.ROOT_DIR / '.agents' / 'mcp' / 'research' / 'server.py'
     import importlib.util
     spec = importlib.util.spec_from_file_location('research_mcp_server', res_script)
     research_server = importlib.util.module_from_spec(spec)
@@ -149,8 +227,8 @@ def test_cli_research_search_json(capsys, monkeypatch):
 
 def test_cli_diagnose_resolve_id(tmp_path, monkeypatch):
     '''Test resolving specific pain point by ID via podarcis diagnose --resolve.'''
-    import cli
-    monkeypatch.setattr(cli, 'root_dir', tmp_path)
+    from podarcis import cli
+    monkeypatch.setattr(cli, 'ROOT_DIR', tmp_path)
 
     # Setup pain point file
     diag_dir = tmp_path / '.podarcis' / 'diagnostics'
@@ -159,9 +237,9 @@ def test_cli_diagnose_resolve_id(tmp_path, monkeypatch):
     rec = {'id': 'diag-test-1', 'summary': 'Test pain point', 'resolved': False}
     pain_file.write_text(json.dumps(rec) + '\n', encoding='utf-8')
 
-    script_dir = tmp_path / '.agents' / 'skills' / 'self-improvement' / 'scripts'
+    script_dir = tmp_path / '.apm' / 'skills' / 'self-improvement' / 'scripts'
     script_dir.mkdir(parents=True)
-    real_script = Path(__file__).resolve().parent.parent.parent / '.agents' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
+    real_script = Path(__file__).resolve().parent.parent.parent / '.apm' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
     (script_dir / 'diagnose_session.py').write_text(real_script.read_text(encoding='utf-8'), encoding='utf-8')
 
     args = Namespace(resolve='diag-test-1', json=False, clear=False, log_session=None)
@@ -180,21 +258,50 @@ def test_cli_diagnose_resolve_id(tmp_path, monkeypatch):
 
 
 
-@pytest.mark.parametrize('module', ['intake', 'food_db', 'optimizer', 'pricing', 'wiki', 'prices_update'])
-def test_menumaker_modules_import(module):
-    '''Every menumaker module must import under its package name.
+# ── configuration is one file ────────────────────────────────────────────────
 
-    cmd_menu imports these lazily inside each branch, so a stale bare import
-    (`from intake import ...`) is invisible until that one subcommand runs.
+def test_single_config_file_and_legacy_state_migration(tmp_path):
+    '''state.yaml folds into config.yaml, with state's values winning.
+
+    The split cost correctness: the MCP servers read engines.qmd and
+    sources_backend from config.yaml while the TUI wrote them to state.yaml,
+    so neither setting ever reached the server that reads it.
     '''
-    importlib.import_module(f'podarcis.menumaker.{module}')
+    from podarcis.common import get_config_value, load_config, save_yaml, set_config_value
+
+    pod = tmp_path / '.podarcis'
+    pod.mkdir()
+    save_yaml(pod / 'config.yaml', {'sources_backend': 'local', 'apis': {'k': 'v'}})
+    save_yaml(pod / 'state.yaml', {'sources_backend': 'gdrive', 'jobs': {'a': {'enabled': True}}})
+
+    cfg = load_config(tmp_path)
+    assert cfg['sources_backend'] == 'gdrive'      # state took read priority
+    assert cfg['apis']['k'] == 'v'                 # config-only keys survive
+    assert cfg['jobs']['a']['enabled'] is True
+    assert not (pod / 'state.yaml').exists()
+
+    # Writes that used to be routed to state.yaml now land where servers read.
+    set_config_value(tmp_path, True, 'engines', 'qmd')
+    assert load_config(tmp_path)['engines']['qmd'] is True
+    assert get_config_value(tmp_path, 'sources_backend') == 'gdrive'
 
 
-def test_cli_menu_food_search(capsys):
-    '''podarcis menu food-search --json reaches the real USDA database.'''
-    args = Namespace(menu_action='food-search', query='oats', limit=2, json=True)
-    assert cmd_menu(args) == 0
+def test_engine_is_imported_under_exactly_one_name():
+    '''`.podarcis/` is the package `podarcis` and nothing else.
 
-    data = json.loads(capsys.readouterr().out)
-    assert data['query'] == 'oats'
-    assert data['results'] and all('oats' in name.lower() for name in data['results'])
+    It was previously also inserted onto sys.path by seven modules, so every
+    module had two instances (`jobs.agent` and `podarcis.jobs.agent`) with
+    separate copies of module-level state.
+    '''
+    import subprocess
+    import sys
+
+    probe = (
+        'import podarcis.cli, podarcis.jobs.agent, podarcis.gateway.router, sys;'
+        'shadowed = [n for n in ("cli", "common", "console", "components", "repos",'
+        ' "jobs", "banner", "install", "uninstall") if n in sys.modules];'
+        'print(shadowed)'
+    )
+    out = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == '[]', f'engine modules shadowed under bare names: {out.stdout}'

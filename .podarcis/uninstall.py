@@ -10,14 +10,8 @@ import shutil
 import sys
 from pathlib import Path
 
-root = Path(__file__).resolve().parent.parent
-podarcis_dir = Path(__file__).resolve().parent
-if str(root) not in sys.path:
-    sys.path.insert(0, str(root))
-if str(podarcis_dir) not in sys.path:
-    sys.path.insert(0, str(podarcis_dir))
-
-from console import console
+from podarcis import ROOT_DIR as root
+from podarcis.console import console
 from rich.panel import Panel
 from rich.table import Table
 
@@ -85,8 +79,7 @@ def _remove_global_symlinks(symlinks: list[Path], dry_run: bool) -> int:
 
 def _remove_timers(dry_run: bool) -> int:
     """Disable and delete the systemd user units installed for this checkout."""
-    sys.path.insert(0, str(root / '.podarcis'))
-    from jobs import scheduler
+    from podarcis.jobs import scheduler
 
     units = scheduler.installed_units(root)
     if not units:
@@ -207,8 +200,7 @@ def _print_preview(symlinks: list[Path], purge: bool) -> None:
 
     table.add_row('build artefacts', str(root), 'egg-info, __pycache__, .pyc, .pytest_cache')
 
-    sys.path.insert(0, str(root / '.podarcis'))
-    from jobs import scheduler
+    from podarcis.jobs import scheduler
     for unit in scheduler.installed_units(root):
         table.add_row('systemd unit', str(unit), 'scheduled job timer')
 

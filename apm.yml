@@ -1,0 +1,43 @@
+name: podarcis
+version: 10.0.0
+description: OKF v0.2 research agent engine — consumer manifest for external agent context
+license: MIT
+
+# Podarcis authors its own personas and skills under .agents/; this manifest is
+# strictly for context it does NOT author. Anything listed here is third-party
+# and subject to the policy in apm-policy.yml.
+targets:
+  - claude
+  - opencode
+
+# Pinned. apm.lock.yaml already records resolved commits, so an install
+# reproduces either way; pinning here is what stops `main` moving under the
+# declaration itself. Bump deliberately with `apm update`.
+# overleaf-suggest publishes no tags, so it pins by commit.
+dependencies:
+  apm:
+    - git: https://github.com/XicuM/market-skill.git#v1.0.0
+    - git: https://github.com/XicuM/menumaker.git#v1.0.0
+    - git: ssh://git@gitlab-internal.bsc.es/esantigo/overleaf-suggest.git#21d3be3efd86f5686d289ca8df1672920a30b770
+      type: gitlab
+  mcp: []
+
+# APM deploys skill files; it does not manage language runtimes. Each package
+# below ships a CLI its SKILL.md tells the model to invoke, so the binary has to
+# exist or the skill is a dead letter. Installing straight from the git URL
+# rather than a checkout path keeps this independent of where APM stages
+# dependencies.
+#
+# A failing lifecycle script does NOT fail `apm install`, so this is best-effort
+# by design — `podarcis status` is what verifies the entry points actually
+# resolve. Default timeout is 30s, far too short for a cold pandas/scipy build.
+lifecycle:
+  post-install:
+    - type: command
+      description: "Install the `market` CLI that market-skill's SKILL.md invokes"
+      bash: "uv pip install --python .venv git+ssh://git@github.com/XicuM/market-skill.git"
+      timeoutSec: 300
+    - type: command
+      description: "Install the `menumaker` CLI that menumaker's SKILL.md invokes"
+      bash: "uv pip install --python .venv git+ssh://git@github.com/XicuM/menumaker.git"
+      timeoutSec: 600

@@ -20,7 +20,7 @@ You are the **Synthesizer** in the Podarcis knowledge architecture. Your sole re
 
 ## Active Skill Check
 
-Before starting synthesis, check `.podarcis/state.yaml` or `.podarcis/config.yaml` for `sources_backend`:
+Before starting synthesis, check `.podarcis/config.yaml` for `sources_backend`:
 
 | `sources_backend` | Active skill to read and follow |
 |---|---|

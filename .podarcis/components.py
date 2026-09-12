@@ -1,17 +1,83 @@
 '''Discovery, inspection, and state management for MCP servers and Skills.'''
 
 # Standard library imports
-import sys, subprocess
+import re, shutil, sys, subprocess
 from pathlib import Path
 
 # Local imports
-from common import load_json, save_json
-from console import console
+from podarcis.common import load_json, load_yaml, save_json, save_yaml
+from podarcis.console import console
 
 
-SKILLS = lambda root: root/'.agents'/'skills'
+# First-party primitives live in .apm/ — the APM package layout. `apm install`
+# deploys them (plus any third-party dependency) into .claude/ and .opencode/,
+# so those directories are build output; discovery reads the source tree.
+SKILLS = lambda root: root/'.apm'/'skills'
 MCPS = lambda root: root/'.agents'/'mcp'
-AGENTS = lambda root: root/'.agents'/'agents'
+AGENTS = lambda root: root/'.apm'/'agents'
+
+
+# APM deploys a dependency's whole bundle into the harness skill directories, so
+# each package still carries the pyproject.toml or package.json that declares its
+# executables. Both roots are checked because skills converge on .agents/skills/
+# for most targets while Claude keeps a native one.
+DEPLOYED = lambda root: (root/'.agents'/'skills', root/'.claude'/'skills')
+
+
+def _declared_executables(skill_dir: Path) -> list[str]:
+    '''Console scripts a deployed skill bundle declares, Python or Node.'''
+    names = []
+    if (pyproject := skill_dir/'pyproject.toml').exists():
+        try:
+            import tomllib
+            names += list(tomllib.loads(pyproject.read_text(encoding='utf-8'))
+                          .get('project', {}).get('scripts', {}))
+        except ModuleNotFoundError:  # tomllib is 3.11+; the engine supports 3.10
+            block = re.search(r'^\[project\.scripts\]\s*$(.*?)(?=^\[|\Z)',
+                              pyproject.read_text(encoding='utf-8'), re.M | re.S)
+            if block:
+                names += re.findall(r'^\s*([\w.-]+)\s*=', block.group(1), re.M)
+        except Exception: pass
+    if (pkg := skill_dir/'package.json').exists():
+        try:
+            manifest = load_json(pkg)
+            binaries = manifest.get('bin', {})
+            # npm: a string `bin` names the binary after the package, not the path.
+            names += [manifest.get('name', '')] if isinstance(binaries, str) else list(binaries)
+        except Exception: pass
+    return sorted(set(names))
+
+
+def external_skills(root: Path) -> dict:
+    '''Skills APM deployed that this repo does not author, and whether they work.
+
+    A skill whose CLI is missing is a dead letter: the model reads instructions
+    telling it to run a command that does not exist. APM deploys files but does
+    not install language runtimes, and a failing lifecycle script does not fail
+    `apm install` — so nothing upstream of here notices.
+    '''
+    authored = ({d.name for d in SKILLS(root).iterdir() if d.is_dir()}
+                if SKILLS(root).exists() else set())
+    found: dict[str, dict] = {}
+    for deploy in DEPLOYED(root):
+        if not deploy.exists():
+            continue
+        for d in sorted(deploy.iterdir()):
+            if not d.is_dir() or d.name in authored or d.name in found:
+                continue
+            executables = _declared_executables(d)
+            found[d.name] = {
+                'name': d.name,
+                'executables': {name: _resolve(root, name) for name in executables},
+            }
+    return found
+
+
+def _resolve(root: Path, name: str) -> str:
+    '''Absolute path to an executable, preferring the project venv over PATH.'''
+    if (venv_bin := root/'.venv'/'bin'/name).exists():
+        return str(venv_bin)
+    return shutil.which(name) or ''
 
 
 def get_skill_desc(root_dir: Path, name: str) -> str:
@@ -31,7 +97,7 @@ def get_skill_desc(root_dir: Path, name: str) -> str:
 
 def get_agent_desc(root_dir: Path, name: str) -> str:
     '''Parse description field from agent markdown YAML frontmatter.'''
-    if (agent_file := AGENTS(root_dir)/f'{name}.md').exists():
+    if (agent_file := AGENTS(root_dir)/f'{name}.agent.md').exists():
         try:
             content = agent_file.read_text(encoding='utf-8')
             if content.startswith('---'):
@@ -61,87 +127,56 @@ def get_mcp_desc(root_dir: Path, dir_name: str, key: str = '') -> str:
 
 
 def run_mcp_setup(root: Path, name: str) -> bool:
-    '''Dynamically load and run setup.py for an MCP server if present.
+    '''Run a module's setup.py, if it ships one.
 
-    Resolution order (first match wins):
-      1. setup_{dir_name}   – canonical entry-point; orchestrates all config
-                              questions for that server in one place.
-      2. setup_{key}        – alternate name derived from the MCP registry key.
-      3. Legacy names       – setup_wiki, setup_research_credentials,
-                              setup_google_drive (kept for backwards compat).
+    The entry point is `setup_<dir_name>`. There used to be a three-tier
+    fallback chain behind it — an alternate key spelling plus hardcoded
+    `setup_wiki` / `setup_research_credentials` / `setup_google_drive` names —
+    kept for modules that no longer exist.
 
-    The function is responsible only for *configuration* (prompts, writing
-    credentials/config.yaml).  Dependency installation is always performed
-    afterwards by the caller (set_mcp_server_status / _configure_mcp_servers).
+    Setup handles *configuration* only (prompts, writing config.yaml).
+    Dependencies come from pyproject.toml at install time.
     '''
     dir_name = name.removesuffix('-mcp')
-    mcp_dir = MCPS(root)/dir_name
-    if not mcp_dir.exists():
-        mcp_dir = MCPS(root)/name
-        dir_name = name
-    if not (setup_script := mcp_dir/'setup.py').exists(): return True
-
-    if (req_file := mcp_dir / 'requirements.txt').exists():
-        install_deps(root, str(req_file), True, f'Verifying dependencies for {name}...')
+    if not (setup_script := MCPS(root) / dir_name / 'setup.py').exists():
+        return True
 
     import importlib.util
     spec = importlib.util.spec_from_file_location(f'{dir_name}_setup', setup_script)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
-    key_name = name.replace('-', '_')
-    setup_fn = (
-        # 1. Canonical entry-point: setup_<dir_name>
-        getattr(mod, f'setup_{dir_name.replace("-", "_")}', None) or
-        # 2. Alternate name derived from registry key
-        getattr(mod, f'setup_{key_name}', None) or
-        # 3. Legacy / explicitly-named helpers (backwards compat)
-        getattr(mod, 'setup_wiki', None) or
-        getattr(mod, 'setup_research_credentials', None) or
-        getattr(mod, 'setup_google_drive', None)
-    )
-    if setup_fn:
-        res = setup_fn(root)
-        return True if res is None else bool(res)
-    return True
+    setup_fn = getattr(mod, f'setup_{dir_name.replace("-", "_")}', None)
+    if setup_fn is None:
+        console.print(
+            f'[yellow]{setup_script.relative_to(root)} defines no '
+            f'setup_{dir_name}() entry point; skipping.[/yellow]'
+        )
+        return True
+    res = setup_fn(root)
+    return True if res is None else bool(res)
 
 
-def build_component_choices(root: Path, comp_type: str, items: dict, enabled_set: set[str] = None) -> list:
-    '''Build standardized Questionary choices with grey descriptions for components.'''
+def build_job_choices(jobs: dict) -> list:
+    '''Questionary checkbox choices for the jobs picker.
+
+    Was a generic build_component_choices(comp_type=...) with 'mcp'/'job'/else
+    branches; the MCP picker builds its own choices inline and nothing ever
+    passed a third type, so two of the three branches were unreachable.
+    '''
     import questionary
-    if not items: return []
+    if not jobs:
+        return []
 
-    max_len = max(len(k) for k in items) if items else 15
-    choices = []
-    for k in sorted(items):
-        if comp_type == 'mcp':
-            desc = items[k].get('desc') or get_mcp_desc(root, items[k]['dir_name'], k)
-            checked = (k in enabled_set) if enabled_set is not None else False
-        elif comp_type == 'job':
-            desc = f"{items[k].get('description', '')} [{items[k].get('schedule', '')}]"
-            checked = items[k].get('enabled', False)
-        else:
-            desc = ''
-            checked = False
-
-        choices.append(questionary.Choice(
-            title=[('', f'{k:<{max_len + 2}}'), ('fg:#888888', f'— {desc}')],
-            value=k, checked=checked,
-        ))
-    return choices
-
-
-def install_deps(root: Path, target: str, is_req: bool, message: str) -> None:
-    '''Quietly install python dependencies via virtual environment pip.'''
-
-    # Determine pip command based on virtual environment presence
-    venv_pip = root/'.venv'/('Scripts/pip.exe' if sys.platform == 'win32' else 'bin/pip')
-    pip_cmd = [str(venv_pip)] if venv_pip.exists() else [sys.executable, '-m', 'pip']
-
-    # Construct pip install command and execute with status logging
-    cmd = pip_cmd + ['install', '-r', target] if is_req else pip_cmd + ['install', target]
-    with console.status(f'[#29b8db]{message}[/#29b8db]', spinner='dots'):
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    width = max(len(k) for k in jobs) + 2
+    return [
+        questionary.Choice(
+            title=[('', f'{k:<{width}}'),
+                   ('fg:#888888', f'— {v.get("description", "")} [{v.get("schedule", "")}]')],
+            value=k, checked=v.get('enabled', False),
+        )
+        for k, v in sorted(jobs.items())
+    ]
 
 
 def is_skill_enabled(skill_path: Path) -> bool:
@@ -217,7 +252,7 @@ def count_mcp_tokens(mcp_dir: Path) -> int:
     except Exception: return 500
 
 
-def discover_components(root: Path) -> tuple[dict, dict]:
+def discover_components(root: Path) -> tuple[dict, dict, dict]:
     '''Scan filesystem to discover registered MCP servers and skills, using persistent mtime token cache.'''
 
     token_cache = load_json(root/'.agents'/'token_cache.json')
@@ -230,7 +265,6 @@ def discover_components(root: Path) -> tuple[dict, dict]:
             # a leftover __pycache__/ or data/ dir is not a phantom module.
             if (server_py := d/'server.py').is_file():
                 key = d.name if d.name.endswith('-mcp') else f'{d.name}-mcp'
-                req_file = d / 'requirements.txt'
                 mtime = server_py.stat().st_mtime
                 cache_key = f'mcp:{d.name}'
 
@@ -245,7 +279,6 @@ def discover_components(root: Path) -> tuple[dict, dict]:
                 mcp_servers[key] = {
                     'dir_name': d.name,
                     'path': d,
-                    'req': req_file if req_file.exists() else None,
                     'type': 'mcp',
                     'tokens': tok_count,
                     'desc': get_mcp_desc(root, d.name),
@@ -255,7 +288,6 @@ def discover_components(root: Path) -> tuple[dict, dict]:
     if (skills_dir := SKILLS(root)).exists():
         for d in skills_dir.iterdir():
             if d.is_dir():
-                req_file = d/'requirements.txt'
                 skill_file = d/'SKILL.md'
                 content = skill_file.read_text(encoding='utf-8') if skill_file.exists() else ''
                 desc = get_skill_desc(root, d.name)
@@ -276,7 +308,6 @@ def discover_components(root: Path) -> tuple[dict, dict]:
                 skills[d.name] = {
                     'dir_name': d.name,
                     'path': d,
-                    'req': req_file if req_file.exists() else None,
                     'type': 'skill',
                     'enabled': is_skill_enabled(d),
                     'tokens': tok_count,
@@ -287,35 +318,34 @@ def discover_components(root: Path) -> tuple[dict, dict]:
 
     agents = {}
     if (agents_dir := AGENTS(root)).exists():
-        for f in agents_dir.iterdir():
-            if f.is_file() and f.suffix == '.md':
-                name = f.stem
-                content = f.read_text(encoding='utf-8')
-                desc = get_agent_desc(root, name)
-                decl_text = f'- {name} ({f}): {desc}'
-                mtime = f.stat().st_mtime
-                cache_key = f'agent:{name}'
+        for f in sorted(agents_dir.glob('*.agent.md')):
+            name = f.name.removesuffix('.agent.md')
+            content = f.read_text(encoding='utf-8')
+            desc = get_agent_desc(root, name)
+            decl_text = f'- {name} ({f}): {desc}'
+            mtime = f.stat().st_mtime
+            cache_key = f'agent:{name}'
 
-                cached = token_cache.get(cache_key)
-                if cached and cached.get('mtime') == mtime:
-                    tok_count = cached['tokens']
-                    decl_tok = cached.get('decl_tokens', count_tokens(decl_text))
-                else:
-                    tok_count = count_tokens(content)
-                    decl_tok = count_tokens(decl_text)
-                    token_cache[cache_key] = {'mtime': mtime, 'tokens': tok_count, 'decl_tokens': decl_tok}
-                    cache_modified = True
+            cached = token_cache.get(cache_key)
+            if cached and cached.get('mtime') == mtime:
+                tok_count = cached['tokens']
+                decl_tok = cached.get('decl_tokens', count_tokens(decl_text))
+            else:
+                tok_count = count_tokens(content)
+                decl_tok = count_tokens(decl_text)
+                token_cache[cache_key] = {'mtime': mtime, 'tokens': tok_count, 'decl_tokens': decl_tok}
+                cache_modified = True
 
-                agents[name] = {
-                    'name': name,
-                    'path': f,
-                    'type': 'agent',
-                    'enabled': is_agent_enabled(f),
-                    'tokens': tok_count,
-                    'decl_tokens': decl_tok,
-                    'chars': len(content),
-                    'words': len(content.split())
-                }
+            agents[name] = {
+                'name': name,
+                'path': f,
+                'type': 'agent',
+                'enabled': is_agent_enabled(f),
+                'tokens': tok_count,
+                'decl_tokens': decl_tok,
+                'chars': len(content),
+                'words': len(content.split())
+            }
 
     # Drop cache entries for components deleted from disk, so the cache tracks
     # reality instead of growing a tail of every module ever removed.
@@ -334,27 +364,25 @@ def discover_components(root: Path) -> tuple[dict, dict]:
 
 
 def get_enabled_mcp_servers(root: Path) -> set[str]:
-    '''Retrieve set of active MCP module identifiers, both bare and -mcp suffixed.
+    '''Active MCP module identifiers, both bare and -mcp suffixed.
 
-    Delegates to the gateway's own config loader so `podarcis status` can never
-    disagree with what `podarcis-mcp` actually binds. Previously this held a third
-    hardcoded copy of the default module set, which silently drifted from
-    DEFAULT_MCP_MODULES and reported live modules as disabled.
+    Delegates discovery and the enable rule to the gateway's own router so
+    `podarcis status` can never disagree with what `podarcis-mcp` binds. This
+    function previously held a hardcoded copy of the module set that drifted
+    and reported live modules as disabled.
     '''
-    from podarcis.gateway.router import load_gateway_config
+    from podarcis.gateway.router import discover_modules, is_enabled
 
-    mcp_mods = load_gateway_config(root).get('mcp_modules', {})
-    enabled = set()
-    for k, v in mcp_mods.items():
-        if v.get('enabled', True) if isinstance(v, dict) else bool(v):
-            enabled |= {k, f'{k}-mcp'}
-    return enabled
+    section = load_yaml(root / '.podarcis' / 'config.yaml').get('mcp_modules')
+    return {
+        alias
+        for name in discover_modules(root) if is_enabled(section, name)
+        for alias in (name, f'{name}-mcp')
+    }
 
 
 def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: dict) -> None:
     '''Persist enabled state for specified MCP module in .podarcis/config.yaml.'''
-    from common import load_yaml, save_yaml
-
     clean_key = server_key.removesuffix('-mcp')
     cfg_path = root / '.podarcis' / 'config.yaml'
     data = load_yaml(cfg_path)
@@ -365,9 +393,5 @@ def set_mcp_server_status(root: Path, server_key: str, enable: bool, mcp_info: d
     else:
         mcp_mods[clean_key] = {'enabled': enable}
     save_yaml(cfg_path, data)
-
-    if enable and mcp_info.get('req'):
-        install_deps(root, str(mcp_info['req']), True, f'Verifying deps for {server_key}...')
-        console.print(f'[green]✓ Dependencies verified for {server_key}.[/green]')
 
 

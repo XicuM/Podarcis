@@ -1,7 +1,7 @@
 '''Unit tests for repository management and URL conversion.'''
 
 from pathlib import Path
-from repos import (
+from podarcis.repos import (
     DEFAULT_REPO_NAMES,
     get_repo_names,
     get_repo_url,
@@ -32,7 +32,7 @@ def test_set_repo_url_and_get(tmp_path: Path):
 
 
 def test_get_repo_status_and_sync(tmp_path: Path):
-    from repos import ensure_local_git_repo, get_repo_status, sync_repos_full, push_repos
+    from podarcis.repos import ensure_local_git_repo, get_repo_status, sync_repos_full, push_repos
 
     set_repo_url(tmp_path, 'sources', 'gdrive', update_remote=False)
     set_repo_url(tmp_path, 'wiki', 'local', update_remote=False)

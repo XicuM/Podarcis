@@ -259,7 +259,8 @@ if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if a != "--fix"]
     target = os.path.abspath(args[0] if args else ".")
     audit_results = run_audit(target, do_fix=do_fix)
-    
+    failed = False
+
     MAX_WORDS = 1500
     if not audit_results:
         print("Audit passed: No issues found.")
@@ -311,7 +312,12 @@ if __name__ == "__main__":
                 has_issues = True
                 
             if has_issues:
+                failed = True
                 print(f"\n--- {rel} ---")
                 for issue in issues:
                     print(issue)
 
+    # Exit non-zero on findings. `podarcis lint`, the audit_wiki job, and the
+    # commit/push autonomy gate in jobs/agent.py all branch on this status; a
+    # linter that always returns 0 turns every one of them into a no-op.
+    sys.exit(1 if failed else 0)

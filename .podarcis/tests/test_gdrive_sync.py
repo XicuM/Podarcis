@@ -1,14 +1,9 @@
 '''Tests for GDrive delta sync engine and state management.'''
 
 from pathlib import Path
-import sys
+from podarcis import ROOT_DIR as root_dir
 
-root_dir = Path(__file__).resolve().parent.parent.parent
-pod_dir = root_dir / '.podarcis'
-if str(pod_dir) not in sys.path:
-    sys.path.insert(0, str(pod_dir))
-
-from gdrive_sync import (
+from podarcis.gdrive_sync import (
     get_last_sync,
     update_last_sync,
     build_gdrive_query,

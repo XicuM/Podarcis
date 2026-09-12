@@ -13,10 +13,10 @@ from itertools import zip_longest
 from pathlib import Path
 
 # Local imports
-from common import load_one_liners, load_version_info, get_config_value
-from components import discover_components, get_enabled_mcp_servers
-from console import console
-from repos import get_repo_status
+from podarcis.common import load_one_liners, load_version_info, get_config_value
+from podarcis.components import discover_components, get_enabled_mcp_servers
+from podarcis.console import console
+from podarcis.repos import get_repo_status
 from rich.cells import cell_len
 from rich.text import Text
 
@@ -106,7 +106,7 @@ def _print_header(root_dir: Path, splash: str | None) -> None:
 
 def _status_rows(root_dir: Path) -> list[tuple]:
     '''Build the right-hand status rows: MCP tool budget, then scheduled jobs.'''
-    from jobs import discover_jobs
+    from podarcis.jobs import discover_jobs
 
     mcp_servers, _, _ = discover_components(root_dir)
     enabled_mcp = get_enabled_mcp_servers(root_dir)

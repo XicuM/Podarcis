@@ -1,0 +1,1506 @@
+lockfile_version: '1'
+apm_version: 0.30.0
+dependencies:
+- repo_url: esantigo/overleaf-suggest
+  name: overleaf-suggest
+  host: gitlab-internal.bsc.es
+  host_type: gitlab
+  resolved_commit: 21d3be3efd86f5686d289ca8df1672920a30b770
+  resolved_ref: 21d3be3efd86f5686d289ca8df1672920a30b770
+  version: unknown
+  package_type: claude_skill
+  deployed_files:
+  - .agents/skills/overleaf-suggest
+  - .agents/skills/overleaf-suggest/.gitignore
+  - .agents/skills/overleaf-suggest/README.md
+  - .agents/skills/overleaf-suggest/SKILL.md
+  - .agents/skills/overleaf-suggest/dist/auth.d.ts
+  - .agents/skills/overleaf-suggest/dist/auth.js
+  - .agents/skills/overleaf-suggest/dist/index.d.ts
+  - .agents/skills/overleaf-suggest/dist/index.js
+  - .agents/skills/overleaf-suggest/dist/overleaf.d.ts
+  - .agents/skills/overleaf-suggest/dist/overleaf.js
+  - .agents/skills/overleaf-suggest/dist/server.d.ts
+  - .agents/skills/overleaf-suggest/dist/server.js
+  - .agents/skills/overleaf-suggest/dist/types.d.ts
+  - .agents/skills/overleaf-suggest/dist/types.js
+  - .agents/skills/overleaf-suggest/overleaf-suggest
+  - .agents/skills/overleaf-suggest/package-lock.json
+  - .agents/skills/overleaf-suggest/package.json
+  - .agents/skills/overleaf-suggest/src/auth.ts
+  - .agents/skills/overleaf-suggest/src/index.ts
+  - .agents/skills/overleaf-suggest/src/overleaf.ts
+  - .agents/skills/overleaf-suggest/src/server.ts
+  - .agents/skills/overleaf-suggest/src/types.ts
+  - .agents/skills/overleaf-suggest/tsconfig.json
+  - .claude/skills/overleaf-suggest
+  - .claude/skills/overleaf-suggest/.gitignore
+  - .claude/skills/overleaf-suggest/README.md
+  - .claude/skills/overleaf-suggest/SKILL.md
+  - .claude/skills/overleaf-suggest/dist/auth.d.ts
+  - .claude/skills/overleaf-suggest/dist/auth.js
+  - .claude/skills/overleaf-suggest/dist/index.d.ts
+  - .claude/skills/overleaf-suggest/dist/index.js
+  - .claude/skills/overleaf-suggest/dist/overleaf.d.ts
+  - .claude/skills/overleaf-suggest/dist/overleaf.js
+  - .claude/skills/overleaf-suggest/dist/server.d.ts
+  - .claude/skills/overleaf-suggest/dist/server.js
+  - .claude/skills/overleaf-suggest/dist/types.d.ts
+  - .claude/skills/overleaf-suggest/dist/types.js
+  - .claude/skills/overleaf-suggest/overleaf-suggest
+  - .claude/skills/overleaf-suggest/package-lock.json
+  - .claude/skills/overleaf-suggest/package.json
+  - .claude/skills/overleaf-suggest/src/auth.ts
+  - .claude/skills/overleaf-suggest/src/index.ts
+  - .claude/skills/overleaf-suggest/src/overleaf.ts
+  - .claude/skills/overleaf-suggest/src/server.ts
+  - .claude/skills/overleaf-suggest/src/types.ts
+  - .claude/skills/overleaf-suggest/tsconfig.json
+  deployed_file_hashes:
+    .agents/skills/overleaf-suggest/.gitignore: sha256:295aa1f18923880afebb2e08aa70a8c4f285cc52baea238b8d2864d10e45d825
+    .agents/skills/overleaf-suggest/README.md: sha256:ce27020836207ca25b326dc7f88cf935e1811d48436bb32a67aac928d652e307
+    .agents/skills/overleaf-suggest/SKILL.md: sha256:558dd68006103a17a71a36ea3b2236632cf897f5e5508c76c700d163c2109098
+    .agents/skills/overleaf-suggest/dist/auth.d.ts: sha256:f836c0ca6ea819eac0ffc3072c0d2785043dafb7c0ae759b8477960c958d13cb
+    .agents/skills/overleaf-suggest/dist/auth.js: sha256:258227ae37dd542d1f9a74c0a5f61da74859177aa0dfc9bd3c9de05ef9197d9f
+    .agents/skills/overleaf-suggest/dist/index.d.ts: sha256:43e818adf60173644896298637f47b01d5819b17eda46eaa32d0c7d64724d012
+    .agents/skills/overleaf-suggest/dist/index.js: sha256:3db2484f8aaeac0859a2f012019ffb7bbbc54695c797aa19b4ec037ef0f21765
+    .agents/skills/overleaf-suggest/dist/overleaf.d.ts: sha256:6dbdf69cf0f2bec7a190fb12b1e2253eff1f87da9d9d4127c8fdc99bda847717
+    .agents/skills/overleaf-suggest/dist/overleaf.js: sha256:d4899d2afd2d812217156973c77be3c752062f4d22f2644041b839cf040147d5
+    .agents/skills/overleaf-suggest/dist/server.d.ts: sha256:9513b0d636ecc1cc605259c2b240d295f183ec62f2d815d45a4de755822ca23c
+    .agents/skills/overleaf-suggest/dist/server.js: sha256:5c7814ee71215198beebb37c424a93e20c9f093b979b8fe0212f6b0f5db52848
+    .agents/skills/overleaf-suggest/dist/types.d.ts: sha256:56d16f04bfe00c54951d11a31c517bb536bfb8f81ef2d141aa09932b9d72053e
+    .agents/skills/overleaf-suggest/dist/types.js: sha256:8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881
+    .agents/skills/overleaf-suggest/overleaf-suggest: sha256:f9e4f28bd8e4c5f6779e7c25d3a5765bc78b137ebda4cf3411dab10b1b6a6edc
+    .agents/skills/overleaf-suggest/package-lock.json: sha256:47c2b8dfc0714cbda572b85121bfdf14594ed2bf37b9ec2212ee096f3f9c4187
+    .agents/skills/overleaf-suggest/package.json: sha256:f69523cadecf371c455e8ecf3ce94c0f179a27cf6ab3655586065e0a44133ac3
+    .agents/skills/overleaf-suggest/src/auth.ts: sha256:c66913a026a4ccc9f3e6bf9942e061fe7e12c178512c90aa339564992e992698
+    .agents/skills/overleaf-suggest/src/index.ts: sha256:7bd5e753cf51272d88ce0a905349884bda34b1161ed8c779800646636921b6b9
+    .agents/skills/overleaf-suggest/src/overleaf.ts: sha256:72ec4045ba1dceeaca5f85e3c17473bb4bf285f5fc233a8ce8861406f6a6df2c
+    .agents/skills/overleaf-suggest/src/server.ts: sha256:f82f4af127644c1051286ac06ae64e5c49cbe6befcd7070f135b624214d376df
+    .agents/skills/overleaf-suggest/src/types.ts: sha256:ec285344912910a7fbf60a4f997c6450e4f01a486612f8c5eae7cfccdfbef6f9
+    .agents/skills/overleaf-suggest/tsconfig.json: sha256:1842cdeb6e90b4435e03c5be3bf536b1801ab42625464735046ebb748d1fc1e1
+    .claude/skills/overleaf-suggest/.gitignore: sha256:295aa1f18923880afebb2e08aa70a8c4f285cc52baea238b8d2864d10e45d825
+    .claude/skills/overleaf-suggest/README.md: sha256:ce27020836207ca25b326dc7f88cf935e1811d48436bb32a67aac928d652e307
+    .claude/skills/overleaf-suggest/SKILL.md: sha256:558dd68006103a17a71a36ea3b2236632cf897f5e5508c76c700d163c2109098
+    .claude/skills/overleaf-suggest/dist/auth.d.ts: sha256:f836c0ca6ea819eac0ffc3072c0d2785043dafb7c0ae759b8477960c958d13cb
+    .claude/skills/overleaf-suggest/dist/auth.js: sha256:258227ae37dd542d1f9a74c0a5f61da74859177aa0dfc9bd3c9de05ef9197d9f
+    .claude/skills/overleaf-suggest/dist/index.d.ts: sha256:43e818adf60173644896298637f47b01d5819b17eda46eaa32d0c7d64724d012
+    .claude/skills/overleaf-suggest/dist/index.js: sha256:3db2484f8aaeac0859a2f012019ffb7bbbc54695c797aa19b4ec037ef0f21765
+    .claude/skills/overleaf-suggest/dist/overleaf.d.ts: sha256:6dbdf69cf0f2bec7a190fb12b1e2253eff1f87da9d9d4127c8fdc99bda847717
+    .claude/skills/overleaf-suggest/dist/overleaf.js: sha256:d4899d2afd2d812217156973c77be3c752062f4d22f2644041b839cf040147d5
+    .claude/skills/overleaf-suggest/dist/server.d.ts: sha256:9513b0d636ecc1cc605259c2b240d295f183ec62f2d815d45a4de755822ca23c
+    .claude/skills/overleaf-suggest/dist/server.js: sha256:5c7814ee71215198beebb37c424a93e20c9f093b979b8fe0212f6b0f5db52848
+    .claude/skills/overleaf-suggest/dist/types.d.ts: sha256:56d16f04bfe00c54951d11a31c517bb536bfb8f81ef2d141aa09932b9d72053e
+    .claude/skills/overleaf-suggest/dist/types.js: sha256:8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881
+    .claude/skills/overleaf-suggest/overleaf-suggest: sha256:f9e4f28bd8e4c5f6779e7c25d3a5765bc78b137ebda4cf3411dab10b1b6a6edc
+    .claude/skills/overleaf-suggest/package-lock.json: sha256:47c2b8dfc0714cbda572b85121bfdf14594ed2bf37b9ec2212ee096f3f9c4187
+    .claude/skills/overleaf-suggest/package.json: sha256:f69523cadecf371c455e8ecf3ce94c0f179a27cf6ab3655586065e0a44133ac3
+    .claude/skills/overleaf-suggest/src/auth.ts: sha256:c66913a026a4ccc9f3e6bf9942e061fe7e12c178512c90aa339564992e992698
+    .claude/skills/overleaf-suggest/src/index.ts: sha256:7bd5e753cf51272d88ce0a905349884bda34b1161ed8c779800646636921b6b9
+    .claude/skills/overleaf-suggest/src/overleaf.ts: sha256:72ec4045ba1dceeaca5f85e3c17473bb4bf285f5fc233a8ce8861406f6a6df2c
+    .claude/skills/overleaf-suggest/src/server.ts: sha256:f82f4af127644c1051286ac06ae64e5c49cbe6befcd7070f135b624214d376df
+    .claude/skills/overleaf-suggest/src/types.ts: sha256:ec285344912910a7fbf60a4f997c6450e4f01a486612f8c5eae7cfccdfbef6f9
+    .claude/skills/overleaf-suggest/tsconfig.json: sha256:1842cdeb6e90b4435e03c5be3bf536b1801ab42625464735046ebb748d1fc1e1
+  content_hash: sha256:126b83e493189976db0e5a5007e523e3c75bcdfcada216f555ccd7d644b11184
+- repo_url: xicum/market-skill
+  materialization_repo_url: XicuM/market-skill
+  name: market-skill
+  host: github.com
+  resolved_commit: b9ab1ba19584b4fa7d02a2f2628e1175e58f22a4
+  resolved_ref: v1.0.0
+  version: 1.0.0
+  package_type: hybrid
+  deployed_files:
+  - .agents/skills/market-skill
+  - .agents/skills/market-skill/.gitignore
+  - .agents/skills/market-skill/README.md
+  - .agents/skills/market-skill/SKILL.md
+  - .agents/skills/market-skill/apm.yml
+  - .agents/skills/market-skill/market/__init__.py
+  - .agents/skills/market-skill/market/cli.py
+  - .agents/skills/market-skill/market/data.py
+  - .agents/skills/market-skill/pyproject.toml
+  - .agents/skills/market-skill/tests/test_market.py
+  - .claude/skills/market-skill
+  - .claude/skills/market-skill/.gitignore
+  - .claude/skills/market-skill/README.md
+  - .claude/skills/market-skill/SKILL.md
+  - .claude/skills/market-skill/apm.yml
+  - .claude/skills/market-skill/market/__init__.py
+  - .claude/skills/market-skill/market/cli.py
+  - .claude/skills/market-skill/market/data.py
+  - .claude/skills/market-skill/pyproject.toml
+  - .claude/skills/market-skill/tests/test_market.py
+  deployed_file_hashes:
+    .agents/skills/market-skill/.gitignore: sha256:44381b6a54935db4891274b476efd71eac9c270b5a8d0878ae63f6a16e1e4c76
+    .agents/skills/market-skill/README.md: sha256:8099a1d00c7fcf3e6787c9db1c611fb479045bb30837f6e1c4eb07ab1e796e74
+    .agents/skills/market-skill/SKILL.md: sha256:6846bda4c35ae876bdd838c19da5d20ef9992a696464ce296c1f640aee128751
+    .agents/skills/market-skill/apm.yml: sha256:74db9994ebe5c9b30d7634fce7aa2f824ba543ef361a8dcb3f8b6b2a31791704
+    .agents/skills/market-skill/market/__init__.py: sha256:4950224bd1bef1f6858a3f053dc23d17157f407c7b82415133053290ef872a1a
+    .agents/skills/market-skill/market/cli.py: sha256:ab0b04849fba18b99befd2646b5b21d452373b45f409a7c0a2e32b16b8867b8d
+    .agents/skills/market-skill/market/data.py: sha256:844c80eb4bd79765a3d6c6446aea06ba4cc40b9411ed663c6ba19d7546763f83
+    .agents/skills/market-skill/pyproject.toml: sha256:1170732969e4e14eb56cfbc9ade7081992c3a482e0ebac3dd41a2c6f0f1b652d
+    .agents/skills/market-skill/tests/test_market.py: sha256:ec9c617897f958437bc431607e5778c5050df1877683ee544920af43edbdd8f1
+    .claude/skills/market-skill/.gitignore: sha256:44381b6a54935db4891274b476efd71eac9c270b5a8d0878ae63f6a16e1e4c76
+    .claude/skills/market-skill/README.md: sha256:8099a1d00c7fcf3e6787c9db1c611fb479045bb30837f6e1c4eb07ab1e796e74
+    .claude/skills/market-skill/SKILL.md: sha256:6846bda4c35ae876bdd838c19da5d20ef9992a696464ce296c1f640aee128751
+    .claude/skills/market-skill/apm.yml: sha256:74db9994ebe5c9b30d7634fce7aa2f824ba543ef361a8dcb3f8b6b2a31791704
+    .claude/skills/market-skill/market/__init__.py: sha256:4950224bd1bef1f6858a3f053dc23d17157f407c7b82415133053290ef872a1a
+    .claude/skills/market-skill/market/cli.py: sha256:ab0b04849fba18b99befd2646b5b21d452373b45f409a7c0a2e32b16b8867b8d
+    .claude/skills/market-skill/market/data.py: sha256:844c80eb4bd79765a3d6c6446aea06ba4cc40b9411ed663c6ba19d7546763f83
+    .claude/skills/market-skill/pyproject.toml: sha256:1170732969e4e14eb56cfbc9ade7081992c3a482e0ebac3dd41a2c6f0f1b652d
+    .claude/skills/market-skill/tests/test_market.py: sha256:ec9c617897f958437bc431607e5778c5050df1877683ee544920af43edbdd8f1
+  content_hash: sha256:6bc09a1e3114b587c8262f58a9e5464f20efbbd7ef8af38e1955bbfc77f879e9
+  declared_license: MIT
+- repo_url: xicum/menumaker
+  materialization_repo_url: XicuM/menumaker
+  name: menumaker
+  host: github.com
+  resolved_commit: 25e1d5ebfdc7095fca310d91e78f490e84ee0705
+  resolved_ref: v1.0.0
+  version: 1.0.0
+  package_type: hybrid
+  deployed_files:
+  - .agents/skills/menumaker
+  - .agents/skills/menumaker/.gitignore
+  - .agents/skills/menumaker/README.md
+  - .agents/skills/menumaker/SKILL.md
+  - .agents/skills/menumaker/apm.yml
+  - .agents/skills/menumaker/menumaker/__init__.py
+  - .agents/skills/menumaker/menumaker/cli.py
+  - .agents/skills/menumaker/menumaker/data/dri/rda.csv
+  - .agents/skills/menumaker/menumaker/data/dri/ul.csv
+  - .agents/skills/menumaker/menumaker/data/food_data/food_data.csv
+  - .agents/skills/menumaker/menumaker/data/mercadona.csv
+  - .agents/skills/menumaker/menumaker/food_db.py
+  - .agents/skills/menumaker/menumaker/intake.py
+  - .agents/skills/menumaker/menumaker/optimizer.py
+  - .agents/skills/menumaker/menumaker/paths.py
+  - .agents/skills/menumaker/menumaker/prices_update.py
+  - .agents/skills/menumaker/menumaker/pricing.py
+  - .agents/skills/menumaker/pyproject.toml
+  - .agents/skills/menumaker/tests/test_menumaker.py
+  - .claude/skills/menumaker
+  - .claude/skills/menumaker/.gitignore
+  - .claude/skills/menumaker/README.md
+  - .claude/skills/menumaker/SKILL.md
+  - .claude/skills/menumaker/apm.yml
+  - .claude/skills/menumaker/menumaker/__init__.py
+  - .claude/skills/menumaker/menumaker/cli.py
+  - .claude/skills/menumaker/menumaker/data/dri/rda.csv
+  - .claude/skills/menumaker/menumaker/data/dri/ul.csv
+  - .claude/skills/menumaker/menumaker/data/food_data/food_data.csv
+  - .claude/skills/menumaker/menumaker/data/mercadona.csv
+  - .claude/skills/menumaker/menumaker/food_db.py
+  - .claude/skills/menumaker/menumaker/intake.py
+  - .claude/skills/menumaker/menumaker/optimizer.py
+  - .claude/skills/menumaker/menumaker/paths.py
+  - .claude/skills/menumaker/menumaker/prices_update.py
+  - .claude/skills/menumaker/menumaker/pricing.py
+  - .claude/skills/menumaker/pyproject.toml
+  - .claude/skills/menumaker/tests/test_menumaker.py
+  deployed_file_hashes:
+    .agents/skills/menumaker/.gitignore: sha256:44381b6a54935db4891274b476efd71eac9c270b5a8d0878ae63f6a16e1e4c76
+    .agents/skills/menumaker/README.md: sha256:15454a72b185b3aabf1e0adcdb1fefa6c887d9926c8641fe4844684eab85fcc1
+    .agents/skills/menumaker/SKILL.md: sha256:8c91757fd1ef0a08bb0651ca7d645aefd610d621dd4ac18cdc075f08f7ec616b
+    .agents/skills/menumaker/apm.yml: sha256:58c30d40d84a07cd77314795b02e2b11f9246fc3ea66656de794df7ca8cd84fb
+    .agents/skills/menumaker/menumaker/__init__.py: sha256:10f97b09f4d00ab98cab6397ac0312ec5b584cd3c7202ea03d751accf28f9171
+    .agents/skills/menumaker/menumaker/cli.py: sha256:a98afac122d22aab72586d63d6d236e6872cd2f9bc9e41ef8fa920de5e76fd2c
+    .agents/skills/menumaker/menumaker/data/dri/rda.csv: sha256:906c7925c02581023a46138882e50cb4ebb55fe95fa5f618596e06563ff039ee
+    .agents/skills/menumaker/menumaker/data/dri/ul.csv: sha256:2f1b7e770346caefcf4498711df125722d6df3776af9dca2cd888d61d4e9e3c4
+    .agents/skills/menumaker/menumaker/data/food_data/food_data.csv: sha256:81e938ded39b50adca0106a8bafc05af4b0761ba91bc31530110e0be3c4b93f9
+    .agents/skills/menumaker/menumaker/data/mercadona.csv: sha256:d18e2b79c1b4a1268558a9b7e6ba3829acdc677f8df8d4d7bea4c3063b597f9e
+    .agents/skills/menumaker/menumaker/food_db.py: sha256:e4432db99a41b6e0445945bccde2c991d5c67a3e7f7a5ba82855e5d634375784
+    .agents/skills/menumaker/menumaker/intake.py: sha256:9edfd65307f0934febae84dfce2073a0b2d3dc89fa445d1c16d2a68bf59f7a54
+    .agents/skills/menumaker/menumaker/optimizer.py: sha256:ba3c7311a816563b5f13d25521c13ee396fbc28383bc62db5035ac74908d7878
+    .agents/skills/menumaker/menumaker/paths.py: sha256:5c42e72fafc749e52dd359da7dca08a90347c076194aa260f0aadf47a3159dc9
+    .agents/skills/menumaker/menumaker/prices_update.py: sha256:3ebc4758121606a7a6e439940362e9ffec94818ea340e8cb8912a73c29669f9f
+    .agents/skills/menumaker/menumaker/pricing.py: sha256:6d59015ca185d5c18324be43d3e4ac840d161ce092a74d14f622ab57451745a5
+    .agents/skills/menumaker/pyproject.toml: sha256:de89ff5752c4327d7e4b5040f88d78f921d2dd23a7cc62aa17338a4f05460d90
+    .agents/skills/menumaker/tests/test_menumaker.py: sha256:2e23e47141bd6a288fd507a8afd54d2b2975fd9fedf3f45878c9dd5f279bd3c5
+    .claude/skills/menumaker/.gitignore: sha256:44381b6a54935db4891274b476efd71eac9c270b5a8d0878ae63f6a16e1e4c76
+    .claude/skills/menumaker/README.md: sha256:15454a72b185b3aabf1e0adcdb1fefa6c887d9926c8641fe4844684eab85fcc1
+    .claude/skills/menumaker/SKILL.md: sha256:53ea7b261df00cb70be7561409384f56f068453622c41e22709786861586bac3
+    .claude/skills/menumaker/apm.yml: sha256:58c30d40d84a07cd77314795b02e2b11f9246fc3ea66656de794df7ca8cd84fb
+    .claude/skills/menumaker/menumaker/__init__.py: sha256:10f97b09f4d00ab98cab6397ac0312ec5b584cd3c7202ea03d751accf28f9171
+    .claude/skills/menumaker/menumaker/cli.py: sha256:a98afac122d22aab72586d63d6d236e6872cd2f9bc9e41ef8fa920de5e76fd2c
+    .claude/skills/menumaker/menumaker/data/dri/rda.csv: sha256:906c7925c02581023a46138882e50cb4ebb55fe95fa5f618596e06563ff039ee
+    .claude/skills/menumaker/menumaker/data/dri/ul.csv: sha256:2f1b7e770346caefcf4498711df125722d6df3776af9dca2cd888d61d4e9e3c4
+    .claude/skills/menumaker/menumaker/data/food_data/food_data.csv: sha256:81e938ded39b50adca0106a8bafc05af4b0761ba91bc31530110e0be3c4b93f9
+    .claude/skills/menumaker/menumaker/data/mercadona.csv: sha256:d18e2b79c1b4a1268558a9b7e6ba3829acdc677f8df8d4d7bea4c3063b597f9e
+    .claude/skills/menumaker/menumaker/food_db.py: sha256:e4432db99a41b6e0445945bccde2c991d5c67a3e7f7a5ba82855e5d634375784
+    .claude/skills/menumaker/menumaker/intake.py: sha256:9edfd65307f0934febae84dfce2073a0b2d3dc89fa445d1c16d2a68bf59f7a54
+    .claude/skills/menumaker/menumaker/optimizer.py: sha256:ba3c7311a816563b5f13d25521c13ee396fbc28383bc62db5035ac74908d7878
+    .claude/skills/menumaker/menumaker/paths.py: sha256:5c42e72fafc749e52dd359da7dca08a90347c076194aa260f0aadf47a3159dc9
+    .claude/skills/menumaker/menumaker/prices_update.py: sha256:3ebc4758121606a7a6e439940362e9ffec94818ea340e8cb8912a73c29669f9f
+    .claude/skills/menumaker/menumaker/pricing.py: sha256:6d59015ca185d5c18324be43d3e4ac840d161ce092a74d14f622ab57451745a5
+    .claude/skills/menumaker/pyproject.toml: sha256:de89ff5752c4327d7e4b5040f88d78f921d2dd23a7cc62aa17338a4f05460d90
+    .claude/skills/menumaker/tests/test_menumaker.py: sha256:2e23e47141bd6a288fd507a8afd54d2b2975fd9fedf3f45878c9dd5f279bd3c5
+  content_hash: sha256:dffb74ddf823b9142cffb1f174d8e227137292022a65ab0c82daab4432b0bd2c
+  declared_license: MIT
+deployments:
+- kind: project-relative
+  target: claude
+  value: .claude/agents/auditor.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:3dc827a023c5d2b4b5baf28bd32a18e9d718e4fab244eb00f3d58353abda3320
+- kind: project-relative
+  target: claude
+  value: .claude/agents/protocol-architect.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:a041b74d7e65c7101bd056e2e953cd0f1ba5808ad6ff017d3be2beebcb2f3445
+- kind: project-relative
+  target: claude
+  value: .claude/agents/researcher.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:9e2c821fb814c2956dfd991d54e9bd9a4ec7812da893f85b6782ee261126ae25
+- kind: project-relative
+  target: claude
+  value: .claude/agents/synthesizer.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:a1b5481e25ca1b285b4ae142e56401607d1496dc564d86dd15ce3ff93fa29c32
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: null
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill/.gitignore
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:44381b6a54935db4891274b476efd71eac9c270b5a8d0878ae63f6a16e1e4c76
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill/README.md
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:8099a1d00c7fcf3e6787c9db1c611fb479045bb30837f6e1c4eb07ab1e796e74
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:6846bda4c35ae876bdd838c19da5d20ef9992a696464ce296c1f640aee128751
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill/apm.yml
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:74db9994ebe5c9b30d7634fce7aa2f824ba543ef361a8dcb3f8b6b2a31791704
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill/market/__init__.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:4950224bd1bef1f6858a3f053dc23d17157f407c7b82415133053290ef872a1a
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill/market/cli.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:ab0b04849fba18b99befd2646b5b21d452373b45f409a7c0a2e32b16b8867b8d
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill/market/data.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:844c80eb4bd79765a3d6c6446aea06ba4cc40b9411ed663c6ba19d7546763f83
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill/pyproject.toml
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:1170732969e4e14eb56cfbc9ade7081992c3a482e0ebac3dd41a2c6f0f1b652d
+- kind: project-relative
+  target: claude
+  value: .claude/skills/market-skill/tests/test_market.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:ec9c617897f958437bc431607e5778c5050df1877683ee544920af43edbdd8f1
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: null
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/.gitignore
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:44381b6a54935db4891274b476efd71eac9c270b5a8d0878ae63f6a16e1e4c76
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/README.md
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:15454a72b185b3aabf1e0adcdb1fefa6c887d9926c8641fe4844684eab85fcc1
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:53ea7b261df00cb70be7561409384f56f068453622c41e22709786861586bac3
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/apm.yml
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:58c30d40d84a07cd77314795b02e2b11f9246fc3ea66656de794df7ca8cd84fb
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/__init__.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:10f97b09f4d00ab98cab6397ac0312ec5b584cd3c7202ea03d751accf28f9171
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/cli.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:a98afac122d22aab72586d63d6d236e6872cd2f9bc9e41ef8fa920de5e76fd2c
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/data/dri/rda.csv
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:906c7925c02581023a46138882e50cb4ebb55fe95fa5f618596e06563ff039ee
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/data/dri/ul.csv
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:2f1b7e770346caefcf4498711df125722d6df3776af9dca2cd888d61d4e9e3c4
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/data/food_data/food_data.csv
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:81e938ded39b50adca0106a8bafc05af4b0761ba91bc31530110e0be3c4b93f9
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/data/mercadona.csv
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:d18e2b79c1b4a1268558a9b7e6ba3829acdc677f8df8d4d7bea4c3063b597f9e
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/food_db.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:e4432db99a41b6e0445945bccde2c991d5c67a3e7f7a5ba82855e5d634375784
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/intake.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:9edfd65307f0934febae84dfce2073a0b2d3dc89fa445d1c16d2a68bf59f7a54
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/optimizer.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:ba3c7311a816563b5f13d25521c13ee396fbc28383bc62db5035ac74908d7878
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/paths.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:5c42e72fafc749e52dd359da7dca08a90347c076194aa260f0aadf47a3159dc9
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/prices_update.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:3ebc4758121606a7a6e439940362e9ffec94818ea340e8cb8912a73c29669f9f
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/menumaker/pricing.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:6d59015ca185d5c18324be43d3e4ac840d161ce092a74d14f622ab57451745a5
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/pyproject.toml
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:de89ff5752c4327d7e4b5040f88d78f921d2dd23a7cc62aa17338a4f05460d90
+- kind: project-relative
+  target: claude
+  value: .claude/skills/menumaker/tests/test_menumaker.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:2e23e47141bd6a288fd507a8afd54d2b2975fd9fedf3f45878c9dd5f279bd3c5
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: null
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/.gitignore
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:295aa1f18923880afebb2e08aa70a8c4f285cc52baea238b8d2864d10e45d825
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/README.md
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:ce27020836207ca25b326dc7f88cf935e1811d48436bb32a67aac928d652e307
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:558dd68006103a17a71a36ea3b2236632cf897f5e5508c76c700d163c2109098
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/auth.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:f836c0ca6ea819eac0ffc3072c0d2785043dafb7c0ae759b8477960c958d13cb
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/auth.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:258227ae37dd542d1f9a74c0a5f61da74859177aa0dfc9bd3c9de05ef9197d9f
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/index.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:43e818adf60173644896298637f47b01d5819b17eda46eaa32d0c7d64724d012
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/index.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:3db2484f8aaeac0859a2f012019ffb7bbbc54695c797aa19b4ec037ef0f21765
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/overleaf.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:6dbdf69cf0f2bec7a190fb12b1e2253eff1f87da9d9d4127c8fdc99bda847717
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/overleaf.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:d4899d2afd2d812217156973c77be3c752062f4d22f2644041b839cf040147d5
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/server.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:9513b0d636ecc1cc605259c2b240d295f183ec62f2d815d45a4de755822ca23c
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/server.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:5c7814ee71215198beebb37c424a93e20c9f093b979b8fe0212f6b0f5db52848
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/types.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:56d16f04bfe00c54951d11a31c517bb536bfb8f81ef2d141aa09932b9d72053e
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/dist/types.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/overleaf-suggest
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:f9e4f28bd8e4c5f6779e7c25d3a5765bc78b137ebda4cf3411dab10b1b6a6edc
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/package-lock.json
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:47c2b8dfc0714cbda572b85121bfdf14594ed2bf37b9ec2212ee096f3f9c4187
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/package.json
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:f69523cadecf371c455e8ecf3ce94c0f179a27cf6ab3655586065e0a44133ac3
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/src/auth.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:c66913a026a4ccc9f3e6bf9942e061fe7e12c178512c90aa339564992e992698
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/src/index.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:7bd5e753cf51272d88ce0a905349884bda34b1161ed8c779800646636921b6b9
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/src/overleaf.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:72ec4045ba1dceeaca5f85e3c17473bb4bf285f5fc233a8ce8861406f6a6df2c
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/src/server.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:f82f4af127644c1051286ac06ae64e5c49cbe6befcd7070f135b624214d376df
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/src/types.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:ec285344912910a7fbf60a4f997c6450e4f01a486612f8c5eae7cfccdfbef6f9
+- kind: project-relative
+  target: claude
+  value: .claude/skills/overleaf-suggest/tsconfig.json
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:1842cdeb6e90b4435e03c5be3bf536b1801ab42625464735046ebb748d1fc1e1
+- kind: project-relative
+  target: claude
+  value: .claude/skills/python-skill
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: null
+- kind: project-relative
+  target: claude
+  value: .claude/skills/python-skill/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:7cf5ef627117f803a05068112f3c7932addce1f8214f0b4b7068c0ab5b94b9c6
+- kind: project-relative
+  target: claude
+  value: .claude/skills/self-improvement
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: null
+- kind: project-relative
+  target: claude
+  value: .claude/skills/self-improvement/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:5be6717be265272f8700be6987d5d1972eff5b11045eb5ed92fa7cfde50278a2
+- kind: project-relative
+  target: claude
+  value: .claude/skills/self-improvement/scripts/diagnose_session.py
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:c2421d6ba2965659f3b0c3ae276c89f4da52dcdaee29d750084243c767ebea83
+- kind: project-relative
+  target: claude
+  value: .claude/skills/self-improvement/scripts/prepare_pr.py
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:7eddec94a66c03ca50f24c5cc807370afd09db3954e35a833b928dad25575a9b
+- kind: project-relative
+  target: claude
+  value: .claude/skills/self-improvement/tests/test_diagnose.py
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:a7373de09abac6a9a02031f6627bdf0a6b1546c7be64880c3fc37e265700a870
+- kind: project-relative
+  target: claude
+  value: .claude/skills/synthesizer-gdrive
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: null
+- kind: project-relative
+  target: claude
+  value: .claude/skills/synthesizer-gdrive/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:97d9c9ffff56d6a77d1f778d91df5d29db8d4f9d74a502edf54f7643e4198ea1
+- kind: project-relative
+  target: claude
+  value: .claude/skills/synthesizer-local
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: null
+- kind: project-relative
+  target: claude
+  value: .claude/skills/synthesizer-local/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:d16c254df4f19391eadc06de14a0faf66077f636436346a96747cd44a8b28e3c
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/python-skill
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: null
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/python-skill/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:7cf5ef627117f803a05068112f3c7932addce1f8214f0b4b7068c0ab5b94b9c6
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/self-improvement
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: null
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/self-improvement/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:5be6717be265272f8700be6987d5d1972eff5b11045eb5ed92fa7cfde50278a2
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/self-improvement/scripts/diagnose_session.py
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:c2421d6ba2965659f3b0c3ae276c89f4da52dcdaee29d750084243c767ebea83
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/self-improvement/scripts/prepare_pr.py
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:7eddec94a66c03ca50f24c5cc807370afd09db3954e35a833b928dad25575a9b
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/self-improvement/tests/test_diagnose.py
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:a7373de09abac6a9a02031f6627bdf0a6b1546c7be64880c3fc37e265700a870
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/synthesizer-gdrive
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: null
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/synthesizer-gdrive/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:97d9c9ffff56d6a77d1f778d91df5d29db8d4f9d74a502edf54f7643e4198ea1
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/synthesizer-local
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: null
+- kind: project-relative
+  target: legacy
+  value: .agents/skills/synthesizer-local/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:d16c254df4f19391eadc06de14a0faf66077f636436346a96747cd44a8b28e3c
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: null
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill/.gitignore
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:44381b6a54935db4891274b476efd71eac9c270b5a8d0878ae63f6a16e1e4c76
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill/README.md
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:8099a1d00c7fcf3e6787c9db1c611fb479045bb30837f6e1c4eb07ab1e796e74
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:6846bda4c35ae876bdd838c19da5d20ef9992a696464ce296c1f640aee128751
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill/apm.yml
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:74db9994ebe5c9b30d7634fce7aa2f824ba543ef361a8dcb3f8b6b2a31791704
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill/market/__init__.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:4950224bd1bef1f6858a3f053dc23d17157f407c7b82415133053290ef872a1a
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill/market/cli.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:ab0b04849fba18b99befd2646b5b21d452373b45f409a7c0a2e32b16b8867b8d
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill/market/data.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:844c80eb4bd79765a3d6c6446aea06ba4cc40b9411ed663c6ba19d7546763f83
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill/pyproject.toml
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:1170732969e4e14eb56cfbc9ade7081992c3a482e0ebac3dd41a2c6f0f1b652d
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/market-skill/tests/test_market.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/market-skill
+  active_owner: xicum/market-skill
+  content_hash: sha256:ec9c617897f958437bc431607e5778c5050df1877683ee544920af43edbdd8f1
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  - .
+  active_owner: xicum/menumaker
+  content_hash: null
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/.gitignore
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:44381b6a54935db4891274b476efd71eac9c270b5a8d0878ae63f6a16e1e4c76
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/README.md
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:15454a72b185b3aabf1e0adcdb1fefa6c887d9926c8641fe4844684eab85fcc1
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  - .
+  active_owner: xicum/menumaker
+  content_hash: sha256:8c91757fd1ef0a08bb0651ca7d645aefd610d621dd4ac18cdc075f08f7ec616b
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/apm.yml
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:58c30d40d84a07cd77314795b02e2b11f9246fc3ea66656de794df7ca8cd84fb
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/__init__.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:10f97b09f4d00ab98cab6397ac0312ec5b584cd3c7202ea03d751accf28f9171
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/cli.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:a98afac122d22aab72586d63d6d236e6872cd2f9bc9e41ef8fa920de5e76fd2c
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/data/dri/rda.csv
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:906c7925c02581023a46138882e50cb4ebb55fe95fa5f618596e06563ff039ee
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/data/dri/ul.csv
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:2f1b7e770346caefcf4498711df125722d6df3776af9dca2cd888d61d4e9e3c4
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/data/food_data/food_data.csv
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:81e938ded39b50adca0106a8bafc05af4b0761ba91bc31530110e0be3c4b93f9
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/data/mercadona.csv
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:d18e2b79c1b4a1268558a9b7e6ba3829acdc677f8df8d4d7bea4c3063b597f9e
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/food_db.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:e4432db99a41b6e0445945bccde2c991d5c67a3e7f7a5ba82855e5d634375784
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/intake.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:9edfd65307f0934febae84dfce2073a0b2d3dc89fa445d1c16d2a68bf59f7a54
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/optimizer.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:ba3c7311a816563b5f13d25521c13ee396fbc28383bc62db5035ac74908d7878
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/paths.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:5c42e72fafc749e52dd359da7dca08a90347c076194aa260f0aadf47a3159dc9
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/prices_update.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:3ebc4758121606a7a6e439940362e9ffec94818ea340e8cb8912a73c29669f9f
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/menumaker/pricing.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:6d59015ca185d5c18324be43d3e4ac840d161ce092a74d14f622ab57451745a5
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/pyproject.toml
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:de89ff5752c4327d7e4b5040f88d78f921d2dd23a7cc62aa17338a4f05460d90
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/menumaker/tests/test_menumaker.py
+  runtime: null
+  scope: project
+  owners:
+  - xicum/menumaker
+  active_owner: xicum/menumaker
+  content_hash: sha256:2e23e47141bd6a288fd507a8afd54d2b2975fd9fedf3f45878c9dd5f279bd3c5
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: null
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/.gitignore
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:295aa1f18923880afebb2e08aa70a8c4f285cc52baea238b8d2864d10e45d825
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/README.md
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:ce27020836207ca25b326dc7f88cf935e1811d48436bb32a67aac928d652e307
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:558dd68006103a17a71a36ea3b2236632cf897f5e5508c76c700d163c2109098
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/auth.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:f836c0ca6ea819eac0ffc3072c0d2785043dafb7c0ae759b8477960c958d13cb
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/auth.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:258227ae37dd542d1f9a74c0a5f61da74859177aa0dfc9bd3c9de05ef9197d9f
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/index.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:43e818adf60173644896298637f47b01d5819b17eda46eaa32d0c7d64724d012
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/index.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:3db2484f8aaeac0859a2f012019ffb7bbbc54695c797aa19b4ec037ef0f21765
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/overleaf.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:6dbdf69cf0f2bec7a190fb12b1e2253eff1f87da9d9d4127c8fdc99bda847717
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/overleaf.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:d4899d2afd2d812217156973c77be3c752062f4d22f2644041b839cf040147d5
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/server.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:9513b0d636ecc1cc605259c2b240d295f183ec62f2d815d45a4de755822ca23c
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/server.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:5c7814ee71215198beebb37c424a93e20c9f093b979b8fe0212f6b0f5db52848
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/types.d.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:56d16f04bfe00c54951d11a31c517bb536bfb8f81ef2d141aa09932b9d72053e
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/dist/types.js
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/overleaf-suggest
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:f9e4f28bd8e4c5f6779e7c25d3a5765bc78b137ebda4cf3411dab10b1b6a6edc
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/package-lock.json
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:47c2b8dfc0714cbda572b85121bfdf14594ed2bf37b9ec2212ee096f3f9c4187
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/package.json
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:f69523cadecf371c455e8ecf3ce94c0f179a27cf6ab3655586065e0a44133ac3
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/src/auth.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:c66913a026a4ccc9f3e6bf9942e061fe7e12c178512c90aa339564992e992698
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/src/index.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:7bd5e753cf51272d88ce0a905349884bda34b1161ed8c779800646636921b6b9
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/src/overleaf.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:72ec4045ba1dceeaca5f85e3c17473bb4bf285f5fc233a8ce8861406f6a6df2c
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/src/server.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:f82f4af127644c1051286ac06ae64e5c49cbe6befcd7070f135b624214d376df
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/src/types.ts
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:ec285344912910a7fbf60a4f997c6450e4f01a486612f8c5eae7cfccdfbef6f9
+- kind: project-relative
+  target: opencode
+  value: .agents/skills/overleaf-suggest/tsconfig.json
+  runtime: null
+  scope: project
+  owners:
+  - gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  active_owner: gitlab-internal.bsc.es/esantigo/overleaf-suggest
+  content_hash: sha256:1842cdeb6e90b4435e03c5be3bf536b1801ab42625464735046ebb748d1fc1e1
+- kind: project-relative
+  target: opencode
+  value: .opencode/agents/auditor.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:3dc827a023c5d2b4b5baf28bd32a18e9d718e4fab244eb00f3d58353abda3320
+- kind: project-relative
+  target: opencode
+  value: .opencode/agents/protocol-architect.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:a041b74d7e65c7101bd056e2e953cd0f1ba5808ad6ff017d3be2beebcb2f3445
+- kind: project-relative
+  target: opencode
+  value: .opencode/agents/researcher.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:9e2c821fb814c2956dfd991d54e9bd9a4ec7812da893f85b6782ee261126ae25
+- kind: project-relative
+  target: opencode
+  value: .opencode/agents/synthesizer.md
+  runtime: null
+  scope: project
+  owners:
+  - .
+  active_owner: .
+  content_hash: sha256:a1b5481e25ca1b285b4ae142e56401607d1496dc564d86dd15ce3ff93fa29c32
+local_deployed_files:
+- .agents/skills/menumaker
+- .agents/skills/menumaker/SKILL.md
+- .agents/skills/python-skill
+- .agents/skills/python-skill/SKILL.md
+- .agents/skills/self-improvement
+- .agents/skills/self-improvement/SKILL.md
+- .agents/skills/self-improvement/scripts/diagnose_session.py
+- .agents/skills/self-improvement/scripts/prepare_pr.py
+- .agents/skills/self-improvement/tests/test_diagnose.py
+- .agents/skills/synthesizer-gdrive
+- .agents/skills/synthesizer-gdrive/SKILL.md
+- .agents/skills/synthesizer-local
+- .agents/skills/synthesizer-local/SKILL.md
+- .claude/agents/auditor.md
+- .claude/agents/protocol-architect.md
+- .claude/agents/researcher.md
+- .claude/agents/synthesizer.md
+- .claude/skills/python-skill
+- .claude/skills/python-skill/SKILL.md
+- .claude/skills/self-improvement
+- .claude/skills/self-improvement/SKILL.md
+- .claude/skills/self-improvement/scripts/diagnose_session.py
+- .claude/skills/self-improvement/scripts/prepare_pr.py
+- .claude/skills/self-improvement/tests/test_diagnose.py
+- .claude/skills/synthesizer-gdrive
+- .claude/skills/synthesizer-gdrive/SKILL.md
+- .claude/skills/synthesizer-local
+- .claude/skills/synthesizer-local/SKILL.md
+- .opencode/agents/auditor.md
+- .opencode/agents/protocol-architect.md
+- .opencode/agents/researcher.md
+- .opencode/agents/synthesizer.md
+local_deployed_file_hashes:
+  .agents/skills/menumaker/SKILL.md: sha256:8c91757fd1ef0a08bb0651ca7d645aefd610d621dd4ac18cdc075f08f7ec616b
+  .agents/skills/python-skill/SKILL.md: sha256:7cf5ef627117f803a05068112f3c7932addce1f8214f0b4b7068c0ab5b94b9c6
+  .agents/skills/self-improvement/SKILL.md: sha256:5be6717be265272f8700be6987d5d1972eff5b11045eb5ed92fa7cfde50278a2
+  .agents/skills/self-improvement/scripts/diagnose_session.py: sha256:c2421d6ba2965659f3b0c3ae276c89f4da52dcdaee29d750084243c767ebea83
+  .agents/skills/self-improvement/scripts/prepare_pr.py: sha256:7eddec94a66c03ca50f24c5cc807370afd09db3954e35a833b928dad25575a9b
+  .agents/skills/self-improvement/tests/test_diagnose.py: sha256:a7373de09abac6a9a02031f6627bdf0a6b1546c7be64880c3fc37e265700a870
+  .agents/skills/synthesizer-gdrive/SKILL.md: sha256:97d9c9ffff56d6a77d1f778d91df5d29db8d4f9d74a502edf54f7643e4198ea1
+  .agents/skills/synthesizer-local/SKILL.md: sha256:d16c254df4f19391eadc06de14a0faf66077f636436346a96747cd44a8b28e3c
+  .claude/agents/auditor.md: sha256:3dc827a023c5d2b4b5baf28bd32a18e9d718e4fab244eb00f3d58353abda3320
+  .claude/agents/protocol-architect.md: sha256:a041b74d7e65c7101bd056e2e953cd0f1ba5808ad6ff017d3be2beebcb2f3445
+  .claude/agents/researcher.md: sha256:9e2c821fb814c2956dfd991d54e9bd9a4ec7812da893f85b6782ee261126ae25
+  .claude/agents/synthesizer.md: sha256:a1b5481e25ca1b285b4ae142e56401607d1496dc564d86dd15ce3ff93fa29c32
+  .claude/skills/python-skill/SKILL.md: sha256:7cf5ef627117f803a05068112f3c7932addce1f8214f0b4b7068c0ab5b94b9c6
+  .claude/skills/self-improvement/SKILL.md: sha256:5be6717be265272f8700be6987d5d1972eff5b11045eb5ed92fa7cfde50278a2
+  .claude/skills/self-improvement/scripts/diagnose_session.py: sha256:c2421d6ba2965659f3b0c3ae276c89f4da52dcdaee29d750084243c767ebea83
+  .claude/skills/self-improvement/scripts/prepare_pr.py: sha256:7eddec94a66c03ca50f24c5cc807370afd09db3954e35a833b928dad25575a9b
+  .claude/skills/self-improvement/tests/test_diagnose.py: sha256:a7373de09abac6a9a02031f6627bdf0a6b1546c7be64880c3fc37e265700a870
+  .claude/skills/synthesizer-gdrive/SKILL.md: sha256:97d9c9ffff56d6a77d1f778d91df5d29db8d4f9d74a502edf54f7643e4198ea1
+  .claude/skills/synthesizer-local/SKILL.md: sha256:d16c254df4f19391eadc06de14a0faf66077f636436346a96747cd44a8b28e3c
+  .opencode/agents/auditor.md: sha256:3dc827a023c5d2b4b5baf28bd32a18e9d718e4fab244eb00f3d58353abda3320
+  .opencode/agents/protocol-architect.md: sha256:a041b74d7e65c7101bd056e2e953cd0f1ba5808ad6ff017d3be2beebcb2f3445
+  .opencode/agents/researcher.md: sha256:9e2c821fb814c2956dfd991d54e9bd9a4ec7812da893f85b6782ee261126ae25
+  .opencode/agents/synthesizer.md: sha256:a1b5481e25ca1b285b4ae142e56401607d1496dc564d86dd15ce3ff93fa29c32

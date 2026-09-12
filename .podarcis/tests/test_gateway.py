@@ -5,8 +5,10 @@ import pytest
 import asyncio
 from pathlib import Path
 from podarcis.gateway.server import create_gateway
-from podarcis.gateway.router import load_gateway_config
-from common import save_yaml
+from podarcis.gateway.router import (
+    discover_modules, load_gateway_config, load_server_mcp,
+)
+from podarcis.common import save_yaml
 
 def test_gateway_dynamic_routing():
     async def run():
@@ -22,7 +24,7 @@ def test_gateway_dynamic_routing():
 
 def test_personas_exposed_as_resources_only():
     '''Personas reach agents through their harness's native subagent mechanism
-    (.claude/agents, .opencode/agents — both this same directory), which gives
+    (.claude/agents, .opencode/agents — both deployed from .apm/agents), which gives
     real context isolation. The MCP resource is a read-only fallback for clients
     without one. No delegation tool: MCP cannot spawn an isolated process, so
     such a tool could only inline the persona into the caller's own context.'''
@@ -48,7 +50,7 @@ def test_persona_content_is_backend_agnostic():
     persona reads .podarcis/config.yaml at runtime and picks the matching skill,
     so one static persona serves every instance. If the binder ever specialised
     per backend, a gdrive instance would silently receive local instructions.'''
-    persona = (Path('.').resolve() / '.agents' / 'agents' / 'synthesizer.md').read_text()
+    persona = (Path('.').resolve() / '.apm' / 'agents' / 'synthesizer.agent.md').read_text()
     assert 'sources_backend' in persona
     assert 'synthesizer-gdrive' in persona
     assert 'synthesizer-local' in persona
@@ -63,13 +65,13 @@ def test_both_synthesizer_backends_are_reachable(backend_skill):
     routed to a skill both the harness and the gateway refused to serve. Assert
     the file exists, is not frontmatter-gated, and is enabled by default.
     '''
-    from components import is_skill_enabled
-    from podarcis.gateway.router import DEFAULT_SKILLS
+    from podarcis.components import is_skill_enabled
+    from podarcis.gateway.router import is_enabled
 
-    skill_path = Path('.').resolve() / '.agents' / 'skills' / backend_skill
+    skill_path = Path('.').resolve() / '.apm' / 'skills' / backend_skill
     assert (skill_path / 'SKILL.md').exists()
     assert is_skill_enabled(skill_path), f'{backend_skill} is gated by frontmatter'
-    assert DEFAULT_SKILLS.get(backend_skill, {}).get('enabled') is True
+    assert is_enabled({}, backend_skill), f'{backend_skill} is disabled by default' 
 
 
 def test_skills_exposed_as_resources_only():
@@ -99,9 +101,13 @@ def test_no_tool_duplicates_a_native_harness_capability():
     asyncio.run(run())
 
 
-def test_default_agents_enabled_without_config(tmp_path):
-    '''A fresh instance (config.yaml without agents/skills sections) still
-    enables all core personas, skills, and modules from git-tracked defaults.'''
+def test_everything_shipped_binds_without_config(tmp_path):
+    '''A config.yaml with no gating sections must still bind everything on disk.
+
+    Discovery is the only registry: there is no DEFAULT_* dict to add a new
+    module, skill, or persona to, so "shipped but never bound" cannot happen.
+    '''
+    root = Path('.').resolve()
     cfg_dir = tmp_path / '.podarcis'
     cfg_dir.mkdir()
     save_yaml(cfg_dir / 'config.yaml', {
@@ -109,33 +115,74 @@ def test_default_agents_enabled_without_config(tmp_path):
         'sources_backend': 'local',
     })
     cfg = load_gateway_config(tmp_path)
-    assert set(cfg['agents']) == {'researcher', 'synthesizer', 'protocol-architect', 'auditor'}
-    assert all(v.get('enabled', True) for v in cfg['agents'].values())
-    # Every skill shipped on disk must be enabled by default. Asserted against the
-    # directory rather than a hardcoded set, so adding a skill without registering
-    # it in DEFAULT_SKILLS fails here instead of silently never binding.
-    on_disk = {d.name for d in (Path('.').resolve() / '.agents' / 'skills').iterdir()
-               if (d / 'SKILL.md').exists()}
-    assert set(cfg['skills']) == on_disk
-    assert all(v.get('enabled', True) for v in cfg['skills'].values())
-    assert set(cfg['mcp_modules']) == {'wiki', 'research', 'diagnostics', 'market'}
-    # Non-gateway keys are carried through unchanged
+    assert all(cfg[s] == {} for s in ('mcp_modules', 'skills', 'agents'))
+    # Non-gateway keys are carried through unchanged.
     assert cfg['repositories']['wiki'] == 'git@example.com/wiki.git'
 
+    async def run():
+        mcp, watcher = create_gateway(root, cfg_dir / 'config.yaml')
+        uris = {str(r.uri) for r in await mcp.list_resources()}
 
-def test_config_overrides_default_agents(tmp_path):
-    '''An explicit disable in config.yaml wins over the code default.'''
+        # .apm/ holds what this repo authors. APM deploys third-party skills into
+        # .agents/skills/ and .claude/skills/ alongside them; the gateway binds only
+        # what is first-party, so read the source tree, not a deploy target.
+        on_disk_skills = {d.name for d in (root / '.apm' / 'skills').iterdir()
+                          if (d / 'SKILL.md').exists()}
+        assert {f'podarcis://skills/{n}' for n in on_disk_skills} <= uris
+
+        on_disk_agents = {f.name.removesuffix('.agent.md')
+                          for f in (root / '.apm' / 'agents').glob('*.agent.md')}
+        assert {f'podarcis://agents/{n}.md' for n in on_disk_agents} <= uris
+
+        # Every tool every shipped module defines is bound.
+        bound = {t.name for t in await mcp.list_tools()}
+        for name, path in discover_modules(root).items():
+            own = set(load_server_mcp(root, path)._tool_manager._tools)
+            assert own, f'{name} defines no tools'
+            assert own <= bound, f'{name} bound none of {sorted(own - bound)}'
+
+    asyncio.run(run())
+
+
+def test_discovery_is_the_only_module_registry():
+    '''`podarcis status` and the gateway must agree on what exists.
+
+    They previously disagreed: the router bound a hardcoded MODULE_PATHS while
+    components globbed the directory, so a new module listed as "disabled"
+    forever.
+    '''
+    from podarcis.components import discover_components, get_enabled_mcp_servers
+
+    root = Path('.').resolve()
+    globbed = {f'{n}-mcp' for n in discover_modules(root)}
+    listed, _, _ = discover_components(root)
+    assert set(listed) == globbed
+    assert globbed <= get_enabled_mcp_servers(root)
+
+
+def test_explicit_disable_overrides_discovery(tmp_path):
+    '''An explicit disable in config.yaml wins over "present on disk".'''
+    from podarcis.gateway.router import is_enabled
+
     cfg_dir = tmp_path / '.podarcis'
     cfg_dir.mkdir()
     save_yaml(cfg_dir / 'config.yaml', {
         'agents': {'auditor': {'enabled': False}},
-        'skills': {'self-improvement': {'enabled': False}},
+        'skills': {'self-improvement': False},
     })
     cfg = load_gateway_config(tmp_path)
-    assert cfg['agents']['auditor']['enabled'] is False
-    assert cfg['agents']['researcher']['enabled'] is True
-    assert cfg['skills']['self-improvement']['enabled'] is False
+    assert is_enabled(cfg['agents'], 'auditor') is False
+    assert is_enabled(cfg['agents'], 'researcher') is True
+    assert is_enabled(cfg['skills'], 'self-improvement') is False
 
+    async def run():
+        mcp, watcher = create_gateway(Path('.').resolve(), cfg_dir / 'config.yaml')
+        uris = {str(r.uri) for r in await mcp.list_resources()}
+        assert 'podarcis://agents/auditor.md' not in uris
+        assert 'podarcis://agents/researcher.md' in uris
+        assert 'podarcis://skills/self-improvement' not in uris
+
+    asyncio.run(run())
 
 
 # Rules that live in AGENTS.md §3-4 and were previously restated verbatim inside
@@ -153,9 +200,9 @@ _SHARED_RULES = [
 
 
 @pytest.mark.parametrize('persona', sorted(
-    p.name for p in (Path('.').resolve() / '.agents' / 'agents').glob('*.md')))
+    p.name for p in (Path('.').resolve() / '.apm' / 'agents').glob('*.agent.md')))
 def test_personas_do_not_restate_shared_conventions(persona):
-    body = (Path('.').resolve() / '.agents' / 'agents' / persona).read_text()
+    body = (Path('.').resolve() / '.apm' / 'agents' / persona).read_text()
     assert 'Shared conventions' in body, (
         f'{persona} must point at AGENTS.md rather than restating it')
     for rule in _SHARED_RULES:
@@ -177,8 +224,7 @@ def test_mcp_surface_is_exactly_the_bash_less_job_surface():
     silently, as repo_sync did (it imported a helper deleted in 0868a00 and
     would have raised ImportError on every pull).
     '''
-    sys.path.insert(0, str(Path('.').resolve() / '.podarcis'))
-    from jobs.agent import READ_TOOLS, WRITE_TOOLS
+    from podarcis.jobs.agent import READ_TOOLS, WRITE_TOOLS
 
     async def run():
         mcp, watcher = create_gateway(Path('.').resolve())

@@ -6,28 +6,28 @@ You are Podarcis, a research agent designed around a **filesystem-driven, eviden
 
 ## 1. Subagent Workflow & Personas
 
-Subagent personas are defined as markdown files in `.agents/agents/*.md`. Each persona's YAML frontmatter (`description`, `mode`, `model`, `permission`) declares its role, model, and tool permissions.
+Subagent personas are defined as markdown files in `.apm/agents/*.agent.md`. Each persona's YAML frontmatter (`description`, `mode`, `model`, `permission`) declares its role, model, and tool permissions.
 
-**Personas are delivered by the harness, natively, with real context isolation.** Claude Code reads `.claude/agents/` and OpenCode reads `.opencode/agents/` — both are symlinks to `.agents/agents/`, so one file serves every harness. The **podarcis MCP gateway** (`podarcis-mcp`) additionally publishes each active persona as a read-only resource `podarcis://agents/<name>.md`, purely as a fallback for clients with no native subagent mechanism.
+**Personas are delivered by the harness, natively, with real context isolation.** Claude Code reads `.claude/agents/` and OpenCode reads `.opencode/agents/`; `apm install` deploys `.apm/agents/` into both, stripping the `.agent.md` suffix, so one authored file serves every harness. Those deploy roots are build output and gitignored — edit `.apm/`, never them. The **podarcis MCP gateway** (`podarcis-mcp`) additionally publishes each active persona as a read-only resource `podarcis://agents/<name>.md`, purely as a fallback for clients with no native subagent mechanism.
 
 There is deliberately **no delegation tool and no per-persona prompt**. An MCP tool cannot spawn an isolated process, so such a tool could only inline a multi-KB system prompt into the caller's own context — the opposite of what delegation is for.
 
-Personas are enabled by default from git-tracked gateway defaults (`.podarcis/gateway/router.py`). There is no interactive toggle for personas or skills: the harness loads only their one-line description until something invokes them, so gating one saves ~60 tokens — not worth a config surface, and the old toggle wrote disable flags into git-tracked files, turning a local preference into a repo diff. To retire a persona or skill permanently, set a frontmatter flag in its own file (`disable-model-invocation: true`, `user-invocable: false`, `disabled: true`); the `agents:` / `skills:` sections of `.podarcis/config.yaml` are still read as overrides if hand-written. Only **MCP tool modules** are toggleable (`podarcis config enable|disable mcp <name>`, or `podarcis config` → Tools), because their tool schemas load into every session up front whether used or not.
+Personas are enabled by default because they are **on disk**: the gateway globs `.apm/agents/*.agent.md` and `.apm/skills/*/SKILL.md` and binds what it finds, so there is no registry to add one to. There is no interactive toggle for personas or skills: the harness loads only their one-line description until something invokes them, so gating one saves ~60 tokens — not worth a config surface, and the old toggle wrote disable flags into git-tracked files, turning a local preference into a repo diff. To retire a persona or skill permanently, set a frontmatter flag in its own file (`disable-model-invocation: true`, `user-invocable: false`, `disabled: true`); the `agents:` / `skills:` sections of `.podarcis/config.yaml` are still read as overrides if hand-written. Only **MCP tool modules** are toggleable (`podarcis config enable|disable <name>`, or `podarcis config` → Tools), because their tool schemas load into every session up front whether used or not. Modules are discovered the same way — a directory under `.agents/mcp/` containing a `server.py` — and bound unless `mcp_modules:` in `.podarcis/config.yaml` disables one.
 
 ### Invocation
 
 - **Delegate (preferred)**: Use the harness's native subagent mechanism — in Claude Code, the `Agent` tool with `subagent_type: "researcher"`. Subagents share no context with you, so each task must be specific and self-contained.
-- **Adopt a persona directly**: Read `.agents/agents/<name>.md` (or the `podarcis://agents/<name>.md` resource) to load its instructions into the current context. Use this only when no native subagent mechanism exists — it costs you the isolation that makes delegation worthwhile.
+- **Adopt a persona directly**: Read `.apm/agents/<name>.agent.md` (or the `podarcis://agents/<name>.md` resource) to load its instructions into the current context. Use this only when no native subagent mechanism exists — it costs you the isolation that makes delegation worthwhile.
 - **Pipeline**: Subagents can delegate to each other — e.g. the Protocol Architect can invoke the Researcher when wiki data is missing, through the same native mechanism.
 
 ### Core Agent Personas
 
 | Subagent | File Path | Actor String & Description |
 |---|---|---|
-| **Researcher** | [researcher.md](.agents/agents/researcher.md) | `podarcis:researcher`: Discovers peer-reviewed literature via `research-mcp` (Semantic Scholar), scrapes Google Drive documents, downloads PDFs, and stages raw sources in `sources/literature/`. |
-| **Synthesizer** | [synthesizer.md](.agents/agents/synthesizer.md) | `podarcis:synthesizer`: Reads sources not yet cited in `wiki/` (via `literature_status`, derived live from the citation graph — no manifest), ingests raw sources, and compiles objective, anonymized OKF concept notes into `wiki/`. |
-| **Protocol Architect** | [protocol-architect.md](.agents/agents/protocol-architect.md) | `podarcis:protocol_architect`: Reads user profile constraints (`workspace/profile.md`), translates Wiki findings into step-by-step personalized protocols, menu plans (via `menumaker`), and deliverables. |
-| **Auditor** | [auditor.md](.agents/agents/auditor.md) | `podarcis:auditor`: Runs automated link linting (`podarcis lint`), audits OKF frontmatter schema, verifies citation integrity, fact-checks claims against wiki and literature, and delivers structured remediation payloads. |
+| **Researcher** | [researcher.agent.md](.apm/agents/researcher.agent.md) | `podarcis:researcher`: Discovers peer-reviewed literature via `research-mcp` (Semantic Scholar), scrapes Google Drive documents, downloads PDFs, and stages raw sources in `sources/literature/`. |
+| **Synthesizer** | [synthesizer.agent.md](.apm/agents/synthesizer.agent.md) | `podarcis:synthesizer`: Reads sources not yet cited in `wiki/` (via `literature_status`, derived live from the citation graph — no manifest), ingests raw sources, and compiles objective, anonymized OKF concept notes into `wiki/`. |
+| **Protocol Architect** | [protocol-architect.agent.md](.apm/agents/protocol-architect.agent.md) | `podarcis:protocol_architect`: Reads user profile constraints (`workspace/profile.md`), translates Wiki findings into step-by-step personalized protocols, menu plans (via the external `menumaker` skill), and deliverables. |
+| **Auditor** | [auditor.agent.md](.apm/agents/auditor.agent.md) | `podarcis:auditor`: Runs automated link linting (`podarcis lint`), audits OKF frontmatter schema, verifies citation integrity, fact-checks claims against wiki and literature, and delivers structured remediation payloads. |
 
 ### Generator-Critic Verification & Auto-Remediation Loop
 - **Autonomous Review Loop**: When the Synthesizer or Protocol Architect outputs draft documents, they immediately hand off the updated file paths to the Auditor.
@@ -35,12 +35,19 @@ Personas are enabled by default from git-tracked gateway defaults (`.podarcis/ga
 
 ### Domain Knowledge Skills
 
-Skills (`.agents/skills/`) inject specialized domain knowledge on-demand. Like personas, they are loaded natively by the harness (`.claude/skills/`, `.opencode/skills/` — both symlinks to `.agents/skills/`); the gateway does not re-publish them.
+Skills (`.apm/skills/`) inject specialized domain knowledge on-demand. Like personas, they are loaded natively by the harness (`.claude/skills/`, `.opencode/skills/`), which `apm install` populates from `.apm/skills/`; the gateway does not re-publish them. Third-party skills installed through APM land in those same deploy roots but are never written back to `.apm/` — the split is what keeps authored context separable from vendored context.
 
-- **menumaker**: Nutritional reasoning, USDA food data, and menu optimization heuristics.
 - **synthesizer-local** / **synthesizer-gdrive**: Backend-specific ingestion workflow. The Synthesizer selects one at runtime from `sources_backend` — see its "Active Skill Check" table.
 - **self-improvement**: Diagnostic session analysis and platform pain-point resolution.
 - **python-skill**: Python style and architecture conventions for platform work.
+
+### External Context (APM)
+
+Context this repo does **not** author — a colleague's skill, an extracted tool — is declared in `apm.yml` and installed with `apm install` ([Agent Package Manager](https://microsoft.github.io/apm/)). APM resolves each dependency from git into `apm_modules/`, records the exact commit in `apm.lock.yaml`, and deploys it into every harness root named by `targets:`. Never vendor a copy by hand: a tracked copy of someone else's repo has no upstream and drifts silently.
+
+`.apm/` is what this repo authors; `.claude/` and `.opencode/` are generated and gitignored. APM refuses to deploy through a symlinked target root, which is why those are real directories rather than symlinks into `.agents/`.
+
+APM copies files; it does not install language runtimes. A package shipping a CLI its `SKILL.md` invokes needs that binary too, so `apm.yml`'s `lifecycle.post-install` hook installs it — trusted once via `apm lifecycle trust`, and re-approved whenever the `lifecycle:` block changes. A failing lifecycle script does **not** fail `apm install`, so the hook is best-effort by design and `podarcis status` is what verifies it: its **External skills** section reads each deployed bundle's `pyproject.toml` or `package.json`, resolves every executable it declares, and marks the missing ones. Dependencies are pinned in `apm.yml` — by tag where the upstream publishes them, by commit otherwise — so `main` cannot move under the declaration; change one deliberately with `apm update`.
 
 ---
 
@@ -54,15 +61,17 @@ The coordination is asynchronous, mediated by the file structure:
 * **Wiki (`wiki/` repository)**: Objective, anonymized knowledge base written in OKF v0.2 format.
 * **Workspace (`workspace/` repository)**: Personal profiles, active protocols, feedback, and deliverables.
 * **Temporary Workspace (`tmp/`)**: Scratchpad operations and temporal data edits.
-* **Market Data (`market-mcp`)**: Batched Yahoo Finance quotes, history, and fundamentals for portfolio work in `workspace/finance/`. It supplies **facts only** — no optimizers, no backtests. Portfolio judgement is the agent's, weighing these numbers against `wiki/` knowledge and the constraints in `workspace/profile.md`; a canned mean-variance solve or SMA backtest would substitute false precision for that reasoning. Market data is a live fact, not a citable source: it belongs in `workspace/`, never in `wiki/`, and must carry the `as_of` date it was fetched with.
-* **Podarcis Engine (`.podarcis/` & `podarcis` CLI)**: Unified Python CLI and runtime engine for status inspection (`podarcis status`), configuration (`podarcis config`), multi-workspace git/gdrive syncing (`podarcis repo sync`), testing (`podarcis test`), and link linting (`podarcis lint`).
+* **Nutrition (`menumaker`)**: An external skill, not part of Podarcis — installed via APM and driven by its `menumaker` CLI. Podarcis owns only where its output may land: objective food profiles may become `wiki/` pages, but nutrient targets and menus are derived from a person's age, sex, and budget, so they are personal and belong in `workspace/`. Nutritional reasoning itself lives in the skill's own `SKILL.md`.
+* **Market Data (`market-skill`)**: An external skill, not part of Podarcis — installed via APM and driven by its `market` CLI. Podarcis owns only where its output may land: market data is a live fact, not a citable source, so it belongs in `workspace/finance/`, never in `wiki/`, and must carry the `as_of` date it was fetched with. How to use the tool — batching, the deliberate absence of optimizers and backtests — lives in the skill's own `SKILL.md`.
+* **Podarcis Engine (`.podarcis/` & `podarcis` CLI)**: Unified Python CLI and runtime engine for status inspection (`podarcis status`), configuration (`podarcis config`), multi-workspace git/gdrive syncing (`podarcis repo sync`), testing (`podarcis test`), and link linting (`podarcis lint`). Everything under `.podarcis/` is imported as `podarcis.*` and **only** as `podarcis.*` — never add a `sys.path` insert to reach a sibling module, or it becomes a second instance of itself with its own copy of module state. `podarcis lint` exits non-zero on findings; the `commit` and `push` autonomy gates depend on that.
+* **Configuration (`.podarcis/config.yaml`)**: The single configuration file. There is no `state.yaml` — runtime state (jobs, engines, last sync, frontend) lives here alongside everything else, because the MCP servers read this file and a parallel one silently stranded every setting written to it. A legacy `state.yaml` is folded in automatically on first read.
 * **Scheduled Jobs (`.agents/jobs/*.yaml` & `podarcis job`)**: Jobs are declared as YAML and scheduled as **systemd user timers** (`podarcis job enable|disable|run|logs`). `schedule:` is a systemd `OnCalendar` expression (`daily`, `Sun *-*-* 03:00:00`) — not cron. Beyond `type: shell` and `type: python`, a job may be `type: agent`, which runs a persona headlessly through the harness CLI named by its `options.harness` (`.podarcis/jobs/runners/`, currently `claude` only). There is no default: a job that omits `options.harness` fails rather than guessing, and `podarcis job enable` warns when it is missing. Each agent job declares an `autonomy` level that Podarcis — never the model — enforces: `report` (read-only; output lands in `tmp/job_reports/`), `branch` (commits to `jobs/<name>`, leaving the working branch untouched), `commit` (commits only if the link/frontmatter audit passes), `push` (commits, audits, then pushes). Agent jobs are never granted `Bash`, so all git work stays with the engine, and `WebSearch`/`WebFetch` are denied outright to keep the citation hierarchy intact.
 
 ### MCP Tool Reference
 
 Every tool the `podarcis-mcp` gateway binds. Anything not listed here does not exist — use your native tools (`Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash`) for everything else.
 
-The surface is deliberately **exactly what a Bash-less agent job can reach** (`.podarcis/jobs/agent.py`), enforced by a test. Anything a human runs *around* a task is a CLI subcommand instead — `podarcis repo sync`, `podarcis diagnose --resolve <id>`, `podarcis menu optimize|intake|food|food-search|price` (add `--json` for raw output). Read the **menumaker** skill before using `podarcis menu`.
+The surface is deliberately **exactly what a Bash-less agent job can reach** (`.podarcis/jobs/agent.py`), enforced by a test. Anything a human runs *around* a task is a CLI subcommand instead — `podarcis repo sync`, `podarcis diagnose --resolve <id>`. Domain tooling is neither: `menumaker` and `market` are external skills installed through APM, driven by their own CLIs, and governed by their own `SKILL.md`.
 
 | Tool | Use it for |
 |---|---|
@@ -76,9 +85,6 @@ The surface is deliberately **exactly what a Bash-less agent job can reach** (`.
 | `literature_status(status)` | Which ingested sources are not yet cited in `wiki/`. Derived live from the citation graph. |
 | `diagnostics_log(…)` | Record a failure, tool error, or user correction. See §4. |
 | `diagnostics_list()` | Read back unresolved pain points. Resolving them is a human action: `podarcis diagnose --resolve <id>`. |
-| `market_quote(tickers)` | Live price, trading currency, and 1d/1m/6m/1y returns for many tickers in one call. Also handles FX (`EURUSD=X`) and indexes (`^GSPC`). |
-| `market_history(tickers, period, interval)` | Aligned close-price series for computing correlation, volatility, and drawdown yourself. Defaults to weekly — daily over many tickers is a large payload. |
-| `market_fundamentals(tickers)` | Sector, industry, country, market cap, P/E, dividend yield, beta — for reasoning about concentration and valuation. |
 
 ---
 
@@ -117,9 +123,10 @@ The surface is deliberately **exactly what a Bash-less agent job can reach** (`.
 * **Accelerate Feedback Loops**: Verify changes immediately using targeted checks (`pytest`, `podarcis lint`) rather than slow full builds.
 * **Automate Last**: Execute direct manual solutions first before building meta-tooling around them.
 * **Surgical Edits**: Touch only the files and lines required for the task.
-* **Snake_case Filenames**: All files use `snake_case`.
+* **Snake_case Filenames**: All files use `snake_case`, except `.apm/agents/` and `.apm/skills/`, where the name is the harness-visible identifier and follows the harness's kebab-case convention (`protocol-architect.agent.md`, `synthesizer-gdrive/`).
 * **No Manual Line Wrapping**: Write each paragraph as a single line. Obsidian handles visual wrapping automatically.
-* **Version Every Platform Commit**: Every commit that touches platform code (`.podarcis/`, `.agents/`, skills, or `pyproject.toml`) MUST bump the `version` field in `pyproject.toml` — patch (x.y.Z) for fixes, minor (x.Y.0) for features, major (X.0.0) for breaking changes — so drift between instances is detectable via `podarcis --version`.
+* **Version Every Platform Commit**: Every commit that touches platform code (`.podarcis/`, `.agents/`, skills, or `pyproject.toml`) MUST bump the `version` field in `pyproject.toml` — patch (x.y.Z) for fixes, minor (x.Y.0) for features, major (X.0.0) for breaking changes — so drift between instances is detectable via `podarcis --version`. Enforced by `.githooks/pre-commit` (installed via `core.hooksPath`); override a genuine exception with `--no-verify`.
+* **One Declaration Per Thing**: `pyproject.toml` is the only dependency list, `.podarcis/config.yaml` the only configuration file, the filesystem the only component registry. When you find a second copy of any of these, delete it rather than teaching the two to agree.
 * **Diagnostic Logging**: Immediately log any execution failures, tool errors, user corrections, or instances where generated results fail to meet user expectations via `diagnostics_log` (`diagnostics-mcp`) into `.podarcis/diagnostics/pain_points.jsonl`.
 * **Sync at Start & End**: `git fetch --all` + `status -sb` before starting, and confirm clean + pushed before finishing. Fetch for awareness — never blind-pull into a dirty tree.
 

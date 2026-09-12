@@ -1,8 +1,8 @@
 '''Unit tests for TUI token calculator and banner features.'''
 
 from pathlib import Path
-from banner import display_project_banner
-from components import count_tokens, discover_components
+from podarcis.banner import display_project_banner
+from podarcis.components import count_tokens, discover_components
 
 
 def test_count_tokens():
@@ -15,14 +15,14 @@ def test_count_tokens():
 
 def test_discover_components_token_fields(tmp_path):
     '''Verify discover_components populates token fields for discovered skills and agents.'''
-    skills_dir = tmp_path / '.agents' / 'skills' / 'demo-skill'
+    skills_dir = tmp_path / '.apm' / 'skills' / 'demo-skill'
     skills_dir.mkdir(parents=True)
     skill_file = skills_dir / 'SKILL.md'
     skill_file.write_text('---\ndescription: Test Skill\n---\n\nDemo skill instructions.', encoding='utf-8')
 
-    agents_dir = tmp_path / '.agents' / 'agents'
+    agents_dir = tmp_path / '.apm' / 'agents'
     agents_dir.mkdir(parents=True)
-    agent_file = agents_dir / 'demo_agent.md'
+    agent_file = agents_dir / 'demo_agent.agent.md'
     agent_file.write_text('---\ndescription: Test Agent\n---\n\nDemo agent instructions.', encoding='utf-8')
 
     _, skills, agents = discover_components(tmp_path)
@@ -46,13 +46,13 @@ def test_discover_components_token_fields(tmp_path):
 
 def test_banner_and_calculator_run(tmp_path, capsys):
     """Banner renders the MCP tool budget and the on-demand summary line."""
-    skills_dir = tmp_path / '.agents' / 'skills' / 'test-skill'
+    skills_dir = tmp_path / '.apm' / 'skills' / 'test-skill'
     skills_dir.mkdir(parents=True)
     (skills_dir / 'SKILL.md').write_text('# Test Skill\nSome content.', encoding='utf-8')
 
-    agents_dir = tmp_path / '.agents' / 'agents'
+    agents_dir = tmp_path / '.apm' / 'agents'
     agents_dir.mkdir(parents=True)
-    (agents_dir / 'test_agent.md').write_text('# Test Agent\nSome instructions.', encoding='utf-8')
+    (agents_dir / 'test_agent.agent.md').write_text('# Test Agent\nSome instructions.', encoding='utf-8')
 
     display_project_banner(tmp_path)
     captured = capsys.readouterr()
@@ -64,7 +64,7 @@ def test_banner_and_calculator_run(tmp_path, capsys):
 
 def test_mcp_discovery_ignores_dirs_without_server(tmp_path):
     """A leftover build dir (e.g. stale __pycache__) is not a phantom tool module."""
-    from components import discover_components
+    from podarcis.components import discover_components
 
     mcp = tmp_path / '.agents' / 'mcp'
     (mcp / 'ghost' / '__pycache__').mkdir(parents=True)
@@ -79,7 +79,7 @@ def test_mcp_discovery_ignores_dirs_without_server(tmp_path):
 
 def test_schedule_formatting_fits_status_column():
     """systemd OnCalendar expressions are compacted so they cannot break the border."""
-    from banner import _fmt_schedule
+    from podarcis.banner import _fmt_schedule
 
     assert _fmt_schedule('Sun *-*-* 03:00:00') == 'Sun 03:00'
     assert _fmt_schedule('*-*-* 03:00:00') == 'daily 03:00'
@@ -90,7 +90,7 @@ def test_schedule_formatting_fits_status_column():
 
 def test_repo_rows_render_tracking_state(tmp_path):
     """Repo rows show live branch/dirty/ahead state, not just the configured URL."""
-    from banner import _repo_rows, _repo_state, _short_remote
+    from podarcis.banner import _repo_rows, _repo_state, _short_remote
 
     assert _short_remote('git@github.com:XicuM/podarcis-wiki.git') == 'XicuM/podarcis-wiki'
     assert _short_remote('') == 'local'
@@ -102,7 +102,7 @@ def test_repo_rows_render_tracking_state(tmp_path):
     assert _repo_state({'status': 'synced'})[0] == 'synced'
 
     # Rows must fit the banner's inner width exactly, or the border breaks.
-    from banner import INNER_W
+    from podarcis.banner import INNER_W
     from rich.cells import cell_len
     for row in _repo_rows(tmp_path):
         assert cell_len(row.plain) == INNER_W

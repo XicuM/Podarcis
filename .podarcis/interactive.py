@@ -4,10 +4,10 @@ from pathlib import Path
 
 import questionary
 
-from banner import display_project_banner
-from common import get_config_value
-from console import console, QSTYLE
-from config_wizard import (
+from podarcis.banner import display_project_banner
+from podarcis.common import get_config_value
+from podarcis.console import console, QSTYLE
+from podarcis.config_wizard import (
     configure_mcp_servers, configure_jobs,
     configure_repositories, configure_frontend,
 )

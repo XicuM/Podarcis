@@ -7,12 +7,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-root = Path(__file__).resolve().parent.parent
+# Resolved locally, not imported from `podarcis`: this module runs before the
+# venv (and therefore the package) exists.
 podarcis_dir = Path(__file__).resolve().parent
-if str(root) not in sys.path:
-    sys.path.insert(0, str(root))
-if str(podarcis_dir) not in sys.path:
-    sys.path.insert(0, str(podarcis_dir))
+root = podarcis_dir.parent
+
 
 def _bootstrap_venv() -> None:
     venv_dir = root / '.venv'
@@ -30,17 +29,15 @@ def _bootstrap_venv() -> None:
     deps_ok = (
         python.exists()
         and subprocess.run(
-            [str(python), '-c', 'import rich, questionary'],
+            [str(python), '-c', 'import rich, questionary, podarcis'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         ).returncode == 0
     )
 
     if not deps_ok:
-        req_file = podarcis_dir / 'requirements.txt'
-        if not req_file.exists():
-            req_file = root / 'requirements.txt'
-
-        print(f'[✓] Installing dependencies from {req_file.name}...')
+        # pyproject.toml is the only dependency declaration; the editable
+        # install below pulls everything, so there is no requirements.txt.
+        print('[✓] Installing dependencies from pyproject.toml...')
 
         if not pip.exists():
             print('[✓] Bootstrapping pip via ensurepip...')
@@ -49,8 +46,6 @@ def _bootstrap_venv() -> None:
         pip_cmd: list[str] = [str(pip)] if pip.exists() else [str(python), '-m', 'pip']
 
         subprocess.run(pip_cmd + ['install', '--upgrade', 'pip'])
-        if req_file.exists():
-            subprocess.run(pip_cmd + ['install', '-r', str(req_file)])
         subprocess.run(pip_cmd + ['install', '-e', str(root)])
 
         if (egg_info := root / 'podarcis.egg-info').exists():
@@ -58,6 +53,12 @@ def _bootstrap_venv() -> None:
 
     if (root / 'podarcis').exists():
         os.chmod(root / 'podarcis', 0o755)
+
+    # Enforce the AGENTS.md version-bump rule locally. Hooks are not tracked by
+    # git, so point core.hooksPath at the tracked .githooks/ directory instead.
+    if (root / '.githooks').is_dir():
+        subprocess.run(['git', '-C', str(root), 'config', 'core.hooksPath', '.githooks'],
+                       check=False)
 
     if '--bootstrap-only' in sys.argv:
         sys.exit(0)
@@ -68,9 +69,9 @@ def _bootstrap_venv() -> None:
 
 _bootstrap_venv()
 
-from banner import display_install_banner
-from common import load_yaml, save_yaml
-from console import console, QSTYLE
+from podarcis.banner import display_install_banner
+from podarcis.common import load_yaml, save_yaml
+from podarcis.console import console, QSTYLE
 
 import questionary
 
@@ -95,7 +96,6 @@ def _select(prompt: str, choices: list[str], default: str | None = None) -> str:
 
 def _create_podarcis_yaml() -> None: 
     cfg_file = root / '.podarcis' / 'config.yaml'
-    st_file = root / '.podarcis' / 'state.yaml'
 
     if not cfg_file.exists():
         save_yaml(cfg_file, {
@@ -119,10 +119,6 @@ def _create_podarcis_yaml() -> None:
                 'Podarcis: endemic to knowledge graphs everywhere.',
             ],
             'frontend': 'none',
-        })
-
-    if not st_file.exists():
-        save_yaml(st_file, {
             'engines': {'qmd': False},
             'gdrive_sync': {'last_sync': ''},
         })
@@ -165,7 +161,7 @@ def main() -> None:
     _create_podarcis_yaml()
     _hr()
 
-    from config_wizard import (
+    from podarcis.config_wizard import (
         configure_mcp_servers, configure_jobs,
         configure_frontend, configure_repositories,
     )
@@ -186,7 +182,7 @@ def main() -> None:
     _hr()
 
     if _select('Sync workspace repos now?', ['no', 'yes'], default='yes') == 'yes':
-        from repos import sync_repos
+        from podarcis.repos import sync_repos
         _say('[#29b8db]Syncing workspace repos...[/#29b8db]')
         sync_repos(root, clone_missing=True, update_remotes=True)
         _say()

@@ -1,10 +1,10 @@
 '''Agents binder for Podarcis MCP Gateway.
 
-Exposes subagent personas from .agents/agents/*.md as MCP Resources.
+Exposes subagent personas from .apm/agents/*.agent.md as MCP Resources.
 
 Personas are delivered to agents by their harness, natively and with real context
 isolation — Claude Code reads .claude/agents/, OpenCode reads .opencode/agents/,
-and both resolve to this same .agents/agents/ directory. The resource below is a
+and `apm install` deploys this same .apm/agents/ source into both. The resource below is a
 read-only fallback for clients that have no native subagent mechanism; it is not
 the primary path and costs nothing until something reads it.
 
@@ -26,20 +26,31 @@ synthesizer.md. This binder serves the same static markdown to every instance.
 '''
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+logger = logging.getLogger('podarcis.gateway.agents')
 
-def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
-    '''Discover and register enabled subagent personas as MCP resources.'''
-    agents_dir = root / '.agents' / 'agents'
+
+def register(mcp, root: Path, config_section: dict | None = None) -> list[str]:
+    '''Register every shipped persona as an MCP resource; return what was bound.
+
+    `config_section` is the `agents:` block of config.yaml, an exclusion list —
+    a persona absent from it is enabled.
+    '''
+    agents_dir = root / '.apm' / 'agents'
     if not agents_dir.exists():
-        return
+        return []
 
-    from components import is_agent_enabled
+    from podarcis.components import is_agent_enabled
+    from podarcis.gateway.router import is_enabled
 
-    for agent_file in sorted(agents_dir.glob('*.md')):
-        agent_name = agent_file.stem
-        if enabled_agents is not None and agent_name not in enabled_agents:
+    bound = []
+    for agent_file in sorted(agents_dir.glob('*.agent.md')):
+        # APM's primitive suffix: researcher.agent.md is the persona `researcher`,
+        # and `apm install` strips .agent on the way into .claude/agents/.
+        agent_name = agent_file.name.removesuffix('.agent.md')
+        if not is_enabled(config_section, agent_name):
             continue
 
         if not is_agent_enabled(agent_file):
@@ -57,5 +68,10 @@ def register(mcp, root: Path, enabled_agents: set[str] | None = None) -> None:
             mcp.resource(f'podarcis://agents/{agent_name}.md')(
                 _make_resource_fn(content, agent_name)
             )
-        except Exception:
-            pass
+            bound.append(agent_name)
+        except Exception as exc:
+            # Never silently: a persona that fails to bind is invisible to every
+            # client with no native subagent mechanism.
+            logger.error('Failed to bind persona %s: %s', agent_name, exc)
+
+    return bound

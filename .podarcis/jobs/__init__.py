@@ -7,14 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Ensure root_dir / .podarcis is in sys.path
-root_dir = Path(__file__).resolve().parent.parent.parent
-podarcis_dir = root_dir / '.podarcis'
-if str(podarcis_dir) not in sys.path:
-    sys.path.insert(0, str(podarcis_dir))
-
-from common import load_yaml, save_yaml
-from console import console
+from podarcis.common import config_path, load_config, load_yaml, save_yaml
+from podarcis.console import console
 
 from . import scheduler
 
@@ -23,14 +17,13 @@ JOBS_DIR = lambda root: root / '.agents' / 'jobs'
 
 
 def discover_jobs(root_dir: Path) -> dict[str, dict]:
-    '''Discover all job specifications under .agents/jobs/*.yaml and merge state.yaml runtime info.'''
+    '''Discover job specs under .agents/jobs/*.yaml, merged with runtime state.'''
     jobs: dict[str, dict] = {}
     jdir = JOBS_DIR(root_dir)
     if not jdir.exists():
         return jobs
 
-    st = load_yaml(root_dir / '.podarcis' / 'state.yaml')
-    st_jobs = st.get('jobs', {})
+    st_jobs = load_config(root_dir).get('jobs') or {}
 
     for file_path in sorted(jdir.glob('*.yaml')):
         data = load_yaml(file_path)
@@ -92,15 +85,14 @@ def set_job_status(root_dir: Path, job_name: str, enabled: bool) -> tuple[bool, 
     if not ok:
         return False, msg
 
-    st_path = root_dir / '.podarcis' / 'state.yaml'
-    st = load_yaml(st_path)
-    st.setdefault('jobs', {}).setdefault(job_name, {})['enabled'] = enabled
-    save_yaml(st_path, st)
+    cfg = load_config(root_dir)
+    cfg.setdefault('jobs', {}).setdefault(job_name, {})['enabled'] = enabled
+    save_yaml(config_path(root_dir), cfg)
     return True, msg
 
 
 def run_job(root_dir: Path, job_name: str, dry_run: bool = False) -> dict:
-    '''Execute a job by name and record execution metadata in state.yaml.'''
+    '''Execute a job by name and record execution metadata in config.yaml.'''
     jobs = discover_jobs(root_dir)
     if job_name not in jobs:
         console.print(f'[bold red]Error:[/bold red] Job "{job_name}" not found. Available jobs: {", ".join(jobs.keys())}')
@@ -128,11 +120,11 @@ def run_job(root_dir: Path, job_name: str, dry_run: bool = False) -> dict:
     elif job['type'] == 'python':
         handler_name = job['handler']
         try:
-            mod = importlib.import_module(f'jobs.{handler_name}')
+            mod = importlib.import_module(f'podarcis.jobs.{handler_name}')
             if hasattr(mod, 'run'):
                 res = mod.run(root_dir, dry_run=dry_run)
             else:
-                console.print(f'[bold red]Error:[/bold red] Module jobs.{handler_name} has no run() function.')
+                console.print(f'[bold red]Error:[/bold red] Module podarcis.jobs.{handler_name} has no run() function.')
                 res = {'status': 'error', 'message': 'Missing run() handler'}
         except Exception as e:
             console.print(f'[bold red]Error running job {job_name}: {e}[/bold red]')
@@ -154,12 +146,10 @@ def run_job(root_dir: Path, job_name: str, dry_run: bool = False) -> dict:
                 res = {'status': 'dry_run'}
 
     if not dry_run:
-        st_path = root_dir / '.podarcis' / 'state.yaml'
-        st = load_yaml(st_path)
-        jobs_st = st.setdefault('jobs', {})
-        job_st = jobs_st.setdefault(job_name, {})
+        cfg = load_config(root_dir)
+        job_st = cfg.setdefault('jobs', {}).setdefault(job_name, {})
         job_st['last_run'] = run_ts
         job_st['last_status'] = res.get('status', 'unknown')
-        save_yaml(st_path, st)
+        save_yaml(config_path(root_dir), cfg)
 
     return res
