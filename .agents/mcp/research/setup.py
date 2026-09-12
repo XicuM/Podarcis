@@ -17,7 +17,7 @@ def setup_research(root: Path) -> bool:
 def setup_qmd(root: Path) -> bool:
     '''Interactive setup for QMD Vector DB Search Engine in .podarcis/config.yaml.'''
     import questionary
-    from common import load_yaml, set_engine_status
+    from podarcis.common import load_config, set_config_value
     from console import console
 
     style = questionary.Style([
@@ -29,7 +29,7 @@ def setup_qmd(root: Path) -> bool:
         ('selected', 'noinherit fg:white'),
     ])
 
-    pod_cfg = load_yaml(root/'.podarcis'/'config.yaml')
+    pod_cfg = load_config(root)
     qmd_enabled = bool(pod_cfg.get('engines', {}).get('qmd', False))
     qmd_bin = shutil.which('qmd')
 
@@ -50,7 +50,7 @@ def setup_qmd(root: Path) -> bool:
         raise SystemExit(1)
 
     enable = (choice == 'yes')
-    set_engine_status(root, 'qmd', enable)
+    set_config_value(root, enable, 'engines', 'qmd')
     console.print(
         f'[bold green]✓ QMD set to: {"Enabled" if enable else "Disabled"} in .podarcis/config.yaml[/bold green]\n'
     )
@@ -61,7 +61,7 @@ def setup_research_credentials(root: Path) -> bool:
     '''Prompt for Semantic Scholar API key. Returns False if skipped.'''
     import questionary
     from rich.panel import Panel
-    from common import load_yaml, save_yaml
+    from podarcis.common import load_yaml, save_yaml
     from console import console
 
     style = questionary.Style([

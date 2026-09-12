@@ -8,7 +8,7 @@ podarcis_dir = root_dir / '.podarcis'
 if str(podarcis_dir) not in sys.path:
     sys.path.insert(0, str(podarcis_dir))
 
-from gdrive_sync import run_gdrive_ingestion
+from podarcis.gdrive_sync import run_gdrive_ingestion
 
 
 def run(root_dir: Path, dry_run: bool = False) -> dict:

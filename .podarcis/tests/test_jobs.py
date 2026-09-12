@@ -1,19 +1,14 @@
 """Unit tests for the modular jobs engine and its systemd timer backend."""
 
 from pathlib import Path
-import sys
-
-root_dir = Path(__file__).resolve().parent.parent.parent
-pod_dir = root_dir / '.podarcis'
-if str(pod_dir) not in sys.path:
-    sys.path.insert(0, str(pod_dir))
+from podarcis import ROOT_DIR as root_dir
 
 import pytest
 
-from jobs import discover_jobs, run_job, scheduler
-from jobs.agent import DENIED_TOOLS, READ_TOOLS, WRITE_TOOLS, _tools_for
-from jobs.runners import RunSpec, get_runner
-from jobs.runners.claude import ClaudeRunner
+from podarcis.jobs import discover_jobs, run_job, scheduler
+from podarcis.jobs.agent import DENIED_TOOLS, READ_TOOLS, WRITE_TOOLS, _tools_for
+from podarcis.jobs.runners import RunSpec, get_runner
+from podarcis.jobs.runners.claude import ClaudeRunner
 
 
 def test_discover_jobs():
@@ -73,7 +68,7 @@ def test_unknown_autonomy_is_rejected(tmp_path):
         'name': 'x', 'type': 'agent',
         'options': {'prompt': 'hi', 'autonomy': 'yolo'},
     }
-    from jobs import agent
+    from podarcis.jobs import agent
     res = agent.run(tmp_path, job)
     assert res['status'] == 'error' and 'yolo' in res['message']
 
@@ -84,7 +79,7 @@ def test_missing_harness_is_rejected(tmp_path):
         'name': 'x', 'type': 'agent',
         'options': {'prompt': 'hi', 'autonomy': 'report'},
     }
-    from jobs import agent
+    from podarcis.jobs import agent
     res = agent.run(tmp_path, job)
     assert res['status'] == 'error' and 'harness' in res['message']
 
@@ -94,7 +89,7 @@ def test_unknown_harness_is_reported_as_error_dict(tmp_path):
         'name': 'x', 'type': 'agent',
         'options': {'prompt': 'hi', 'harness': 'nonexistent'},
     }
-    from jobs import agent
+    from podarcis.jobs import agent
     res = agent.run(tmp_path, job)
     assert res['status'] == 'error' and 'Unknown harness' in res['message']
 
@@ -173,8 +168,8 @@ def _init_repo(path: Path) -> None:
 def test_branch_autonomy_commits_off_master(tmp_path, monkeypatch):
     """Agent output must land on jobs/<name>, leaving master untouched."""
     import subprocess
-    from jobs import agent
-    from jobs.runners import RunResult
+    from podarcis.jobs import agent
+    from podarcis.jobs.runners import RunResult
 
     repo = tmp_path / 'wiki'
     _init_repo(repo)
@@ -207,8 +202,8 @@ def test_branch_autonomy_commits_off_master(tmp_path, monkeypatch):
 
 def test_report_autonomy_ignores_preexisting_dirt(tmp_path, monkeypatch):
     """A tree that was already dirty is not the scheduled run's fault."""
-    from jobs import agent
-    from jobs.runners import RunResult
+    from podarcis.jobs import agent
+    from podarcis.jobs.runners import RunResult
 
     repo = tmp_path / 'wiki'
     _init_repo(repo)

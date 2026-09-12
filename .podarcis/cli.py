@@ -7,28 +7,20 @@ import os
 import shutil
 import subprocess
 import sys
-from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
 FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'none': None}
 
-# Ensure root and .podarcis directories are in sys.path
-root_dir = Path(__file__).resolve().parent.parent
-podarcis_dir = Path(__file__).resolve().parent
-if str(root_dir) not in sys.path:
-    sys.path.insert(0, str(root_dir))
-if str(podarcis_dir) not in sys.path:
-    sys.path.insert(0, str(podarcis_dir))
-
-from common import get_config_value, set_config_value
-from console import console
-from components import (
+from podarcis import PODARCIS_DIR, ROOT_DIR
+from podarcis.common import get_config_value, load_version_info, set_config_value
+from podarcis.console import console
+from podarcis.components import (
     discover_components,
     get_enabled_mcp_servers,
     set_mcp_server_status,
 )
 
-from repos import (
+from podarcis.repos import (
     get_repo_names,
     get_repo_url,
     set_repo_url,
@@ -40,7 +32,7 @@ from repos import (
 
 def _get_python_bin() -> str:
     '''Get path to python binary inside virtualenv if available.'''
-    venv_py = root_dir / '.venv' / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+    venv_py = ROOT_DIR / '.venv' / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
     if venv_py.exists():
         return str(venv_py)
     return sys.executable
@@ -48,7 +40,7 @@ def _get_python_bin() -> str:
 
 def _get_pytest_bin() -> str:
     '''Get path to pytest binary inside virtualenv if available.'''
-    venv_pytest = root_dir / '.venv' / ('Scripts/pytest.exe' if sys.platform == 'win32' else 'bin/pytest')
+    venv_pytest = ROOT_DIR / '.venv' / ('Scripts/pytest.exe' if sys.platform == 'win32' else 'bin/pytest')
     if venv_pytest.exists():
         return str(venv_pytest)
     return 'pytest'
@@ -56,10 +48,10 @@ def _get_pytest_bin() -> str:
 
 def cmd_status(args: argparse.Namespace) -> int:
     '''List component, job, and repository status.'''
-    mcp_servers, skills, agents = discover_components(root_dir)
-    enabled_mcp = get_enabled_mcp_servers(root_dir)
-    from jobs import discover_jobs
-    jobs = discover_jobs(root_dir)
+    mcp_servers, skills, agents = discover_components(ROOT_DIR)
+    enabled_mcp = get_enabled_mcp_servers(ROOT_DIR)
+    from podarcis.jobs import discover_jobs
+    jobs = discover_jobs(ROOT_DIR)
 
     status_data = {
         'mcp_servers': {},
@@ -97,8 +89,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             'last_run': info.get('last_run', ''),
         }
 
-    for r_name in get_repo_names(root_dir):
-        url = get_repo_url(root_dir, r_name)
+    for r_name in get_repo_names(ROOT_DIR):
+        url = get_repo_url(ROOT_DIR, r_name)
         status_data['repositories'][r_name] = {
             'remote_url': url,
             'is_local_only': not bool(url),
@@ -139,29 +131,33 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_config_set_status(args: argparse.Namespace, enable: bool) -> int:
-    '''Enable or disable an MCP tool module.'''
-    ctype = args.type.lower()
-    name = args.name
-    mcp_servers, _, _ = discover_components(root_dir)
+    '''Enable or disable an MCP tool module.
 
-    if ctype in ('skill', 'agent'):
+    Tool modules are the only toggleable component: their schemas load into
+    every session up front. The harness loads only a skill's or persona's
+    one-line description until something invokes it, so gating those saves
+    ~60 tokens and is not worth a config surface.
+    '''
+    name = args.name
+    mcp_servers, _, _ = discover_components(ROOT_DIR)
+
+    if name not in mcp_servers:
+        skills, agents = discover_components(ROOT_DIR)[1:]
+        if name in skills or name in agents:
+            console.print(
+                f'[bold red]Error:[/bold red] "{name}" is a '
+                f'{"skill" if name in skills else "persona"}, not a tool module, '
+                f'and is not toggleable. To retire it, set '
+                f'[bold]disabled: true[/bold] in its own frontmatter.'
+            )
+            return 1
         console.print(
-            f'[bold red]Error:[/bold red] {ctype.capitalize()}s are not toggleable. '
-            f'The harness loads only their description until invoked, so gating them '
-            f'saves ~60 tokens each. To retire one, set [bold]disabled: true[/bold] in '
-            f'its frontmatter.'
+            f'[bold red]Error:[/bold red] Tool module "{name}" not found. '
+            f'Available: {", ".join(sorted(mcp_servers))}'
         )
         return 1
 
-    if ctype != 'mcp':
-        console.print(f'[bold red]Error:[/bold red] Unknown component type "{ctype}". Must be: mcp')
-        return 1
-
-    if name not in mcp_servers:
-        console.print(f'[bold red]Error:[/bold red] Tool module "{name}" not found. Available: {", ".join(mcp_servers)}')
-        return 1
-
-    set_mcp_server_status(root_dir, name, enable, mcp_servers[name])
+    set_mcp_server_status(ROOT_DIR, name, enable, mcp_servers[name])
     msg = '[bold green]✓ Enabled[/bold green]' if enable else '[yellow]Disabled[/yellow]'
     console.print(f'{msg} tool module "{name}".')
     return 0
@@ -179,14 +175,14 @@ def cmd_config_disable(args: argparse.Namespace) -> int:
 
 def cmd_config_repo(args: argparse.Namespace) -> int:
     '''Update repository remote or local path configuration.'''
-    from repos import ensure_local_git_repo
+    from podarcis.repos import ensure_local_git_repo
     repo_name = getattr(args, 'repo_name', None)
-    known_repos = get_repo_names(root_dir)
+    known_repos = get_repo_names(ROOT_DIR)
 
     if not repo_name:
         console.print('[bold #29b8db]Configured Podarcis Repositories:[/bold #29b8db]\n')
         for r_name in known_repos:
-            url = get_repo_url(root_dir, r_name)
+            url = get_repo_url(ROOT_DIR, r_name)
             url_str = url if url else 'local-only'
             console.print(f'  • [bold white]{r_name:<15}[/bold white] {url_str}')
         return 0
@@ -196,18 +192,18 @@ def cmd_config_repo(args: argparse.Namespace) -> int:
         target_val = target_val.strip()
 
     if getattr(args, 'local', False):
-        set_repo_url(root_dir, repo_name, '')
-        ensure_local_git_repo(root_dir, repo_name)
+        set_repo_url(ROOT_DIR, repo_name, '')
+        ensure_local_git_repo(ROOT_DIR, repo_name)
         console.print(f'[bold green]✓ Set {repo_name} to local-only.[/bold green]')
     elif getattr(args, 'url', None) is not None or getattr(args, 'path', None) is not None:
-        set_repo_url(root_dir, repo_name, target_val)
-        ensure_local_git_repo(root_dir, repo_name)
+        set_repo_url(ROOT_DIR, repo_name, target_val)
+        ensure_local_git_repo(ROOT_DIR, repo_name)
         if target_val:
             console.print(f'[bold green]✓ Set remote/path for {repo_name} to {target_val}[/bold green]')
         else:
             console.print(f'[bold green]✓ Set {repo_name} to local-only.[/bold green]')
     else:
-        current_url = get_repo_url(root_dir, repo_name)
+        current_url = get_repo_url(ROOT_DIR, repo_name)
         remote_label = current_url if current_url else 'local-only'
         console.print(f'Repository "{repo_name}": {remote_label}')
 
@@ -215,77 +211,60 @@ def cmd_config_repo(args: argparse.Namespace) -> int:
 
 
 
-# Claudian Obsidian plugin ID
-def cmd_repo(args: argparse.Namespace) -> int:
-    '''Manage and synchronize workspace repositories (workspace, wiki, sources).'''
+def cmd_repo_status(args: argparse.Namespace) -> int:
+    '''Show git and sync status across all workspace repositories.'''
     from rich.table import Table
 
-    action = getattr(args, 'repo_action', 'status') or 'status'
-
-    if action == 'status':
-        statuses = get_repo_status(root_dir)
-        if getattr(args, 'json', False):
-            print(json.dumps(statuses, indent=2))
-            return 0
-
-        table = Table(title="Workspace Repositories Status", border_style="cyan")
-        table.add_column("Repo", style="bold white", width=12)
-        table.add_column("Type", style="cyan", width=8)
-        table.add_column("Branch", style="magenta", width=12)
-        table.add_column("Status", style="yellow", width=16)
-        table.add_column("Changes", justify="right", width=8)
-        table.add_column("Ahead/Behind", justify="right", width=12)
-        table.add_column("Remote / Target", style="dim")
-
-        for s in statuses:
-            st = s['status']
-            st_str = f"[green]✓ {st}[/green]" if st in ('synced', 'ready', 'gdrive_managed') else f"[yellow]{st}[/yellow]"
-            ab = f"+{s['ahead']} / -{s['behind']}" if (s['ahead'] or s['behind']) else "—"
-            table.add_row(
-                s['repo'],
-                s['type'],
-                s['branch'] or '—',
-                st_str,
-                str(s['changes']) if s['changes'] else "0",
-                ab,
-                s['url'] or 'local'
-            )
-        console.print(table)
+    statuses = get_repo_status(ROOT_DIR)
+    if getattr(args, 'json', False):
+        print(json.dumps(statuses, indent=2))
         return 0
 
-    elif action in ('sync', 'pull'):
-        console.print('[bold #29b8db]Synchronizing all workspace repositories...[/bold #29b8db]\n')
-        res = sync_repos_full(root_dir)
-        for rname, rinfo in res.items():
-            st = rinfo.get('status')
-            msg = rinfo.get('message')
-            if st == 'ok':
-                console.print(f'  [green]✓[/green] [bold]{rname:<12}[/bold] {msg}')
-            elif st == 'warning':
-                console.print(f'  [yellow]⚠️[/yellow] [bold]{rname:<12}[/bold] {msg}')
-            else:
-                console.print(f'  [red]✗[/red] [bold]{rname:<12}[/bold] {msg}')
-        return 0
+    table = Table(title="Workspace Repositories Status", border_style="cyan")
+    for col, style, width in (
+        ("Repo", "bold white", 12), ("Type", "cyan", 8), ("Branch", "magenta", 12),
+        ("Status", "yellow", 16),
+    ):
+        table.add_column(col, style=style, width=width)
+    table.add_column("Changes", justify="right", width=8)
+    table.add_column("Ahead/Behind", justify="right", width=12)
+    table.add_column("Remote / Target", style="dim")
 
-    elif action == 'push':
-        console.print('[bold #29b8db]Pushing local workspace changes to remotes...[/bold #29b8db]\n')
-        auto_commit = getattr(args, 'commit', False)
-        msg = getattr(args, 'message', 'chore: sync workspace changes') or 'chore: sync workspace changes'
-        res = push_repos(root_dir, auto_commit=auto_commit, message=msg)
-        for rname, rinfo in res.items():
-            st = rinfo.get('status')
-            r_msg = rinfo.get('message')
-            if st == 'ok':
-                console.print(f'  [green]✓[/green] [bold]{rname:<12}[/bold] {r_msg}')
-            elif st == 'skipped':
-                console.print(f'  [dim]—[/dim] [bold]{rname:<12}[/bold] {r_msg}')
-            else:
-                console.print(f'  [red]✗[/red] [bold]{rname:<12}[/bold] {r_msg}')
-        return 0
+    for s in statuses:
+        st = s['status']
+        st_str = f"[green]✓ {st}[/green]" if st in ('synced', 'ready', 'gdrive_managed') else f"[yellow]{st}[/yellow]"
+        ab = f"+{s['ahead']} / -{s['behind']}" if (s['ahead'] or s['behind']) else "—"
+        table.add_row(
+            s['repo'], s['type'], s['branch'] or '—', st_str,
+            str(s['changes']) if s['changes'] else "0", ab, s['url'] or 'local',
+        )
+    console.print(table)
+    return 0
 
-    elif action == 'config':
-        return cmd_config_repo(args)
 
+def _print_repo_results(res: dict, symbols: dict[str, str]) -> None:
+    for rname, rinfo in res.items():
+        sym = symbols.get(rinfo.get('status'), '[red]✗[/red]')
+        console.print(f'  {sym} [bold]{rname:<12}[/bold] {rinfo.get("message")}')
+
+
+def cmd_repo_sync(args: argparse.Namespace) -> int:
+    '''Pull git remotes and ingest gdrive deltas for every workspace repository.'''
+    console.print('[bold #29b8db]Synchronizing all workspace repositories...[/bold #29b8db]\n')
+    _print_repo_results(
+        sync_repos_full(ROOT_DIR),
+        {'ok': '[green]✓[/green]', 'warning': '[yellow]⚠️[/yellow]'},
+    )
+    return 0
+
+
+def cmd_repo_push(args: argparse.Namespace) -> int:
+    '''Push local commits to the configured remotes.'''
+    console.print('[bold #29b8db]Pushing local workspace changes to remotes...[/bold #29b8db]\n')
+    _print_repo_results(
+        push_repos(ROOT_DIR, auto_commit=args.commit, message=args.message),
+        {'ok': '[green]✓[/green]', 'skipped': '[dim]—[/dim]'},
+    )
     return 0
 
 
@@ -303,16 +282,11 @@ def _ensure_vscode_config(root: Path) -> None:
 
 
 def cmd_config_frontend(args: argparse.Namespace) -> int:
-    '''Set or show the frontend name.'''
+    '''Set the frontend tool.'''
     name = args.frontend_name.lower()
-    if name not in FRONTENDS:
-        console.print(f'[bold red]Error:[/bold red] Unknown frontend "{name}". Choose from: {", ".join(sorted(FRONTENDS))}')
-        return 1
-    set_config_value(root_dir, name, 'frontend')
+    set_config_value(ROOT_DIR, name, 'frontend')
     if name == 'vscode':
-        _ensure_vscode_config(root_dir)
-    elif name == 'obsidian':
-        console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green]')
+        _ensure_vscode_config(ROOT_DIR)
     if name == 'none':
         console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.')
     else:
@@ -322,9 +296,9 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
 
 def cmd_frontend(args: argparse.Namespace) -> int:
     '''Open the configured frontend.'''
-    from banner import display_project_banner
-    display_project_banner(root_dir)
-    frontend = get_config_value(root_dir, 'frontend', default='none')
+    from podarcis.banner import display_project_banner
+    display_project_banner(ROOT_DIR)
+    frontend = get_config_value(ROOT_DIR, 'frontend', default='none')
     if frontend == 'none':
         return 0
     return cmd_open_tool()
@@ -332,14 +306,14 @@ def cmd_frontend(args: argparse.Namespace) -> int:
 
 def cmd_interactive(args: argparse.Namespace) -> int:
     '''Launch TUI interactive menu.'''
-    from interactive import interactive_config
-    interactive_config(root_dir)
+    from podarcis.interactive import interactive_config
+    interactive_config(ROOT_DIR)
     return 0
 
 
 def cmd_install(args: argparse.Namespace) -> int:
     '''Run bootstrap installer.'''
-    install_script = root_dir / '.podarcis' / 'install.py'
+    install_script = ROOT_DIR / '.podarcis' / 'install.py'
     py_bin = sys.executable
     return subprocess.run([py_bin, str(install_script)] + args.remaining_args).returncode
 
@@ -348,19 +322,19 @@ def cmd_clean(args: argparse.Namespace) -> int:
     '''Clean Python build artifacts and cache files.'''
     import shutil
     count = 0
-    for p in root_dir.rglob('__pycache__'):
+    for p in ROOT_DIR.rglob('__pycache__'):
         if p.is_dir():
             shutil.rmtree(p, ignore_errors=True)
             count += 1
-    for p in root_dir.rglob('*.pyc'):
+    for p in ROOT_DIR.rglob('*.pyc'):
         if p.is_file():
             p.unlink(missing_ok=True)
             count += 1
-    for p in root_dir.glob('.pytest_cache'):
+    for p in ROOT_DIR.glob('.pytest_cache'):
         if p.is_dir():
             shutil.rmtree(p, ignore_errors=True)
             count += 1
-    for p in root_dir.rglob('*.egg-info'):
+    for p in ROOT_DIR.rglob('*.egg-info'):
         if p.is_dir():
             shutil.rmtree(p, ignore_errors=True)
             count += 1
@@ -370,7 +344,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
     '''Remove global symlink, virtualenv, and build artefacts.'''
-    uninstall_script = root_dir / '.podarcis' / 'uninstall.py'
+    uninstall_script = ROOT_DIR / '.podarcis' / 'uninstall.py'
     py_bin = sys.executable
     extra: list[str] = []
     if getattr(args, 'yes', False):
@@ -391,15 +365,15 @@ def cmd_test(args: argparse.Namespace) -> int:
 
 def cmd_lint(args: argparse.Namespace) -> int:
     '''Run markdown link checker.'''
-    check_links = root_dir / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
+    check_links = ROOT_DIR / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
     py_bin = _get_python_bin()
-    targets = args.remaining_args if args.remaining_args else [str(root_dir)]
+    targets = args.remaining_args if args.remaining_args else [str(ROOT_DIR)]
     return subprocess.run([py_bin, str(check_links)] + targets).returncode
 
 
 def cmd_diagnose(args: argparse.Namespace) -> int:
     '''Display platform pain points and current logged issues.'''
-    diag_script = root_dir / '.agents' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
+    diag_script = ROOT_DIR / '.apm' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
     if not diag_script.exists():
         console.print('[bold red]Error:[/bold red] diagnose_session.py script not found.')
         return 1
@@ -415,7 +389,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     resolve_id, resolve_cat = getattr(args, 'resolve', None), getattr(args, 'resolve_category', None)
     if resolve_id or resolve_cat or getattr(args, 'clear', False):
         resolved = diag_mod.resolve_issues(
-            base_dir=root_dir, ids=[resolve_id] if resolve_id else (),
+            base_dir=ROOT_DIR, ids=[resolve_id] if resolve_id else (),
             category=resolve_cat or '', sweep=getattr(args, 'clear', False),
         )
         if not resolved:
@@ -428,10 +402,10 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     if log_sess:
         p = Path(log_sess)
         points = diag_mod.parse_transcript(p)
-        diag_mod.log_pain_points(points, base_dir=root_dir)
+        diag_mod.log_pain_points(points, base_dir=ROOT_DIR)
         console.print(f'[bold green]Parsed {p.name} and logged {len(points)} pain point(s).[/bold green]')
 
-    issues = diag_mod.get_active_issues(base_dir=root_dir)
+    issues = diag_mod.get_active_issues(base_dir=ROOT_DIR)
     if getattr(args, 'json', False):
         print(json.dumps(issues, indent=2))
         return 0
@@ -456,7 +430,7 @@ def cmd_research(args: argparse.Namespace) -> int:
     if 'research_mcp_server' in sys.modules:
         research_server = sys.modules['research_mcp_server']
     else:
-        res_script = root_dir / '.agents' / 'mcp' / 'research' / 'server.py'
+        res_script = ROOT_DIR / '.agents' / 'mcp' / 'research' / 'server.py'
         if not res_script.exists():
             console.print('[bold red]Error:[/bold red] research server module not found.')
             return 1
@@ -545,167 +519,80 @@ def cmd_research(args: argparse.Namespace) -> int:
 
 
 
-def cmd_menu(args: argparse.Namespace) -> int:
-    '''Nutrient targets, USDA food lookups, and cost-optimized menus.'''
-    from rich.table import Table
+def cmd_job_list(args: argparse.Namespace) -> int:
+    '''List discovered jobs, schedules, and status.'''
+    from podarcis.jobs import discover_jobs, scheduler
 
-    # menumaker imports stay inside each branch: pandas/scipy cost ~1s that
-    # every other subcommand avoids paying.
-    data_dir = Path(os.environ.get('MENUMAKER_DATA_DIR', podarcis_dir / 'menumaker' / 'data'))
-    food_csv, prices_csv = str(data_dir / 'food_data' / 'food_data.csv'), str(data_dir / 'mercadona.csv')
-
-    def emit(payload: dict, table: 'Table') -> int:
-        print(json.dumps(payload, indent=2)) if args.json else console.print(table)
+    discovered = discover_jobs(ROOT_DIR)
+    if getattr(args, 'json', False):
+        print(json.dumps(discovered, indent=2, default=str))
         return 0
 
-    if args.menu_action == 'intake':
-        from podarcis.menumaker.intake import compute_daily_intake
-        result = compute_daily_intake(args.age, args.gender, args.stage)
-        table = Table(title=f'Daily Intake Targets — {args.age}y {args.gender}, {args.stage}', border_style='cyan')
-        table.add_column('Nutrient', style='bold white')
-        table.add_column('Recommended', justify='right', style='green')
-        table.add_column('Tolerable', justify='right', style='yellow')
-        for n in result['nutrients']:
-            table.add_row(n['nutrient'], _num(n.get('recommended')), _num(n.get('tolerable')))
-        return emit(result, table)
-
-    if args.menu_action == 'food-search':
-        from podarcis.menumaker.food_db import load_food_db, search_foods
-        matches = search_foods(args.query, load_food_db(food_csv)).head(args.limit)
-        macros = ['Energy', 'Protein', 'Carbohydrate, by difference', 'Total lipid (fat)']
-        cols = [c for c in macros if c in matches.columns]
-        table = Table(title=f'Food Search: {args.query!r} ({len(matches)} shown)', border_style='cyan')
-        table.add_column('Food', style='bold white')
-        for c in cols:
-            table.add_column(c, justify='right')
-        for name in matches.index:
-            table.add_row(name, *(_num(matches.loc[name, c]) for c in cols))
-        return emit({'query': args.query, 'results': matches.to_dict('index')}, table)
-
-    if args.menu_action == 'food':
-        from podarcis.menumaker.food_db import load_food_db, get_food_nutrients
-        data = get_food_nutrients(args.name, load_food_db(food_csv))
-        table = Table(title=f"{data['name']} — per 100g", border_style='cyan')
-        table.add_column('Nutrient', style='bold white')
-        table.add_column('Amount', justify='right', style='green')
-        for k, v in sorted(data['nutrients'].items()):
-            table.add_row(k, _num(v))
-        return emit(data, table)
-
-    if args.menu_action == 'optimize':
-        from podarcis.menumaker.intake import compute_daily_intake
-        from podarcis.menumaker.optimizer import optimize_menu
-        result = optimize_menu(food_csv, compute_daily_intake(args.age, args.gender, args.stage), prices_csv)
-        if 'error' in result:
-            console.print(f"[bold red]Error:[/bold red] {result['error']}")
-            return 1
-        table = Table(
-            title=f"Optimal Daily Menu — {result['total_daily_cost_eur']:.4f} EUR/day, "
-                  f"{result['total_monthly_cost_eur']:.2f} EUR/month, {result['food_count']} foods",
-            border_style='cyan',
+    console.print('[bold #29b8db]Registered Jobs (.agents/jobs/*.yaml):[/bold #29b8db]\n')
+    if not discovered:
+        console.print('[dim]No jobs found in .agents/jobs/[/dim]')
+        return 0
+    for k, v in discovered.items():
+        st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
+        nxt = scheduler.next_elapse(v['schedule']) if v['enabled'] else ''
+        when = f' [dim]→ next {nxt}[/dim]' if nxt else ''
+        last = f' [dim](last run: {v["last_run"]})[/dim]' if v['last_run'] else ''
+        console.print(
+            f'  • {k:<20} [{st}] [magenta]{v["type"]}[/magenta] '
+            f'[cyan]({v["schedule"]})[/cyan]{when}{last}\n    [dim]{v["description"]}[/dim]\n'
         )
-        table.add_column('Food', style='bold white')
-        table.add_column('Grams/day', justify='right', style='green')
-        for food, grams in sorted(result['menu'].items(), key=lambda kv: -kv[1]):
-            table.add_row(food, f'{grams:.1f}')
-        return emit(result, table)
-
-    from podarcis.menumaker.pricing import price_menu
-    result = price_menu(json.loads(args.items_json), prices_csv)
-    totals = result['comparison']['totals']
-    table = Table(title='Menu Price Comparison', border_style='cyan')
-    table.add_column('Metric', style='bold white')
-    for shop in totals:
-        table.add_column(shop, justify='right', style='green')
-    for label, key in (('Daily (EUR)', 'total_price_eur'), ('Monthly (EUR)', 'total_monthly_eur')):
-        table.add_row(label, *(f'{totals[shop][key]:.2f}' for shop in totals))
-    return emit(result, table)
-
-
-def _num(value) -> str:
-    '''Format a nutrient amount, tolerating missing values and NaN.'''
-    return f'{value:.2f}' if isinstance(value, float) and value == value else str(value or '—')
-
-
-def cmd_job(args: argparse.Namespace) -> int:
-    '''Manage and execute modular Podarcis jobs (.agents/jobs/*.yaml).'''
-    from jobs import discover_jobs, set_job_status, run_job, scheduler
-    action = getattr(args, 'job_action', None) or 'list'
-    name = getattr(args, 'name', None)
-
-    if action == 'list':
-        discovered = discover_jobs(root_dir)
-        if getattr(args, 'json', False):
-            print(json.dumps(discovered, indent=2, default=str))
-            return 0
-        console.print('[bold #29b8db]Registered Jobs (.agents/jobs/*.yaml):[/bold #29b8db]\n')
-        if not discovered:
-            console.print('[dim]No jobs found in .agents/jobs/[/dim]')
-            return 0
-        for k, v in discovered.items():
-            st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
-            kind = f'[magenta]{v["type"]}[/magenta]'
-            nxt = scheduler.next_elapse(v['schedule']) if v['enabled'] else ''
-            when = f' [dim]→ next {nxt}[/dim]' if nxt else ''
-            last = f' [dim](last run: {v["last_run"]})[/dim]' if v['last_run'] else ''
-            console.print(
-                f'  • {k:<20} [{st}] {kind} [cyan]({v["schedule"]})[/cyan]{when}{last}'
-                f'\n    [dim]{v["description"]}[/dim]\n'
-            )
-        return 0
-
-    if action == 'enable':
-        if not name:
-            console.print('[bold red]Error:[/bold red] Specify job name to enable.')
-            return 1
-        ok, msg = set_job_status(root_dir, name, True)
-        if ok:
-            console.print(f'[bold green]✓ {msg}[/bold green]')
-            return 0
-        console.print(f'[bold red]Error:[/bold red] {msg}')
-        return 1
-
-    if action == 'disable':
-        if not name:
-            console.print('[bold red]Error:[/bold red] Specify job name to disable.')
-            return 1
-        ok, msg = set_job_status(root_dir, name, False)
-        if ok:
-            console.print(f'[yellow]✓ {msg}[/yellow]')
-            return 0
-        console.print(f'[bold red]Error:[/bold red] {msg}')
-        return 1
-
-    if action == 'run':
-        if not name:
-            console.print('[bold red]Error:[/bold red] Specify job name to run.')
-            return 1
-        res = run_job(root_dir, name, dry_run=getattr(args, 'dry_run', False))
-        if res.get('status') == 'error':
-            console.print(f'[bold red]Error:[/bold red] {res.get("message", "")}')
-            return 1
-        return 0
-
-    if action == 'logs':
-        if not name:
-            console.print('[bold red]Error:[/bold red] Specify job name.')
-            return 1
-        unit = f'{scheduler.unit_name(root_dir, name)}.service'
-        return subprocess.run(
-            ['journalctl', '--user', '-u', unit, '-n',
-             str(getattr(args, 'lines', 50)), '--no-pager'],
-        ).returncode
-
     return 0
+
+
+def _cmd_job_set_status(args: argparse.Namespace, enable: bool) -> int:
+    from podarcis.jobs import set_job_status
+
+    ok, msg = set_job_status(ROOT_DIR, args.name, enable)
+    if ok:
+        console.print(f'[{"bold green" if enable else "yellow"}]✓ {msg}[/]')
+        return 0
+    console.print(f'[bold red]Error:[/bold red] {msg}')
+    return 1
+
+
+def cmd_job_enable(args: argparse.Namespace) -> int:
+    '''Enable a job and install its systemd timer.'''
+    return _cmd_job_set_status(args, True)
+
+
+def cmd_job_disable(args: argparse.Namespace) -> int:
+    '''Disable a job and remove its systemd timer.'''
+    return _cmd_job_set_status(args, False)
+
+
+def cmd_job_run(args: argparse.Namespace) -> int:
+    '''Execute a job immediately by name.'''
+    from podarcis.jobs import run_job
+
+    res = run_job(ROOT_DIR, args.name, dry_run=args.dry_run)
+    if res.get('status') == 'error':
+        console.print(f'[bold red]Error:[/bold red] {res.get("message", "")}')
+        return 1
+    return 0
+
+
+def cmd_job_logs(args: argparse.Namespace) -> int:
+    '''Show journald output for a job.'''
+    from podarcis.jobs import scheduler
+
+    unit = f'{scheduler.unit_name(ROOT_DIR, args.name)}.service'
+    return subprocess.run(
+        ['journalctl', '--user', '-u', unit, '-n', str(args.lines), '--no-pager'],
+    ).returncode
 
 
 def cmd_open_tool() -> int:
     '''Open the configured frontend tool at the current directory.'''
-    name = get_config_value(root_dir, 'frontend', default='vscode')
-    cwd = str(root_dir)
+    name = get_config_value(ROOT_DIR, 'frontend', default='vscode')
+    cwd = str(ROOT_DIR)
 
     if name.lower() == 'vscode':
-        _ensure_vscode_config(root_dir)
+        _ensure_vscode_config(ROOT_DIR)
 
     command = FRONTENDS.get(name.lower(), name)
     if not command:
@@ -725,8 +612,16 @@ def cmd_open_tool() -> int:
     return 0
 
 
+def cmd_ingest(args: argparse.Namespace) -> int:
+    '''Run the Google Drive delta ingestion job.'''
+    from podarcis.jobs import run_job
+
+    res = run_job(ROOT_DIR, 'gdrive_sync', dry_run=args.dry_run)
+    return 0 if res.get('status') != 'error' else 1
+
+
 def main() -> None:
-    '''Main entry point for podarcis CLI.'''
+    '''Parse arguments and dispatch to the handler each subparser declares.'''
     parser = argparse.ArgumentParser(
         prog='podarcis',
         description='Podarcis OKF v0.2 Research Agent engine & CLI configuration tool',
@@ -736,238 +631,126 @@ def main() -> None:
     # here — but an editable install caches the version at install time, so
     # importlib.metadata kept reporting whatever was current when `pip install -e`
     # last ran, defeating the check it exists to serve.
-    _pyproject = Path(__file__).resolve().parent.parent / 'pyproject.toml'
-    _version = None
-    if _pyproject.exists():
-        try:
-            import tomllib  # Python 3.11+
-        except ImportError:
-            import tomli as tomllib  # type: ignore[no-redef]
-        with open(_pyproject, 'rb') as _f:
-            _version = tomllib.load(_f)['project']['version']
-    if _version is None:
-        try:
-            _version = version('podarcis')
-        except PackageNotFoundError:
-            _version = 'unknown'
-    parser.add_argument('-v', '--version', action='version', version=f'podarcis {_version}')
+    parser.add_argument(
+        '-v', '--version', action='version',
+        version=f'podarcis {load_version_info(ROOT_DIR)[0]}',
+    )
     parser.add_argument('-i', '--interactive', action='store_true', help='Launch interactive TUI menu')
+    parser.set_defaults(func=cmd_frontend)
 
-    subparsers = parser.add_subparsers(dest='subcommand', title='Subcommands', help='Action to perform')
+    sub = parser.add_subparsers(dest='subcommand', title='Subcommands', help='Action to perform')
 
-    # status
-    status_parser = subparsers.add_parser('status', help='Display status of MCP servers, skills, agents, jobs, and repos')
-    status_parser.add_argument('--json', action='store_true', help='Output status in JSON format')
+    def add(name, help_text, handler, *, parent=sub, **kwargs):
+        '''Register a subparser bound to its handler.'''
+        p = parent.add_parser(name, help=help_text, **kwargs)
+        p.set_defaults(func=handler)
+        return p
 
-    # job
-    j_parser = subparsers.add_parser('job', help='Manage and execute modular scheduled jobs (.agents/jobs/*.yaml)')
-    j_sub = j_parser.add_subparsers(dest='job_action', help='Job action')
+    # ── status ────────────────────────────────────────────────────────────
+    add('status', 'Display status of MCP tool modules, skills, agents, jobs, and repos',
+        cmd_status).add_argument('--json', action='store_true', help='Output status in JSON format')
 
-    jl = j_sub.add_parser('list', help='List discovered jobs, schedules, and status')
-    jl.add_argument('--json', action='store_true', help='Output status in JSON format')
-
-    jr = j_sub.add_parser('run', help='Execute job immediately by name')
-    jr.add_argument('name', nargs='?', help='Job name (e.g. gdrive_sync, audit_wiki)')
+    # ── job ───────────────────────────────────────────────────────────────
+    job_p = add('job', 'Manage and execute scheduled jobs (.agents/jobs/*.yaml)', cmd_job_list)
+    job_sub = job_p.add_subparsers(dest='job_action', help='Job action')
+    add('list', 'List discovered jobs, schedules, and status', cmd_job_list, parent=job_sub) \
+        .add_argument('--json', action='store_true', help='Output status in JSON format')
+    jr = add('run', 'Execute job immediately by name', cmd_job_run, parent=job_sub)
+    jr.add_argument('name', help='Job name (e.g. gdrive_sync, audit_wiki)')
     jr.add_argument('--dry-run', action='store_true', help='Preview execution without side effects')
-
-    je = j_sub.add_parser('enable', help='Enable job and install its systemd timer')
-    je.add_argument('name', help='Job name')
-
-    jd = j_sub.add_parser('disable', help='Disable job and remove its systemd timer')
-    jd.add_argument('name', help='Job name')
-
-    jlog = j_sub.add_parser('logs', help='Show journald output for a job')
+    add('enable', 'Enable job and install its systemd timer', cmd_job_enable, parent=job_sub) \
+        .add_argument('name', help='Job name')
+    add('disable', 'Disable job and remove its systemd timer', cmd_job_disable, parent=job_sub) \
+        .add_argument('name', help='Job name')
+    jlog = add('logs', 'Show journald output for a job', cmd_job_logs, parent=job_sub)
     jlog.add_argument('name', help='Job name')
     jlog.add_argument('-n', '--lines', type=int, default=50, help='Lines to show')
 
-    # config
-    config_parser = subparsers.add_parser('config', help='Configure components and repositories')
-    config_sub = config_parser.add_subparsers(dest='config_action', help='Config action')
+    # ── repo ──────────────────────────────────────────────────────────────
+    def add_repo_config(parent):
+        '''The repo-configuration flags, shared by `repo config` and `config repo`.'''
+        rc = add('repo' if parent is config_sub else 'config',
+                 'Configure repository Git remotes or local paths',
+                 cmd_config_repo, parent=parent)
+        rc.add_argument('repo_name', nargs='?', help='Repository name (wiki, workspace, sources, …)')
+        rc.add_argument('--url', help='Remote Git URL or repository path')
+        rc.add_argument('--path', help='Local directory path or target path')
+        rc.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
 
-    # config list
-    cfg_list = config_sub.add_parser('list', help='List status of components and repositories')
-    cfg_list.add_argument('--json', action='store_true', help='Output status in JSON format')
+    repo_p = add('repo', 'Manage and synchronize workspace repositories', cmd_repo_status,
+                 aliases=['repos'])
+    repo_sub = repo_p.add_subparsers(dest='repo_action', help='Repository action')
+    add('status', 'Display Git and sync status across all workspace repositories',
+        cmd_repo_status, parent=repo_sub) \
+        .add_argument('--json', action='store_true', help='Output repository status in JSON format')
+    add('sync', 'Synchronize workspace repositories (pull git remotes & ingest gdrive deltas)',
+        cmd_repo_sync, parent=repo_sub, aliases=['pull'])
+    rp = add('push', 'Push local commits to remotes for workspace repositories',
+             cmd_repo_push, parent=repo_sub)
+    rp.add_argument('--commit', '-c', action='store_true', help='Commit uncommitted local changes before pushing')
+    rp.add_argument('--message', '-m', default='chore: sync workspace changes', help='Commit message')
 
-    # config enable
-    cfg_enable = config_sub.add_parser('enable', help='Enable an MCP tool module')
-    # No argparse `choices`: 'skill'/'agent' reach the handler so it can explain
-    # why they are no longer toggleable instead of erroring out opaquely.
-    cfg_enable.add_argument('type', metavar='mcp', help='Component type (mcp)')
-    cfg_enable.add_argument('name', help='Tool module name')
+    # ── config ────────────────────────────────────────────────────────────
+    config_p = add('config', 'Configure components and repositories', cmd_interactive)
+    config_sub = config_p.add_subparsers(dest='config_action', help='Config action')
+    add('list', 'List status of components and repositories', cmd_status, parent=config_sub) \
+        .add_argument('--json', action='store_true', help='Output status in JSON format')
+    for verb, handler in (('enable', cmd_config_enable), ('disable', cmd_config_disable)):
+        add(verb, f'{verb.capitalize()} an MCP tool module', handler, parent=config_sub) \
+            .add_argument('name', help='Tool module name (skills and personas are not toggleable)')
+    add_repo_config(config_sub)
+    add_repo_config(repo_sub)
+    add('frontend', 'Set the frontend tool (vscode, obsidian, none)',
+        cmd_config_frontend, parent=config_sub) \
+        .add_argument('frontend_name', choices=list(FRONTENDS),
+                      metavar='{vscode,obsidian,none}', help='Frontend name')
+    add('interactive', 'Launch interactive TUI menu', cmd_interactive, parent=config_sub)
 
-    # config disable
-    cfg_disable = config_sub.add_parser('disable', help='Disable an MCP tool module')
-    cfg_disable.add_argument('type', metavar='mcp', help='Component type (mcp)')
-    cfg_disable.add_argument('name', help='Tool module name')
+    # ── lifecycle ─────────────────────────────────────────────────────────
+    add('frontend', 'Open the configured frontend tool', cmd_frontend)
+    add('install', 'Run bootstrap installer', cmd_install) \
+        .add_argument('remaining_args', nargs=argparse.REMAINDER)
+    add('clean', 'Clean Python build artifacts and cache files', cmd_clean)
+    un = add('uninstall', 'Remove global symlink, virtualenv, and build artefacts', cmd_uninstall)
+    un.add_argument('-y', '--yes', action='store_true', help='Skip all confirmations')
+    un.add_argument('--dry-run', action='store_true', dest='dry_run', help='Preview without removing anything')
+    un.add_argument('--purge', action='store_true', help='Also remove .podarcis/config.yaml')
+    add('test', 'Run pytest suite', cmd_test).add_argument('remaining_args', nargs=argparse.REMAINDER)
+    add('lint', 'Run link integrity check', cmd_lint).add_argument('remaining_args', nargs=argparse.REMAINDER)
 
-    # config repo
-    cfg_repo = config_sub.add_parser('repo', help='Configure repository Git remotes or local paths')
-    cfg_repo.add_argument('repo_name', nargs='?', help='Repository name (wiki, workspace, user, sources, etc.)')
-    cfg_repo.add_argument('--url', help='Remote Git URL or repository path')
-    cfg_repo.add_argument('--path', help='Local directory path or target path')
-    cfg_repo.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
+    # ── diagnose ──────────────────────────────────────────────────────────
+    diag = add('diagnose', 'Display current platform pain points and logged issues', cmd_diagnose)
+    diag.add_argument('--json', action='store_true', help='Output issues in JSON format')
+    diag.add_argument('--clear', action='store_true', help='Resolve every unresolved pain point')
+    diag.add_argument('--resolve', type=str, metavar='ID', help='Mark a specific pain point ID as resolved')
+    diag.add_argument('--resolve-category', type=str, metavar='CAT', help='Resolve every unresolved pain point in a category')
+    diag.add_argument('--log-session', type=str, metavar='PATH', help='Parse and log pain points for a transcript file')
 
-
-    # config frontend
-    cfg_frontend = config_sub.add_parser('frontend', help='Set the frontend tool (vscode, obsidian, none)')
-    cfg_frontend.add_argument('frontend_name', choices=list(FRONTENDS), metavar='{vscode,obsidian,none}', help='Frontend name')
-
-    # config interactive
-    config_sub.add_parser('interactive', help='Launch interactive TUI menu')
-
-    # repo / repos
-    repo_parser = subparsers.add_parser('repo', aliases=['repos'], help='Manage and synchronize workspace repositories')
-    repo_sub = repo_parser.add_subparsers(dest='repo_action', help='Repository action')
-    repo_st = repo_sub.add_parser('status', help='Display Git and sync status across all workspace repositories')
-    repo_st.add_argument('--json', action='store_true', help='Output repository status in JSON format')
-
-    repo_sync = repo_sub.add_parser('sync', aliases=['pull'], help='Synchronize workspace repositories (pull git remotes & ingest gdrive deltas)')
-
-    repo_push = repo_sub.add_parser('push', help='Push local commits to remotes for workspace repositories')
-    repo_push.add_argument('--commit', '-c', action='store_true', help='Commit uncommitted local changes before pushing')
-    repo_push.add_argument('--message', '-m', default='chore: sync workspace changes', help='Commit message')
-
-    repo_cfg = repo_sub.add_parser('config', help='Configure repository Git remotes or local paths')
-    repo_cfg.add_argument('repo_name', nargs='?', help='Repository name (wiki, workspace, user, sources, etc.)')
-    repo_cfg.add_argument('--url', help='Remote Git URL or repository path')
-    repo_cfg.add_argument('--path', help='Local directory path or target path')
-    repo_cfg.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
-
-    # sync (top-level)
-
-    # frontend
-    subparsers.add_parser('frontend', help='Open the configured frontend tool')
-
-
-
-    # install & reinstall
-    install_parser = subparsers.add_parser('install', help='Run bootstrap installer')
-    install_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
-
-    # clean
-    clean_parser = subparsers.add_parser('clean', help='Clean Python build artifacts and cache files')
-
-    # uninstall
-    uninstall_parser = subparsers.add_parser(
-        'uninstall',
-        help='Remove global symlink, virtualenv, and build artefacts',
-    )
-    uninstall_parser.add_argument('-y', '--yes', action='store_true', help='Skip all confirmations')
-    uninstall_parser.add_argument('--dry-run', action='store_true', dest='dry_run', help='Preview without removing anything')
-    uninstall_parser.add_argument('--purge', action='store_true', help='Also remove .podarcis/config.yaml')
-
-    # test
-    test_parser = subparsers.add_parser('test', help='Run pytest suite')
-    test_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
-
-    # lint
-    lint_parser = subparsers.add_parser('lint', help='Run link integrity check')
-    lint_parser.add_argument('remaining_args', nargs=argparse.REMAINDER)
-
-    # diagnose
-    diag_parser = subparsers.add_parser('diagnose', help='Display current platform pain points and logged issues')
-    diag_parser.add_argument('--json', action='store_true', help='Output issues in JSON format')
-    diag_parser.add_argument('--clear', action='store_true', help='Resolve every unresolved pain point')
-    diag_parser.add_argument('--resolve', type=str, metavar='ID', help='Mark a specific pain point ID as resolved')
-    diag_parser.add_argument('--resolve-category', type=str, metavar='CAT', help='Resolve every unresolved pain point in a category')
-    diag_parser.add_argument('--log-session', type=str, metavar='PATH', help='Parse and log pain points for a transcript file')
-
-    # menu
-    menu_parser = subparsers.add_parser('menu', help='Nutrient targets, USDA food lookups, and cost-optimized menus')
-    menu_parser.add_argument('--json', action='store_true', help='Output raw result in JSON format')
-    menu_sub = menu_parser.add_subparsers(dest='menu_action', required=True, help='Menu action')
-
-    for name, helptext in (('intake', 'Compute daily nutrient targets (RDA and upper limits)'),
-                           ('optimize', 'Solve for the cheapest foods meeting all daily requirements')):
-        sp = menu_sub.add_parser(name, help=helptext)
-        sp.add_argument('--age', type=int, required=True, help='Age in years')
-        sp.add_argument('--gender', required=True, choices=['male', 'female'], help='Biological gender')
-        sp.add_argument('--stage', default='adult', choices=['adult', 'child', 'pregnancy', 'lactation'], help='Life stage')
-
-    m_search = menu_sub.add_parser('food-search', help='Search the USDA food database by name')
-    m_search.add_argument('query', help='Food name substring (case-insensitive)')
-    m_search.add_argument('--limit', type=int, default=10, help='Maximum results (default 10)')
-
-    menu_sub.add_parser('food', help='Full nutrient profile for one food').add_argument('name', help='Exact food name')
-
-    m_price = menu_sub.add_parser('price', help='Price a menu across Mercadona and Dia')
-    m_price.add_argument('--items-json', required=True, metavar='JSON', help='Menu as JSON, e.g. \'{"Oats, raw": 100}\'')
-
-    # research
-    research_parser = subparsers.add_parser('research', help='Search peer-reviewed literature and ingest papers into sources/')
-    research_sub = research_parser.add_subparsers(dest='research_action', help='Research action')
-
-    r_search = research_sub.add_parser('search', help='Search literature across PubMed, OpenAlex, arXiv, and Semantic Scholar')
+    # ── research ──────────────────────────────────────────────────────────
+    research_p = add('research', 'Search peer-reviewed literature and ingest papers into sources/',
+                     cmd_research)
+    research_sub = research_p.add_subparsers(dest='research_action', help='Research action')
+    r_search = add('search', 'Search literature across PubMed, OpenAlex, arXiv, and Semantic Scholar',
+                   cmd_research, parent=research_sub)
     r_search.add_argument('query', help='Search query or topic')
     r_search.add_argument('--limit', type=int, default=5, help='Maximum results (default 5)')
-    r_search.add_argument('--provider', default='all', choices=['all', 'pubmed', 'openalex', 'arxiv', 'semanticscholar'], help='Provider filter')
+    r_search.add_argument('--provider', default='all',
+                          choices=['all', 'pubmed', 'openalex', 'arxiv', 'semanticscholar'],
+                          help='Provider filter')
     r_search.add_argument('--json', action='store_true', help='Output search results in JSON format')
-
-    r_ingest = research_sub.add_parser('ingest', help='Fetch PDF, extract text, and ingest paper into sources/literature/')
+    r_ingest = add('ingest', 'Fetch PDF, extract text, and ingest paper into sources/literature/',
+                   cmd_research, parent=research_sub)
     r_ingest.add_argument('paper_id', help='Paper ID (DOI:xxx, openalex:xxx, pmid:xxx, arXiv:xxx, or raw title/hash)')
     r_ingest.add_argument('--domain', required=True, help='Target domain directory under sources/literature/')
     r_ingest.add_argument('--name', help='Custom snake_case slug directory name')
     r_ingest.add_argument('--json', action='store_true', help='Output ingestion result in JSON format')
 
-    # ingest
-    ingest_parser = subparsers.add_parser('ingest', help='Run automated source ingestion (GDrive API delta check)')
-    ingest_parser.add_argument('--gdrive', action='store_true', help='Run Google Drive API delta ingestion')
-    ingest_parser.add_argument('--dry-run', action='store_true', help='Scan deltas without modifying files')
+    # ── ingest ────────────────────────────────────────────────────────────
+    ing = add('ingest', 'Run automated source ingestion (GDrive API delta check)', cmd_ingest)
+    ing.add_argument('--dry-run', action='store_true', help='Scan deltas without modifying files')
 
     args = parser.parse_args()
-
-    if args.interactive:
-        sys.exit(cmd_interactive(args))
-
-    if args.subcommand in ('repo', 'repos'):
-        sys.exit(cmd_repo(args))
-    elif args.subcommand in ('job',):
-        sys.exit(cmd_job(args))
-    elif args.subcommand == 'menu':
-        sys.exit(cmd_menu(args))
-    elif args.subcommand == 'research':
-        sys.exit(cmd_research(args))
-    elif args.subcommand == 'status':
-        sys.exit(cmd_status(args))
-
-    elif args.subcommand == 'ingest':
-        from jobs import run_job
-        res = run_job(root_dir, 'gdrive_sync', dry_run=getattr(args, 'dry_run', False))
-        sys.exit(0 if res.get('status') != 'error' else 1)
-    elif args.subcommand == 'config':
-        if args.config_action == 'list':
-            sys.exit(cmd_status(args))
-        elif args.config_action == 'enable':
-            sys.exit(cmd_config_enable(args))
-        elif args.config_action == 'disable':
-            sys.exit(cmd_config_disable(args))
-        elif args.config_action == 'repo':
-            sys.exit(cmd_config_repo(args))
-        elif args.config_action == 'frontend':
-            sys.exit(cmd_config_frontend(args))
-        elif args.config_action == 'interactive':
-            sys.exit(cmd_interactive(args))
-        else:
-            sys.exit(cmd_interactive(args))
-
-    elif args.subcommand == 'frontend':
-        sys.exit(cmd_frontend(args))
-    elif args.subcommand == 'install':
-        sys.exit(cmd_install(args))
-    elif args.subcommand == 'clean':
-        sys.exit(cmd_clean(args))
-    elif args.subcommand == 'uninstall':
-        sys.exit(cmd_uninstall(args))
-    elif args.subcommand == 'test':
-        sys.exit(cmd_test(args))
-    elif args.subcommand == 'lint':
-        sys.exit(cmd_lint(args))
-    elif args.subcommand == 'diagnose':
-        sys.exit(cmd_diagnose(args))
-    else:
-        sys.exit(cmd_frontend(args))
-
-
+    sys.exit(cmd_interactive(args) if args.interactive else args.func(args))
 
 
 if __name__ == '__main__':

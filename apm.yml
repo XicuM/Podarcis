@@ -1,0 +1,39 @@
+name: podarcis
+version: 10.0.0
+description: OKF v0.2 research agent engine — consumer manifest for external agent context
+license: MIT
+
+# Podarcis authors its own personas and skills under .agents/; this manifest is
+# strictly for context it does NOT author. Anything listed here is third-party
+# and subject to the policy in apm-policy.yml.
+targets:
+  - claude
+  - opencode
+
+dependencies:
+  apm:
+    - git: https://github.com/XicuM/market-skill.git
+    - git: https://github.com/XicuM/menumaker.git
+    - git: ssh://git@gitlab-internal.bsc.es/esantigo/overleaf-suggest.git
+      type: gitlab
+  mcp: []
+
+# APM deploys skill files; it does not manage language runtimes. Each package
+# below ships a CLI its SKILL.md tells the model to invoke, so the binary has to
+# exist or the skill is a dead letter. Installing straight from the git URL
+# rather than a checkout path keeps this independent of where APM stages
+# dependencies.
+#
+# A failing lifecycle script does NOT fail `apm install`, so this is best-effort
+# by design — `podarcis status` is what verifies the entry points actually
+# resolve. Default timeout is 30s, far too short for a cold pandas/scipy build.
+lifecycle:
+  post-install:
+    - type: command
+      description: "Install the `market` CLI that market-skill's SKILL.md invokes"
+      bash: "uv pip install --python .venv git+ssh://git@github.com/XicuM/market-skill.git"
+      timeoutSec: 300
+    - type: command
+      description: "Install the `menumaker` CLI that menumaker's SKILL.md invokes"
+      bash: "uv pip install --python .venv git+ssh://git@github.com/XicuM/menumaker.git"
+      timeoutSec: 600

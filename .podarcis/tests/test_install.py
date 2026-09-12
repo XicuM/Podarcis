@@ -2,8 +2,8 @@
 
 from pathlib import Path
 import pytest
-from components import run_mcp_setup
-from install import (
+from podarcis.components import run_mcp_setup
+from podarcis.install import (
     _create_podarcis_yaml,
     _configure_global_command,
     _hr, _say
@@ -12,7 +12,7 @@ from install import (
 
 def test_create_podarcis_yaml(tmp_path, monkeypatch):
     '''Verify _create_podarcis_yaml creates default config.yaml.'''
-    import install
+    from podarcis import install
     monkeypatch.setattr(install, 'root', tmp_path)
 
     pod_dir = tmp_path / '.podarcis'
@@ -53,7 +53,7 @@ def test_setup_wiki_execution(tmp_path, monkeypatch):
 
 def test_configure_global_command_no(tmp_path, monkeypatch):
     '''Verify _configure_global_command when user selects no.'''
-    import install
+    from podarcis import install
     monkeypatch.setattr(install, 'root', tmp_path)
     monkeypatch.setattr(install, '_select', lambda prompt, choices, default=None, qmark='?': 'no')
 

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# AGENTS.md §4: every commit touching platform code must bump pyproject version,
+# so drift between instances is visible via `podarcis --version`.
+#
+# The rule was previously unenforced and followed about two commits in three.
+# Install with: git config core.hooksPath .githooks (podarcis install does this).
+set -u
+
+staged=$(git diff --cached --name-only)
+platform=$(echo "$staged" | grep -E '^(\.podarcis/|\.agents/|pyproject\.toml$)' || true)
+[ -z "$platform" ] && exit 0
+
+if ! echo "$staged" | grep -qx 'pyproject.toml'; then
+    bumped=""
+else
+    bumped=$(git diff --cached -U0 pyproject.toml | grep -E '^\+version = ' || true)
+fi
+
+if [ -z "$bumped" ]; then
+    echo "pre-commit: this commit touches platform code:" >&2
+    echo "$platform" | sed 's/^/  /' >&2
+    echo >&2
+    echo "AGENTS.md requires bumping 'version' in pyproject.toml — patch for fixes," >&2
+    echo "minor for features, major for breaking changes. Bump it and stage the file." >&2
+    echo "Override for a genuine exception with: git commit --no-verify" >&2
+    exit 1
+fi
+exit 0

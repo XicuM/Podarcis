@@ -2,21 +2,20 @@
 
 import datetime
 from pathlib import Path
-from common import set_state_value, load_yaml
-from console import console
+from podarcis.common import get_config_value, set_config_value
+from podarcis.console import console
 
 
 def get_last_sync(root_dir: Path) -> str:
-    '''Retrieve last GDrive synchronization timestamp from .podarcis/state.yaml.'''
-    st = load_yaml(root_dir / '.podarcis' / 'state.yaml')
-    return st.get('gdrive_sync', {}).get('last_sync', '')
+    '''Retrieve last GDrive synchronization timestamp from .podarcis/config.yaml.'''
+    return get_config_value(root_dir, 'gdrive_sync', 'last_sync')
 
 
 def update_last_sync(root_dir: Path, timestamp: str | None = None) -> str:
-    '''Persist last GDrive synchronization timestamp into .podarcis/state.yaml.'''
+    '''Persist last GDrive synchronization timestamp into .podarcis/config.yaml.'''
     if timestamp is None:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    set_state_value(root_dir, timestamp, 'gdrive_sync', 'last_sync')
+    set_config_value(root_dir, timestamp, 'gdrive_sync', 'last_sync')
     return timestamp
 
 
@@ -33,10 +32,10 @@ def build_gdrive_query(last_sync: str, folder_id: str = '') -> str:
 def run_gdrive_ingestion(root_dir: Path, dry_run: bool = False) -> dict:
     '''Execute automated GDrive API delta check and trigger ingestion pipeline.
 
-    1. Reads last_sync from .podarcis/state.yaml
+    1. Reads last_sync from .podarcis/config.yaml
     2. Builds single GDrive API query (modifiedTime > 'last_sync')
     3. If new/updated files exist, ingests into wiki/ and runs verification
-    4. Updates last_sync timestamp in .podarcis/state.yaml
+    4. Updates last_sync timestamp in .podarcis/config.yaml
     '''
     last_sync = get_last_sync(root_dir)
     query = build_gdrive_query(last_sync)
@@ -56,7 +55,7 @@ def run_gdrive_ingestion(root_dir: Path, dry_run: bool = False) -> dict:
 
     # Record sync execution timestamp
     new_sync_ts = update_last_sync(root_dir)
-    console.print(f'[bold green]✓ Synchronization completed. New last_sync timestamp set in state.yaml: {new_sync_ts}[/bold green]')
+    console.print(f'[bold green]✓ Synchronization completed. New last_sync timestamp set in config.yaml: {new_sync_ts}[/bold green]')
 
     return {
         'status': 'success',

@@ -1,8 +1,10 @@
 # Podarcis MCP Servers
 
-Five domain servers providing tools and resources to Podarcis agents.
+Four domain servers providing tools and resources to Podarcis agents.
 
-They are **not** run standalone. The `podarcis-mcp` gateway (`.podarcis/gateway/`) loads each `server.py`, reads its `_tool_manager`, and rebinds every tool onto one unified `podarcis` MCP server — so agents see a single flat tool surface and the host needs exactly one `mcpServers` entry. `.podarcis/gateway/router.py` decides which modules bind: `DEFAULT_MCP_MODULES` is the git-tracked baseline, and the `mcp_modules:` section of `.podarcis/config.yaml` overrides it per instance.
+They are **not** run standalone. The `podarcis-mcp` gateway (`.podarcis/gateway/`) loads each `server.py`, reads its `_tool_manager`, and rebinds every tool onto one unified `podarcis` MCP server — so agents see a single flat tool surface and the host needs exactly one `mcpServers` entry.
+
+**A module is its `server.py`.** `router.discover_modules()` globs `.agents/mcp/*/server.py`; whatever it finds is bound unless the `mcp_modules:` section of `.podarcis/config.yaml` explicitly disables it. There is no registry to add a module to — the router used to keep two hardcoded ones (`MODULE_PATHS` and `DEFAULT_MCP_MODULES`) next to a third independent glob in `components.discover_components`, and a new module would appear in `podarcis status` while binding nowhere.
 
 ## Servers Overview
 
@@ -11,7 +13,6 @@ They are **not** run standalone. The `podarcis-mcp` gateway (`.podarcis/gateway/
 | **wiki-mcp** | Knowledge base search, publishing, and linting | `wiki/server.py` |
 | **research-mcp** | Academic literature discovery and ingestion | `research/server.py` |
 | **diagnostics-mcp** | Platform pain-point logging | `diagnostics/server.py` |
-| **market-mcp** | Batched Yahoo Finance quotes, history, fundamentals | `market/server.py` |
 
 ## Configuration
 
@@ -21,15 +22,15 @@ One entry, at the repository root (`.mcp.json`):
 {
   "mcpServers": {
     "podarcis": {
-      "command": "/absolute/path/to/.venv/bin/podarcis-mcp",
-      "args": ["--config", "/absolute/path/to/.podarcis/config.yaml"],
-      "env": { "PROJECT_ROOT": "/absolute/path/to/Podarcis" }
+      "command": "/absolute/path/to/.venv/bin/podarcis-mcp"
     }
   }
 }
 ```
 
-Dependencies install from the project root: `.venv/bin/pip install -e .`
+Nothing else: the server walks up to `AGENTS.md` to find the project root and derives `.podarcis/config.yaml` from it, so the `--config` argument and `PROJECT_ROOT` env var only restated what it already knows.
+
+Dependencies install from the project root: `.venv/bin/pip install -e .`. `pyproject.toml` is the only dependency declaration — the per-module `requirements.txt` files are gone, and they contradicted it.
 
 ## Components
 
@@ -70,4 +71,4 @@ Dependencies install from the project root: `.venv/bin/pip install -e .`
 - **No Fabrication**: `literature_search` returns empty lists if no results are found; never hallucinates papers.
 - **Strict Ingestion**: `literature_download` halts on failure and cleans up; agents must provide PDFs manually (`local:<path>`) if open-access fetching fails. It only ever accepts a PDF the server actually served — never a rendered HTML page.
 - **Don't duplicate the harness**: A tool or resource earns its place only by doing something the agent's native tools cannot. Directory listings, file reads, and literal-string search do not qualify.
-- **Don't duplicate the CLI**: The bound surface is exactly what a Bash-less agent job (`.podarcis/jobs/agent.py`) can reach, enforced by `test_mcp_surface_is_exactly_the_bash_less_job_surface`. Anything a human runs around a task belongs in `podarcis`, not here. The menumaker library moved to `.podarcis/menumaker/` (imported as `podarcis.menumaker`) when `podarcis menu` took over from `menumaker-mcp`.
+- **Don't duplicate the CLI**: The bound surface is exactly what a Bash-less agent job (`.podarcis/jobs/agent.py`) can reach, enforced by `test_mcp_surface_is_exactly_the_bash_less_job_surface`. Anything a human runs around a task belongs in `podarcis`, not here. Domain tooling is neither a bound tool nor a subcommand: `menumaker` and `market` are external skills installed through APM, each with its own CLI.

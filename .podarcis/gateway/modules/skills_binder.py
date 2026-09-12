@@ -1,10 +1,10 @@
 '''Skills binder for Podarcis MCP Gateway.
 
-Exposes enabled skills from .agents/skills/ as MCP Resources.
+Exposes enabled skills from .apm/skills/ as MCP Resources.
 
 Like personas, skills are loaded by the harness natively — Claude Code reads
-.claude/skills/, OpenCode reads .opencode/skills/, and both resolve to this same
-.agents/skills/ directory. The resource below is a read-only fallback for clients
+.claude/skills/, OpenCode reads .opencode/skills/, and `apm install` deploys this
+same .apm/skills/ source into both. The resource below is a read-only fallback for clients
 with no native skill mechanism; it costs nothing until something reads it.
 
 Deliberately NOT registered here:
@@ -21,23 +21,32 @@ Deliberately NOT registered here:
 '''
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+logger = logging.getLogger('podarcis.gateway.skills')
 
-def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
-    '''Discover and register enabled skills as MCP resources.'''
-    skills_dir = root / '.agents' / 'skills'
+
+def register(mcp, root: Path, config_section: dict | None = None) -> list[str]:
+    '''Register every shipped skill as an MCP resource; return what was bound.
+
+    `config_section` is the `skills:` block of config.yaml, an exclusion list —
+    a skill absent from it is enabled.
+    '''
+    skills_dir = root / '.apm' / 'skills'
     if not skills_dir.exists():
-        return
+        return []
 
-    from components import is_skill_enabled
+    from podarcis.components import is_skill_enabled
+    from podarcis.gateway.router import is_enabled
 
+    bound = []
     for skill_path in sorted(skills_dir.iterdir()):
         if not skill_path.is_dir():
             continue
 
         skill_name = skill_path.name
-        if enabled_skills is not None and skill_name not in enabled_skills:
+        if not is_enabled(config_section, skill_name):
             continue
 
         if not is_skill_enabled(skill_path):
@@ -59,5 +68,10 @@ def register(mcp, root: Path, enabled_skills: set[str] | None = None) -> None:
             mcp.resource(f'podarcis://skills/{skill_name}')(
                 _make_resource_fn(content, skill_name)
             )
-        except Exception:
-            pass
+            bound.append(skill_name)
+        except Exception as exc:
+            # Never silently: a skill that fails to bind is invisible to every
+            # client with no native skill mechanism.
+            logger.error('Failed to bind skill %s: %s', skill_name, exc)
+
+    return bound

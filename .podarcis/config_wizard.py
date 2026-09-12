@@ -1,17 +1,18 @@
 '''Shared configuration wizard — called by both install (sequential) and interactive (menu loop).'''
 
+from argparse import Namespace
 from pathlib import Path
 
 import questionary
 from rich.panel import Panel
 
-from common import get_config_value, set_config_value
-from components import (
+from podarcis.common import get_config_value, set_config_value
+from podarcis.components import (
     discover_components, get_enabled_mcp_servers,
-    build_component_choices, run_mcp_setup, set_mcp_server_status,
+    build_job_choices, run_mcp_setup, set_mcp_server_status,
 )
-from console import console, QSTYLE
-from repos import get_repo_names, get_repo_url, prompt_configure_repo
+from podarcis.console import console, QSTYLE
+from podarcis.repos import get_repo_names, get_repo_url, prompt_configure_repo
 
 _FRONTEND_CHOICES = ['vscode', 'obsidian', 'none']
 
@@ -64,13 +65,13 @@ def configure_mcp_servers(root: Path, style=None, title=None, description=None) 
 
 def configure_jobs(root: Path, style=None, title=None, description=None) -> None:
     _header(title, description)
-    from jobs import discover_jobs, set_job_status
+    from podarcis.jobs import discover_jobs, set_job_status
     jobs = discover_jobs(root)
     if not jobs:
         return console.print('[dim]No jobs discovered.[/dim]')
     selected = questionary.checkbox(
         'Select Jobs to enable (installs systemd user timers):',
-        choices=build_component_choices(root, 'job', jobs), style=_style(style),
+        choices=build_job_choices(jobs), style=_style(style),
     ).ask()
     if selected is not None:
         s = set(selected)
@@ -99,14 +100,5 @@ def configure_frontend(root: Path, style=None, title=None, description=None) -> 
     ).ask()
     if not frontend:
         return
-    set_config_value(root, frontend, 'frontend')
-    if frontend == 'vscode':
-        from cli import _ensure_vscode_config
-        _ensure_vscode_config(root)
-        console.print(f'[bold green]✓ Frontend set to vscode (VSCode config seeded).[/bold green]')
-    elif frontend == 'obsidian':
-        console.print(f'[bold green]✓ Frontend set to obsidian.[/bold green]')
-    elif frontend == 'none':
-        console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.')
-    else:
-        console.print(f'[bold green]✓ Frontend set to {frontend}.[/bold green]')
+    from podarcis.cli import cmd_config_frontend
+    cmd_config_frontend(Namespace(frontend_name=frontend))

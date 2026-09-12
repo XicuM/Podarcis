@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 import pytest
-import uninstall
+from podarcis import uninstall
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────

@@ -13,13 +13,6 @@ from pathlib import Path
 
 import anyio
 
-podarcis_dir = Path(__file__).resolve().parent.parent
-root_dir = podarcis_dir.parent
-if str(root_dir) not in sys.path:
-    sys.path.insert(0, str(root_dir))
-if str(podarcis_dir) not in sys.path:
-    sys.path.insert(0, str(podarcis_dir))
-
 from mcp.server.fastmcp import FastMCP
 from podarcis.gateway.router import sync_gateway
 from podarcis.gateway.watcher import ConfigWatcher
@@ -43,7 +36,6 @@ def create_gateway(root: Path, config_path: Path | None = None, port: int = 8000
             "Podarcis Gateway MCP server. Enforces strict 3-tier source hierarchy "
             "(workspace -> wiki -> sources, where sources reside in sources/ or Google Drive). "
             "Provides wiki searching & auditing, literature discovery & paper ingestion, "
-            "market data, "
             "platform diagnostics, skills, and subagent persona prompts."
         ),
         port=port,
