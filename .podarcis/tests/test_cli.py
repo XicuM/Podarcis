@@ -19,7 +19,85 @@ def test_cli_status_json(capsys):
     assert 'mcp_servers' in data
     assert 'skills' in data
     assert 'agents' in data
+    assert 'external_skills' in data
     assert 'repositories' in data
+    assert all('ok' in v for v in data['external_skills'].values())
+
+
+def _deploy(root, name, *, pyproject=None, package_json=None):
+    """Write a skill bundle into the .agents/skills deploy root, as APM would."""
+    d = root / '.agents' / 'skills' / name
+    d.mkdir(parents=True)
+    (d / 'SKILL.md').write_text(f'---\nname: {name}\n---\n', encoding='utf-8')
+    if pyproject:
+        (d / 'pyproject.toml').write_text(pyproject, encoding='utf-8')
+    if package_json:
+        (d / 'package.json').write_text(json.dumps(package_json), encoding='utf-8')
+    return d
+
+
+def test_external_skills_excludes_what_this_repo_authors(tmp_path):
+    """.apm/skills is authored; the deploy roots hold authored and vendored alike."""
+    from podarcis.components import external_skills
+
+    (tmp_path / '.apm' / 'skills' / 'mine').mkdir(parents=True)
+    _deploy(tmp_path, 'mine')          # same skill, deployed
+    _deploy(tmp_path, 'theirs')        # a dependency
+
+    assert set(external_skills(tmp_path)) == {'theirs'}
+
+
+def test_external_skills_reads_python_console_scripts(tmp_path):
+    from podarcis.components import external_skills
+
+    _deploy(tmp_path, 'tool', pyproject=(
+        '[project]\nname = "tool"\n\n[project.scripts]\n'
+        'thing = "tool.cli:main"\nother = "tool.cli:other"\n'))
+    assert set(external_skills(tmp_path)['tool']['executables']) == {'thing', 'other'}
+
+
+@pytest.mark.parametrize('bin_field, expected', [
+    ({'cli-name': 'dist/index.js'}, {'cli-name'}),
+    ('dist/index.js', {'node-tool'}),
+])
+def test_external_skills_reads_node_bin(tmp_path, bin_field, expected):
+    """package.json `bin` is a map of names, or a bare string.
+
+    The string form names the binary after the package's `name`, not after the
+    path it points at — reading the path as a command name would report a
+    binary that could never exist.
+    """
+    from podarcis.components import external_skills
+
+    _deploy(tmp_path, 'node-tool', package_json={'name': 'node-tool', 'bin': bin_field})
+    assert set(external_skills(tmp_path)['node-tool']['executables']) == expected
+
+
+def test_external_skills_reports_a_missing_executable(tmp_path):
+    """The whole point: a deployed skill whose CLI was never installed.
+
+    APM deploys files but installs no runtime, and a failing lifecycle script
+    does not fail `apm install` — so nothing upstream of status notices.
+    """
+    from podarcis.components import external_skills
+
+    _deploy(tmp_path, 'tool', pyproject=(
+        '[project]\nname = "tool"\n\n[project.scripts]\n'
+        'definitely-not-on-this-system = "tool.cli:main"\n'))
+    assert external_skills(tmp_path)['tool']['executables'] == {
+        'definitely-not-on-this-system': ''}
+
+
+def test_external_skills_prefers_the_project_venv_over_path(tmp_path):
+    """A CLI installed into .venv must win; PATH may hold a different version."""
+    from podarcis.components import external_skills
+
+    venv_bin = tmp_path / '.venv' / 'bin'
+    venv_bin.mkdir(parents=True)
+    (venv_bin / 'python').write_text('', encoding='utf-8')  # certainly also on PATH
+    _deploy(tmp_path, 'tool', pyproject=(
+        '[project]\nname = "tool"\n\n[project.scripts]\npython = "tool.cli:main"\n'))
+    assert external_skills(tmp_path)['tool']['executables']['python'] == str(venv_bin / 'python')
 
 
 def test_cli_config_rejects_skill_and_agent_toggles(tmp_path, monkeypatch):

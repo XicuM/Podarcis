@@ -1,7 +1,7 @@
 '''Discovery, inspection, and state management for MCP servers and Skills.'''
 
 # Standard library imports
-import sys, subprocess
+import re, shutil, sys, subprocess
 from pathlib import Path
 
 # Local imports
@@ -15,6 +15,69 @@ from podarcis.console import console
 SKILLS = lambda root: root/'.apm'/'skills'
 MCPS = lambda root: root/'.agents'/'mcp'
 AGENTS = lambda root: root/'.apm'/'agents'
+
+
+# APM deploys a dependency's whole bundle into the harness skill directories, so
+# each package still carries the pyproject.toml or package.json that declares its
+# executables. Both roots are checked because skills converge on .agents/skills/
+# for most targets while Claude keeps a native one.
+DEPLOYED = lambda root: (root/'.agents'/'skills', root/'.claude'/'skills')
+
+
+def _declared_executables(skill_dir: Path) -> list[str]:
+    '''Console scripts a deployed skill bundle declares, Python or Node.'''
+    names = []
+    if (pyproject := skill_dir/'pyproject.toml').exists():
+        try:
+            import tomllib
+            names += list(tomllib.loads(pyproject.read_text(encoding='utf-8'))
+                          .get('project', {}).get('scripts', {}))
+        except ModuleNotFoundError:  # tomllib is 3.11+; the engine supports 3.10
+            block = re.search(r'^\[project\.scripts\]\s*$(.*?)(?=^\[|\Z)',
+                              pyproject.read_text(encoding='utf-8'), re.M | re.S)
+            if block:
+                names += re.findall(r'^\s*([\w.-]+)\s*=', block.group(1), re.M)
+        except Exception: pass
+    if (pkg := skill_dir/'package.json').exists():
+        try:
+            manifest = load_json(pkg)
+            binaries = manifest.get('bin', {})
+            # npm: a string `bin` names the binary after the package, not the path.
+            names += [manifest.get('name', '')] if isinstance(binaries, str) else list(binaries)
+        except Exception: pass
+    return sorted(set(names))
+
+
+def external_skills(root: Path) -> dict:
+    '''Skills APM deployed that this repo does not author, and whether they work.
+
+    A skill whose CLI is missing is a dead letter: the model reads instructions
+    telling it to run a command that does not exist. APM deploys files but does
+    not install language runtimes, and a failing lifecycle script does not fail
+    `apm install` — so nothing upstream of here notices.
+    '''
+    authored = ({d.name for d in SKILLS(root).iterdir() if d.is_dir()}
+                if SKILLS(root).exists() else set())
+    found: dict[str, dict] = {}
+    for deploy in DEPLOYED(root):
+        if not deploy.exists():
+            continue
+        for d in sorted(deploy.iterdir()):
+            if not d.is_dir() or d.name in authored or d.name in found:
+                continue
+            executables = _declared_executables(d)
+            found[d.name] = {
+                'name': d.name,
+                'executables': {name: _resolve(root, name) for name in executables},
+            }
+    return found
+
+
+def _resolve(root: Path, name: str) -> str:
+    '''Absolute path to an executable, preferring the project venv over PATH.'''
+    if (venv_bin := root/'.venv'/'bin'/name).exists():
+        return str(venv_bin)
+    return shutil.which(name) or ''
 
 
 def get_skill_desc(root_dir: Path, name: str) -> str:

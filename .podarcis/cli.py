@@ -16,6 +16,7 @@ from podarcis.common import get_config_value, load_version_info, set_config_valu
 from podarcis.console import console
 from podarcis.components import (
     discover_components,
+    external_skills,
     get_enabled_mcp_servers,
     set_mcp_server_status,
 )
@@ -52,11 +53,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     enabled_mcp = get_enabled_mcp_servers(ROOT_DIR)
     from podarcis.jobs import discover_jobs
     jobs = discover_jobs(ROOT_DIR)
+    external = external_skills(ROOT_DIR)
 
     status_data = {
         'mcp_servers': {},
         'skills': {},
         'agents': {},
+        'external_skills': {},
         'jobs': {},
         'repositories': {},
     }
@@ -79,6 +82,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         status_data['agents'][key] = {
             'enabled': info.get('enabled', False),
             'tokens': info.get('tokens', 0),
+        }
+
+    for key, info in sorted(external.items()):
+        status_data['external_skills'][key] = {
+            'executables': info['executables'],
+            'ok': all(info['executables'].values()),
         }
 
     for key, info in sorted(jobs.items()):
@@ -115,6 +124,22 @@ def cmd_status(args: argparse.Namespace) -> int:
         console.print(f'\n[bold white]{label}:[/bold white] [dim]loaded on demand[/dim]')
         for k, v in status_data[section].items():
             console.print(f'  • {k:<20} [dim]({v["tokens"]} tokens when invoked)[/dim]')
+
+    # APM deploys a skill's files but installs no runtime, and a failing
+    # lifecycle script does not fail `apm install` — so a deployed skill whose
+    # CLI never got installed looks fine everywhere except here.
+    if status_data['external_skills']:
+        console.print('\n[bold white]External skills:[/bold white] [dim]installed via `apm install`[/dim]')
+        for k, v in status_data['external_skills'].items():
+            if not v['executables']:
+                detail = '[dim]no CLI declared[/dim]'
+            else:
+                detail = ', '.join(
+                    f'[green]{name}[/green]' if path else f'[bold red]{name} MISSING[/bold red]'
+                    for name, path in v['executables'].items())
+            console.print(f'  • {k:<20} {detail}')
+        if any(not v['ok'] for v in status_data['external_skills'].values()):
+            console.print('  [yellow]Run `apm lifecycle trust` then `apm install` to install missing CLIs.[/yellow]')
 
     console.print('\n[bold white]Jobs:[/bold white]')
     for k, v in status_data['jobs'].items():

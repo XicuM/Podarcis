@@ -47,7 +47,7 @@ Context this repo does **not** author — a colleague's skill, an extracted tool
 
 `.apm/` is what this repo authors; `.claude/` and `.opencode/` are generated and gitignored. APM refuses to deploy through a symlinked target root, which is why those are real directories rather than symlinks into `.agents/`.
 
-APM copies files; it does not install language runtimes. A package shipping a CLI its `SKILL.md` invokes needs that binary too, so `apm.yml`'s `lifecycle.post-install` hook installs it — trusted once via `apm lifecycle trust`, and re-approved whenever the `lifecycle:` block changes. A failing lifecycle script does **not** fail `apm install`, so treat the hook as best-effort and let `podarcis status` be what confirms an entry point actually resolves.
+APM copies files; it does not install language runtimes. A package shipping a CLI its `SKILL.md` invokes needs that binary too, so `apm.yml`'s `lifecycle.post-install` hook installs it — trusted once via `apm lifecycle trust`, and re-approved whenever the `lifecycle:` block changes. A failing lifecycle script does **not** fail `apm install`, so the hook is best-effort by design and `podarcis status` is what verifies it: its **External skills** section reads each deployed bundle's `pyproject.toml` or `package.json`, resolves every executable it declares, and marks the missing ones. Dependencies are pinned in `apm.yml` — by tag where the upstream publishes them, by commit otherwise — so `main` cannot move under the declaration; change one deliberately with `apm update`.
 
 ---
 

@@ -6,6 +6,7 @@ dependencies:
   host: gitlab-internal.bsc.es
   host_type: gitlab
   resolved_commit: 21d3be3efd86f5686d289ca8df1672920a30b770
+  resolved_ref: 21d3be3efd86f5686d289ca8df1672920a30b770
   version: unknown
   package_type: claude_skill
   deployed_files:
@@ -106,6 +107,7 @@ dependencies:
   name: market-skill
   host: github.com
   resolved_commit: b9ab1ba19584b4fa7d02a2f2628e1175e58f22a4
+  resolved_ref: v1.0.0
   version: 1.0.0
   package_type: hybrid
   deployed_files:
@@ -155,6 +157,7 @@ dependencies:
   name: menumaker
   host: github.com
   resolved_commit: 25e1d5ebfdc7095fca310d91e78f490e84ee0705
+  resolved_ref: v1.0.0
   version: 1.0.0
   package_type: hybrid
   deployed_files:

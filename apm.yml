@@ -10,11 +10,15 @@ targets:
   - claude
   - opencode
 
+# Pinned. apm.lock.yaml already records resolved commits, so an install
+# reproduces either way; pinning here is what stops `main` moving under the
+# declaration itself. Bump deliberately with `apm update`.
+# overleaf-suggest publishes no tags, so it pins by commit.
 dependencies:
   apm:
-    - git: https://github.com/XicuM/market-skill.git
-    - git: https://github.com/XicuM/menumaker.git
-    - git: ssh://git@gitlab-internal.bsc.es/esantigo/overleaf-suggest.git
+    - git: https://github.com/XicuM/market-skill.git#v1.0.0
+    - git: https://github.com/XicuM/menumaker.git#v1.0.0
+    - git: ssh://git@gitlab-internal.bsc.es/esantigo/overleaf-suggest.git#21d3be3efd86f5686d289ca8df1672920a30b770
       type: gitlab
   mcp: []
 
