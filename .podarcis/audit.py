@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from podarcis.repos import get_repo_names
-from podarcis.tui.root import is_wiki_root
+from podarcis.root import is_wiki_root
 
 MAX_WORDS = 1500
 

@@ -1,5 +1,0 @@
-[filetype]
-rules = [
-  { url = "*/_index.md", fg = "#29b8db", bold = true },
-  { url = "*/index.md", fg = "#29b8db", bold = true },
-]

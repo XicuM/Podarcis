@@ -14,7 +14,7 @@ from podarcis.components import (
 from podarcis.console import console, QSTYLE
 from podarcis.repos import get_repo_names, get_repo_url, prompt_configure_repo
 
-_FRONTEND_CHOICES = ['vscode', 'obsidian', 'herdr', 'none']
+_FRONTEND_CHOICES = ['tui', 'vscode', 'obsidian', 'none']
 
 
 def _style(style):
@@ -101,7 +101,7 @@ def configure_frontend(root: Path, style=None, title=None, description=None) -> 
     if not frontend:
         return
     from podarcis.cli import cmd_config_frontend
-    from podarcis.tui.root import is_wiki_root
+    from podarcis.root import is_wiki_root
     cmd_config_frontend(Namespace(
         frontend_name=frontend,
         root=str(root) if is_wiki_root(root) else None,

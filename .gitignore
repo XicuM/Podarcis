@@ -74,3 +74,4 @@ apm_modules/
 .agents/skills/
 .codex/agents/
 .codex/skills/
+tui/target/

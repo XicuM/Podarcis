@@ -1,0 +1,39 @@
+[package]
+name = "podarcis-tui"
+version = "11.0.0"
+edition = "2021"
+rust-version = "1.86"
+description = "Podarcis wiki frontend: tree, reader, vim-modal editor, search, herdr sidebar"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "podarcis-tui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+catppuccin = { version = "2.8", features = ["ratatui"] }
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
+edtui = { version = "0.11", default-features = false, features = ["mouse-support"] }
+gray_matter = "0.3"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+notify = "8"
+nucleo-matcher = "0.3"
+portable-pty = "0.9"
+pulldown-cmark = { version = "0.13", default-features = false }
+ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+tui-term = "0.3"
+unicode-width = "0.2"
+vt100 = "0.16"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

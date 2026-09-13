@@ -125,6 +125,20 @@ def _create_podarcis_yaml() -> None:
 
 # ── global command ────────────────────────────────────────────────────────
 
+def _build_frontend() -> None:
+    '''Compile the Ratatui wiki front-end.
+
+    Best effort: a checkout without a Rust toolchain is still a working
+    Podarcis, it just has no `podarcis wiki`. `podarcis status` says so.
+    '''
+    from podarcis.wiki import build, find_binary
+    _say('[#29b8db]Building the wiki frontend...[/#29b8db]')
+    if build(root, quiet=True):
+        _say(f'[bold green]✓ Built {find_binary(root)}[/bold green]\n')
+    else:
+        _say('[dim]Skipped. Run `podarcis wiki build` once cargo is available.[/dim]\n')
+
+
 def _configure_global_command() -> None:
     _say('Optionally installs the "podarcis" CLI executable into ~/.local/bin '
          'allowing you to run status, config, test, and lint commands from any shell prompt.')
@@ -179,6 +193,8 @@ def main() -> None:
         description='Jobs automate periodic tasks like GDrive sync and wiki audits. Enable them to schedule automatic background execution via systemd user timers.')
     _hr()
     _configure_global_command()
+    _hr()
+    _build_frontend()
     _hr()
 
     if _select('Sync workspace repos now?', ['no', 'yes'], default='yes') == 'yes':

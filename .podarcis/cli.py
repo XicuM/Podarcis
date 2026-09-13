@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'none': None}
-FRONTEND_NAMES = ('vscode', 'obsidian', 'herdr', 'none')
+FRONTEND_NAMES = ('tui', 'vscode', 'obsidian', 'none')
 
 from podarcis import PODARCIS_DIR, ROOT_DIR
 from podarcis.common import get_config_value, load_version_info, set_config_value
@@ -30,8 +30,8 @@ from podarcis.repos import (
     sync_repos_full,
     push_repos,
 )
-from podarcis.tui.launch import cmd_wiki, dispatch_wiki
-from podarcis.tui.root import WikiRootError, find_wiki_root, find_wiki_root_or_none
+from podarcis.root import WikiRootError, find_wiki_root, find_wiki_root_or_none
+from podarcis.wiki import cmd_wiki, cmd_wiki_search
 
 
 def _get_python_bin() -> str:
@@ -58,7 +58,17 @@ def cmd_status(args: argparse.Namespace) -> int:
     jobs = discover_jobs(ROOT_DIR)
     external = external_skills(ROOT_DIR)
 
+    from podarcis.wiki import find_binary as _tui_binary, version as _tui_version
+    tui_root = find_wiki_root_or_none(explicit=getattr(args, 'root', None)) or ROOT_DIR
+    tui_binary = _tui_binary(tui_root)
+
     status_data = {
+        'frontend': {
+            'name': (get_config_value(tui_root, 'frontend', default='none') or 'none'),
+            'binary': str(tui_binary) if tui_binary else '',
+            'version': _tui_version(tui_root) or '',
+            'built': tui_binary is not None,
+        },
         'mcp_servers': {},
         'skills': {},
         'agents': {},
@@ -149,6 +159,17 @@ def cmd_status(args: argparse.Namespace) -> int:
         st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
         sched = f'({v["schedule"]})' if v["schedule"] else ''
         console.print(f'  • {k:<20} [{st}] {sched}')
+
+    console.print('\n[bold white]Frontend:[/bold white]')
+    fe = status_data['frontend']
+    if fe['built']:
+        detail = f'{fe["version"]}  [dim]{fe["binary"]}[/dim]' if fe['version'] else f'[dim]{fe["binary"]}[/dim]'
+        console.print(f'  • [bold #29b8db]{fe["name"]:<20}[/bold #29b8db] [bold green]✓[/bold green] {detail}')
+    else:
+        console.print(
+            f'  • [bold #29b8db]{fe["name"]:<20}[/bold #29b8db] [yellow]not built[/yellow] '
+            f'[dim]run `podarcis wiki build`[/dim]'
+        )
 
     console.print('\n[bold white]Repositories:[/bold white]')
     for k, v in status_data['repositories'].items():
@@ -333,14 +354,14 @@ def _ensure_vscode_config(root: Path) -> None:
 
 
 def cmd_config_frontend(args: argparse.Namespace) -> int:
-    '''Set the frontend tool. ``herdr`` is written only to a wiki-root config.'''
+    '''Set the frontend tool. ``tui`` is written only to a wiki-root config.'''
     name = args.frontend_name.lower()
     try:
         wiki_root = find_wiki_root_or_none(explicit=getattr(args, 'root', None))
     except WikiRootError as exc:
         console.print(f'[bold red]Error:[/bold red] {exc.message}')
         return 1
-    if name == 'herdr':
+    if name == 'tui':
         if wiki_root is None:
             console.print(
                 '[bold red]Error:[/bold red] not a Podarcis checkout '
@@ -362,7 +383,7 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
 
 
 def cmd_frontend(args: argparse.Namespace) -> int:
-    '''Open the configured frontend. ``herdr`` attaches the wiki layout.'''
+    '''Open the configured frontend. ``tui`` launches the wiki front-end.'''
     try:
         wiki_root = find_wiki_root_or_none(explicit=getattr(args, 'root', None))
     except WikiRootError as exc:
@@ -370,7 +391,7 @@ def cmd_frontend(args: argparse.Namespace) -> int:
         return 1
     cfg_root = wiki_root if wiki_root is not None else ROOT_DIR
     frontend = (get_config_value(cfg_root, 'frontend', default='none') or 'none').lower()
-    if frontend == 'herdr':
+    if frontend == 'tui':
         if wiki_root is None:
             console.print(
                 '[bold red]Error:[/bold red] not a Podarcis checkout '
@@ -438,10 +459,30 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 
 def cmd_test(args: argparse.Namespace) -> int:
-    '''Run pytest test suite.'''
+    '''Run the pytest suite, then the front-end crate's tests.
+
+    Both halves are the platform, so `podarcis test` covers both. Cargo is
+    skipped — not failed — when it is not installed, since a checkout without a
+    Rust toolchain is still a working Podarcis.
+    '''
+    from podarcis.wiki import crate_dir
+
     pytest_bin = _get_pytest_bin()
-    cmd = [pytest_bin] + args.remaining_args
-    return subprocess.run(cmd).returncode
+    code = subprocess.run([pytest_bin] + args.remaining_args).returncode
+    if getattr(args, 'python_only', False):
+        return code
+
+    root = find_wiki_root_or_none(explicit=getattr(args, 'root', None)) or ROOT_DIR
+    manifest = crate_dir(root) / 'Cargo.toml'
+    cargo = shutil.which('cargo')
+    if not manifest.is_file():
+        return code
+    if cargo is None:
+        console.print('[dim]cargo not found — skipping the frontend tests.[/dim]')
+        return code
+    console.print('\n[bold #29b8db]podarcis-tui[/bold #29b8db]')
+    rust = subprocess.run([cargo, 'test', '--manifest-path', str(manifest), '--quiet']).returncode
+    return code or rust
 
 
 def cmd_lint(args: argparse.Namespace) -> int:
@@ -454,83 +495,6 @@ def cmd_lint(args: argparse.Namespace) -> int:
     root = find_wiki_root_or_none(explicit=getattr(args, 'root', None)) or ROOT_DIR
     target = extra[0] if extra else str(root)
     return run_lint(root, target, as_json=as_json, fix=fix)
-
-
-def cmd_wiki_search(args: argparse.Namespace) -> int:
-    '''Structured wiki search. Default collection is wiki.'''
-    from podarcis.tui.search import search
-    try:
-        wiki_root = find_wiki_root(explicit=getattr(args, 'root', None))
-    except WikiRootError as exc:
-        console.print(f'[bold red]Error:[/bold red] {exc.message}')
-        return 1
-    query = args.query if isinstance(args.query, str) else ' '.join(args.query)
-    result = search(
-        wiki_root, query,
-        collection=getattr(args, 'collection', 'wiki') or 'wiki',
-        method=getattr(args, 'method', 'hybrid') or 'hybrid',
-        limit=getattr(args, 'limit', 20) or 20,
-        no_rerank=bool(getattr(args, 'no_rerank', False)),
-    )
-    if getattr(args, 'json', False):
-        print(json.dumps(result, indent=2))
-        return 0
-    if result.get('warning'):
-        console.print(f'[yellow]{result["warning"]}[/yellow]')
-    hits = result.get('hits') or []
-    if not hits:
-        console.print(f'[yellow]No hits for {query!r} in {result.get("collection")}.[/yellow]')
-        return 0
-    for hit in hits:
-        score = hit.get('score')
-        score_s = f'{score:.2f}' if isinstance(score, (int, float)) else '--'
-        console.print(f'[bold]{score_s}[/bold]  {hit.get("title")}  [dim]{hit.get("path")}[/dim]')
-        if hit.get('snippet'):
-            console.print(f'   {hit["snippet"]}')
-    return 0
-
-
-def _dispatch_wiki(args: argparse.Namespace) -> int:
-    '''``podarcis wiki search QUERY`` shares the wiki parser with launch ``[path]``.'''
-    if getattr(args, 'path', None) == 'edit':
-        rest = list(getattr(args, 'search_args', None) or [])
-        if rest and rest[0] == '--':
-            rest = rest[1:]
-        if not rest:
-            console.print('[bold red]Error:[/bold red] usage: podarcis wiki edit -- PATH')
-            return 1
-        from podarcis.tui.open_edit import cmd_wiki_edit
-        try:
-            return cmd_wiki_edit(rest[0], root=getattr(args, 'root', None))
-        except WikiRootError as exc:
-            console.print(f'[bold red]Error:[/bold red] {exc.message}')
-            return 1
-    if getattr(args, 'path', None) == 'search':
-        rest = list(getattr(args, 'search_args', None) or [])
-        search_p = argparse.ArgumentParser(prog='podarcis wiki search')
-        search_p.add_argument('query', nargs='+', help='Search query')
-        search_p.add_argument('--json', action='store_true', help='Output structured hits as JSON')
-        search_p.add_argument(
-            '--collection', default='wiki',
-            choices=['wiki', 'protocols', 'sources', 'all'],
-            help='Collection to search (default: wiki)',
-        )
-        search_p.add_argument(
-            '--method', default='hybrid',
-            choices=['hybrid', 'semantic', 'keyword'],
-            help='Search strategy (default: hybrid)',
-        )
-        search_p.add_argument('--limit', type=int, default=20, help='Maximum hits')
-        search_p.add_argument('--no-rerank', action='store_true', dest='no_rerank')
-        search_p.add_argument('--root', default=argparse.SUPPRESS, help='Podarcis checkout root')
-        try:
-            ns = search_p.parse_args(rest)
-        except SystemExit as exc:
-            return int(exc.code or 1)
-        if not getattr(ns, 'root', None) and getattr(args, 'root', None):
-            ns.root = args.root
-        return cmd_wiki_search(ns)
-    return cmd_wiki(args)
 
 
 def cmd_diagnose(args: argparse.Namespace) -> int:
@@ -783,7 +747,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0 if res.get('status') != 'error' else 1
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     '''Parse arguments and dispatch to the handler each subparser declares.'''
     parser = argparse.ArgumentParser(
         prog='podarcis',
@@ -871,33 +835,24 @@ def main() -> None:
             .add_argument('name', help='Tool module name (skills and personas are not toggleable)')
     add_repo_config(config_sub)
     add_repo_config(repo_sub)
-    add('frontend', 'Set the frontend tool (vscode, obsidian, herdr, none)',
+    add('frontend', 'Set the frontend tool (tui, vscode, obsidian, none)',
         cmd_config_frontend, parent=config_sub) \
         .add_argument('frontend_name', choices=FRONTEND_NAMES,
-                      metavar='{vscode,obsidian,herdr,none}', help='Frontend name')
+                      metavar='{tui,vscode,obsidian,none}', help='Frontend name')
     add('interactive', 'Launch interactive TUI menu', cmd_interactive, parent=config_sub)
 
     # ── wiki ──────────────────────────────────────────────────────────────
     wiki_p = add(
         'wiki',
-        'tmux files | editor | herdr companion. Subcommands: edit, persona, context, search',
-        dispatch_wiki,
+        'Browse, search and edit the wiki (Ratatui frontend)',
+        cmd_wiki,
     )
     wiki_p.add_argument(
         '--root', default=argparse.SUPPRESS,
         help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml)',
     )
-    wiki_p.add_argument('--sync', action='store_true', help='Run `podarcis repo sync` before attach')
-    wiki_p.add_argument('--dry-run', action='store_true', dest='dry_run',
-                        help='Print the launch plan without starting a herdr server')
-    wiki_p.add_argument('--reset-layout', action='store_true', dest='reset_layout',
-                        help='Recreate the files|edit|agent layout (kills live PTYs)')
-    wiki_p.add_argument('--reset-config', action='store_true', dest='reset_config',
-                        help='Re-copy the herdr session.toml template')
-    wiki_p.add_argument(
-        'wiki_rest', nargs=argparse.REMAINDER, help=argparse.SUPPRESS,
-    )
-    wiki_p.set_defaults(path=None, name=None, wiki_rest=[])
+    from podarcis.wiki import add_arguments as _wiki_arguments
+    _wiki_arguments(wiki_p, add=add)
 
     # ── lifecycle ─────────────────────────────────────────────────────────
     add('frontend', 'Open the configured frontend tool', cmd_frontend)
@@ -908,7 +863,10 @@ def main() -> None:
     un.add_argument('-y', '--yes', action='store_true', help='Skip all confirmations')
     un.add_argument('--dry-run', action='store_true', dest='dry_run', help='Preview without removing anything')
     un.add_argument('--purge', action='store_true', help='Also remove .podarcis/config.yaml')
-    add('test', 'Run pytest suite', cmd_test).add_argument('remaining_args', nargs=argparse.REMAINDER)
+    test_p = add('test', 'Run the pytest suite and the frontend crate tests', cmd_test)
+    test_p.add_argument('--python-only', action='store_true', dest='python_only',
+                        help='Skip the frontend crate tests')
+    test_p.add_argument('remaining_args', nargs=argparse.REMAINDER)
     lint_p = add('lint', 'Run link integrity check', cmd_lint)
     lint_p.add_argument('--json', action='store_true', help='Output findings as JSON')
     lint_p.add_argument('--fix', action='store_true', help='Apply safe auto-fixes')
@@ -945,9 +903,20 @@ def main() -> None:
     ing = add('ingest', 'Run automated source ingestion (GDrive API delta check)', cmd_ingest)
     ing.add_argument('--dry-run', action='store_true', help='Scan deltas without modifying files')
 
-    args = parser.parse_args()
-    sys.exit(cmd_interactive(args) if args.interactive else args.func(args))
+    from podarcis.wiki import normalize_argv
+    argv = normalize_argv(sys.argv[1:] if argv is None else list(argv))
+
+    # `argparse.REMAINDER` only starts collecting after a non-flag token, so
+    # `podarcis test -q` would otherwise fail at the top-level parser. Any
+    # subcommand that declares a pass-through gets the leftovers instead.
+    args, unknown = parser.parse_known_args(argv)
+    if unknown:
+        if not hasattr(args, 'remaining_args'):
+            parser.error(f'unrecognized arguments: {" ".join(unknown)}')
+        args.remaining_args = list(args.remaining_args or []) + unknown
+
+    return cmd_interactive(args) if args.interactive else args.func(args)
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
