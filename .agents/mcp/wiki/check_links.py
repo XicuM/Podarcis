@@ -1,9 +1,11 @@
+import json
 import os
 import re
 import sys
 import yaml
 
 KNOWN_OKF_TYPES = {'concept', 'protocol', 'entity', 'overview', 'synthesis', 'guide', 'meta', 'recipe', 'journal'}
+MAX_WORDS = 1500
 
 def strip_code_blocks(content):
     # Strip fenced code blocks
@@ -204,12 +206,13 @@ def run_audit(target_path, do_fix=False):
         return all_results
 
     for root, dirs, files in os.walk(target_path):
-        parts = os.path.normpath(root).split(os.sep)
+        rel = os.path.relpath(root, target_path)
+        parts = [] if rel == os.curdir else os.path.normpath(rel).split(os.sep)
         if any(ignored in parts for ignored in ['.git', '.venv', '.obsidian', '__pycache__', 'node_modules', 'tmp']):
             continue
 
         # Clean up flat recipe files if subdirectories exist
-        if parts[-1] == 'recipes' and any(d in dirs for d in ['bowls', 'lunches', 'dinners']):
+        if os.path.basename(root) == 'recipes' and any(d in dirs for d in ['bowls', 'lunches', 'dinners']):
             for f in list(files):
                 if f.endswith('.md') and f not in ['_index.md', 'index.md']:
                     flat_file = os.path.join(root, f)
@@ -220,7 +223,8 @@ def run_audit(target_path, do_fix=False):
                         pass
         
         # Check for directory bloat in wiki or workspace folder
-        if 'wiki' in parts or 'workspace' in parts:
+        target_base = os.path.basename(os.path.abspath(target_path))
+        if 'wiki' in parts or 'workspace' in parts or target_base in ('wiki', 'workspace'):
             items = [d for d in dirs if not d.startswith('.') and d != '__pycache__'] + \
                     [f for f in files if not f.startswith('.') and f not in ['index.md', '_index.md'] and not f.endswith('.pyc')]
             if len(items) > 15:
@@ -254,14 +258,64 @@ def run_audit(target_path, do_fix=False):
     return all_results
 
 
+def file_issues(path, res):
+    """Map one ``run_audit`` result to ``{code, detail}`` records."""
+    issues = []
+    if res.get("bloated_directory"):
+        issues.append({"code": "bloated_directory", "detail": str(res["bloated_directory"])})
+    parts = os.path.normpath(path).split(os.sep)
+    if "wiki" in parts or "user" in parts:
+        if res.get("word_count", 0) > MAX_WORDS:
+            issues.append({"code": "page_length", "detail": str(res["word_count"])})
+    for err in res.get("yaml_errors") or []:
+        issues.append({"code": "yaml_error", "detail": str(err)})
+    for item in res.get("broken_links") or []:
+        if isinstance(item, (tuple, list)) and item:
+            link = item[0]
+            target = item[1] if len(item) > 1 else ""
+            detail = f"{link} -> {target}" if target else str(link)
+        else:
+            detail = str(item)
+        issues.append({"code": "broken_link", "detail": detail})
+    for ref in res.get("missing_footnotes") or []:
+        issues.append({"code": "missing_footnote", "detail": str(ref)})
+    for ref in res.get("unused_footnotes") or []:
+        issues.append({"code": "unused_footnote", "detail": str(ref)})
+    for ref in res.get("unmatched_sources") or []:
+        issues.append({"code": "unmatched_source", "detail": str(ref)})
+    for ref in res.get("positional_footnotes") or []:
+        issues.append({"code": "positional_footnote", "detail": str(ref)})
+    for item in res.get("missing_frontmatter") or []:
+        issues.append({"code": "missing_frontmatter", "detail": str(item)})
+    return issues
+
+
+def to_json_payload(audit_results, root):
+    """``podarcis lint --json`` object: path → list of ``{code, detail}``."""
+    root_abs = os.path.abspath(root)
+    files = {}
+    for path, res in (audit_results or {}).items():
+        issues = file_issues(path, res)
+        if not issues:
+            continue
+        rel = os.path.relpath(path, root_abs)
+        files[rel] = issues
+    return {"ok": not files, "root": root_abs, "files": files}
+
+
 if __name__ == "__main__":
     do_fix = "--fix" in sys.argv
-    args = [a for a in sys.argv[1:] if a != "--fix"]
+    as_json = "--json" in sys.argv
+    args = [a for a in sys.argv[1:] if a not in ("--fix", "--json")]
     target = os.path.abspath(args[0] if args else ".")
     audit_results = run_audit(target, do_fix=do_fix)
     failed = False
 
-    MAX_WORDS = 1500
+    if as_json:
+        payload = to_json_payload(audit_results, target)
+        print(json.dumps(payload, indent=2))
+        sys.exit(0 if payload.get("ok") else 1)
+
     if not audit_results:
         print("Audit passed: No issues found.")
     else:

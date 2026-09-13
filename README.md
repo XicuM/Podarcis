@@ -105,10 +105,12 @@ First `podarcis` run after install downloads the GGUF models (EmbeddingGemma-300
 | `podarcis status` | Display status of MCP servers, skills, agents, jobs, and repos (`--json` supported) |
 | `podarcis config interactive` | Launch interactive TUI configuration menu |
 | `podarcis test` | Run test suite across all MCP servers and skills |
-| `podarcis lint` | Run link integrity check across wiki markdown files |
+| `podarcis lint` | Run link integrity check across wiki markdown files (`--json` for structured findings) |
 | `podarcis wiki` | Attach a herdr wiki layout (files \| edit \| agent) at the checkout root |
 | `podarcis wiki edit -- PATH` | Open PATH in the labelled edit pane and write `tmp/tui/current.json` |
 | `podarcis wiki persona NAME` | Spawn a persona pane (researcher, synthesizer, protocol-architect, auditor) |
+| `podarcis wiki search` | Search wiki collections (`--json`; default collection is wiki) |
+| `podarcis repo commit` | Lint-gated per-repo commit of dirty workspace repositories |
 
 ### 5. Subagent Quick Reference
 

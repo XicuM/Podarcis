@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import datetime
 import subprocess
-import sys
 from pathlib import Path
 
+from podarcis.audit import audit_gate, commit_repos
 from podarcis.console import console
 from podarcis.repos import get_repo_names, push_repos
 
@@ -80,24 +80,11 @@ def _dirty_repos(root_dir: Path) -> list[Path]:
 
 def _audit_gate(root_dir: Path) -> tuple[bool, str]:
     """Run the same link/frontmatter audit as `podarcis lint`."""
-    check_links = root_dir / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
-    py_bin = root_dir / '.venv' / 'bin' / 'python'
-    proc = subprocess.run(
-        [str(py_bin), str(check_links), str(root_dir)],
-        capture_output=True, text=True, check=False,
-    )
-    if proc.returncode != 0:
-        return False, (proc.stdout or proc.stderr).strip()[-2000:]
-    return True, 'Audit passed.'
+    return audit_gate(root_dir)
 
 
 def _commit_all(repos: list[Path], message: str) -> list[str]:
-    done = []
-    for repo in repos:
-        _git(repo, 'add', '-A')
-        if _git(repo, 'commit', '-m', message).returncode == 0:
-            done.append(repo.name)
-    return done
+    return commit_repos(repos, message)
 
 
 def _write_report(root_dir: Path, job_name: str, result: RunResult) -> Path:
