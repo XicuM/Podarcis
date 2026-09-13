@@ -10,17 +10,18 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 
-use crate::actions::{JobResult, JobRunner, JobSpec};
+use crate::actions::{JobResult, JobRunner, NativeOutcome};
 use crate::config::Config;
 use crate::editor::Editor;
 use crate::event::AppEvent;
 use crate::herdr;
 use crate::keymap::{self, Cmd, Ctx, Resolved};
 use crate::search::{self, Hit};
-use crate::theme::Theme;
+use crate::theme::{Flavor, Theme};
 use crate::ui::markdown;
+use crate::vault::git::{GitMap, TrackState};
 use crate::vault::index::Index;
 use crate::vault::links::LinkKind;
 use crate::vault::page::Page;
@@ -51,34 +52,102 @@ pub struct Toast {
 /// it never becomes furniture.
 const TOAST_TTL: Duration = Duration::from_secs(6);
 
+/// Narrowest a side pane may be dragged. Below this it is a sliver that can
+/// only be widened again by luck.
+const MIN_PANE: u16 = 12;
+
+/// How long a single click stays crouched, ready to become a double click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
 pub struct Open {
     pub page: Page,
     pub doc: markdown::Doc,
     pub doc_width: u16,
     pub scroll: usize,
+    pub inspect_scroll: usize,
     pub link: Option<usize>,
     pub editor: Option<Editor>,
+    pub selection: Option<markdown::Selection>,
+    /// A citation clicked (or navigated to) in the body, highlighted in the
+    /// inspector's sources section.
+    pub selected_citation: Option<String>,
+    /// Set alongside `selected_citation` when the selection came from a fresh
+    /// click, so the inspector scrolls it into view exactly once — a later
+    /// manual scroll away from it is left alone.
+    pub citation_scroll_pending: bool,
 }
 
 impl Open {
     fn load(path: &Path, root: &Path, width: u16, theme: &Theme) -> Option<Self> {
         let page = Page::load(path, root).ok()?;
-        let doc = markdown::render(&page.body, width, theme);
-        Some(Self { page, doc, doc_width: width, scroll: 0, link: None, editor: None })
+        let doc = if Self::is_csv(path) {
+            crate::ui::csv::Grid::parse(&page.body).to_doc(width, theme)
+        } else {
+            markdown::render(&page.body, width, theme)
+        };
+        Some(Self {
+            page,
+            doc,
+            doc_width: width,
+            scroll: 0,
+            inspect_scroll: 0,
+            link: None,
+            editor: None,
+            selection: None,
+            selected_citation: None,
+            citation_scroll_pending: false,
+        })
     }
 
-    fn reflow(&mut self, width: u16, theme: &Theme) {
+    fn is_csv(path: &Path) -> bool {
+        path.extension().and_then(|e| e.to_str()) == Some("csv")
+    }
+
+    /// A CSV renders as a table rather than markdown — navigating one is the
+    /// same reader, but its `doc` is a box-drawn grid of the raw file.
+    pub fn csv(&self) -> bool {
+        Self::is_csv(&self.page.path)
+    }
+
+    pub(crate) fn reflow(&mut self, width: u16, theme: &Theme) {
         if width == self.doc_width {
             return;
         }
+        self.selection = None;
         let anchor = self.doc.source_for_line(self.scroll);
-        self.doc = markdown::render(&self.page.body, width, theme);
+        self.doc = if self.csv() {
+            crate::ui::csv::Grid::parse(&self.page.body).to_doc(width, theme)
+        } else {
+            markdown::render(&self.page.body, width, theme)
+        };
         self.doc_width = width;
         self.scroll = self.doc.line_for_source(anchor);
     }
 
     pub fn editing(&self) -> bool {
         self.editor.is_some()
+    }
+
+    /// Raw source lines touched by a rendered selection.
+    ///
+    /// Rendering strips markdown syntax and rewraps prose, so there is no exact
+    /// column mapping back to source text; instead this resolves every source
+    /// line any part of the selection's rendered lines came from and returns
+    /// them verbatim, syntax included.
+    pub fn selected_source_text(&self, sel: markdown::Selection) -> String {
+        let (start, end) = sel.range();
+        if start == end {
+            return String::new();
+        }
+        let start_src = self.doc.source_for_line(start.line);
+        let end_src = self.doc.source_for_line(end.line);
+        self.page
+            .body
+            .lines()
+            .skip(start_src)
+            .take(end_src.saturating_sub(start_src) + 1)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -103,12 +172,32 @@ pub struct Palette {
 pub enum PromptKind {
     Commit,
     NewPage,
+    Rename,
 }
 
 pub struct Prompt {
     pub kind: PromptKind,
     pub title: String,
     pub value: String,
+    /// The file or folder a rename prompt applies to.
+    pub path: Option<PathBuf>,
+}
+
+pub struct RepoConfig {
+    pub name: String,
+    /// 0 = apply git URL, 1 = local-only, 2 = gdrive (sources only).
+    pub selected: usize,
+    pub url: String,
+}
+
+impl RepoConfig {
+    pub fn option_count(&self) -> usize {
+        if self.name == "sources" {
+            3
+        } else {
+            2
+        }
+    }
 }
 
 pub enum Overlay {
@@ -117,21 +206,116 @@ pub enum Overlay {
     Help { scroll: usize },
     Outline { selected: usize },
     Prompt(Prompt),
+    RepoConfig(RepoConfig),
+    /// A right-click context menu on a tree row.
+    Menu(Menu),
+    /// The theme picker. `original` is restored if the picker is cancelled, so
+    /// browsing twenty themes never costs you the one you had.
+    Themes { selected: usize, original: Flavor },
+}
+
+/// One action from the tree's right-click menu. `Delete` opens a confirmation
+/// menu whose only committing item is `ConfirmDelete`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuAction {
+    Open,
+    Rename,
+    Delete,
+    ConfirmDelete,
+    CopyRelative,
+    CopyAbsolute,
+    Cancel,
+}
+
+/// The context menu shown for the tree row under a right-click. Kept as its own
+/// overlay rather than a generic list because it carries the row's path and the
+/// popup rect the mouse resolves clicks against.
+pub struct Menu {
+    /// The row the menu was opened for; a confirmation menu keeps it untouched.
+    pub path: PathBuf,
+    pub items: Vec<(MenuAction, &'static str)>,
+    pub selected: usize,
+    /// Popup rectangle, computed from the click position and the layout.
+    pub area: Rect,
+    /// Row the mouse pressed down on, so a release on the same row activates.
+    pub pressed: Option<usize>,
+}
+
+/// One collection's box inside the tree column, for drawing and mouse hits.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TreePane {
+    pub area: Rect,
+    pub inner: Rect,
+    /// Index of the collection header row in `Tree::rows`.
+    pub header: usize,
+    /// First child row (header + 1). Equal to `end` when collapsed.
+    pub start: usize,
+    /// Exclusive end of this collection's rows.
+    pub end: usize,
+    pub offset: usize,
 }
 
 /// Geometry from the last frame, so mouse events and the pty know where things
 /// are. Written by the renderer, read by the app.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Areas {
     pub tree: Rect,
     pub doc: Rect,
+    pub doc_main: Rect,
+    pub doc_body: Rect,
     pub sidebar: Rect,
+    pub inspector: Rect,
+    /// Inner content rect of the inspector, borders and padding excluded —
+    /// what a click's `(x, y)` needs to turn into a row index.
+    pub inspector_body: Rect,
+    /// The citation id behind each currently visible inspector row (after
+    /// wrapping and scrolling), aligned to `inspector_body`, so a click can be
+    /// mapped back to a source without re-deriving the layout.
+    pub inspector_rows: Vec<Option<String>>,
+    /// Hit-testing for each collection pane inside the tree column.
+    pub tree_panes: Vec<TreePane>,
+    /// Column of the tree/document divider, when the tree is shown.
+    pub tree_divider: Option<u16>,
+    /// Column of the document/agents divider, when the agents pane is shown.
+    pub sidebar_divider: Option<u16>,
+    /// Row of the document/inspector divider, when the inspector is shown.
+    pub inspector_divider: Option<u16>,
+    /// The one cell that collapses the tree when shown, or reopens it when
+    /// collapsed — always sitting on whichever border is currently visible.
+    pub tree_toggle: Option<Rect>,
+    /// Same idea, for the agents sidebar.
+    pub sidebar_toggle: Option<Rect>,
+    /// The one cell that collapses the sources inspector when the document is
+    /// open, or reopens it when collapsed — on the divider row when shown, on
+    /// the document's bottom border when not.
+    pub inspector_toggle: Option<Rect>,
+    /// Navigation arrow to go back to the last visited page.
+    pub nav_back: Option<Rect>,
+    /// Navigation arrow to go forward (reverse) in history.
+    pub nav_forward: Option<Rect>,
+}
+
+/// Which divider the pointer is dragging.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Divider {
+    Tree,
+    Sidebar,
+    Inspector,
+}
+
+/// Which scrollbar the pointer is dragging.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollbarDrag {
+    Doc,
+    Inspector,
 }
 
 pub struct App {
     pub cfg: Config,
     pub theme: Theme,
     pub tree: Tree,
+    pub git: GitMap,
+    pub git_track: Vec<(PathBuf, TrackState)>,
     pub index: Index,
     pub open: Option<Open>,
     pub focus: Focus,
@@ -143,6 +327,8 @@ pub struct App {
     pub show_tree: bool,
     pub show_sidebar: bool,
     pub show_inspector: bool,
+    /// Live preview beside the editor.
+    pub preview: bool,
     pub zoom: bool,
     pub back: Vec<PathBuf>,
     pub forward: Vec<PathBuf>,
@@ -151,22 +337,51 @@ pub struct App {
     pub quit: bool,
     /// Set by a first `q` while a job is running.
     quit_confirmed: bool,
+    /// Set by a first attempt to leave the editor with unsaved changes.
+    discard_armed: bool,
+    /// The divider currently being dragged, if any.
+    pub dragging: Option<Divider>,
+    /// The scrollbar currently being dragged, if any.
+    pub dragging_scrollbar: Option<ScrollbarDrag>,
+    /// Whether mouse drag is currently selecting text in the reader.
+    pub selecting_text: bool,
+    /// The current selection drag started on the right button: releasing then
+    /// pays the selection to the agents pane as a mention instead of copying
+    /// it to the clipboard.
+    selecting_right: bool,
     pub indexing: bool,
     /// Engine version from `pyproject.toml`, for the status bar.
     pub engine_version: Option<String>,
+    /// A splash one-liner from `config.yaml` for the status bar's right corner.
+    pub oneline: Option<String>,
     pub areas: Areas,
     pub tx: Sender<AppEvent>,
     /// Cursor into `index.all_findings()` for `n` / `N`.
     finding_cursor: Option<usize>,
+    /// Every mouse `Down` increments this. Two clicks only form a double click
+    /// when they are adjacent (one generation apart), so a click in another
+    /// pane between the two quietly breaks the pair.
+    mouse_down: u64,
+    /// The timestamp, row and `mouse_down` generation of the most recent click
+    /// in the tree, used to recognise a second click on the same row.
+    last_tree_click: Option<(Instant, usize, u64)>,
 }
 
 impl App {
     pub fn new(cfg: Config, tx: Sender<AppEvent>) -> Self {
         let theme = Theme::new(cfg.flavor);
         let engine_version = crate::config::engine_version(&cfg.root);
+        let oneline = cfg.oneline();
         let collections: Vec<PathBuf> = cfg.collections().into_iter().map(|(_, p)| p).collect();
+        let git = GitMap::scan(&cfg.root, &collections);
+        let git_track = collections
+            .iter()
+            .map(|p| (p.clone(), crate::vault::git::track_state(p, &cfg.root)))
+            .collect();
         Self {
             tree: Tree::new(&cfg.root, collections),
+            git,
+            git_track,
             show_tree: cfg.tree_open,
             show_sidebar: cfg.sidebar_open,
             theme,
@@ -180,6 +395,7 @@ impl App {
             sidebar: None,
             sidebar_error: None,
             show_inspector: true,
+            preview: true,
             zoom: false,
             back: Vec::new(),
             forward: Vec::new(),
@@ -187,16 +403,93 @@ impl App {
             finder_engine: search::Engine::default(),
             quit: false,
             quit_confirmed: false,
+            discard_armed: false,
+            dragging: None,
+            dragging_scrollbar: None,
+            selecting_text: false,
+            selecting_right: false,
             engine_version,
+            oneline,
             indexing: true,
             areas: Areas::default(),
             tx,
             finding_cursor: None,
+            mouse_down: 0,
+            last_tree_click: None,
         }
+    }
+
+    fn hit_tree_title(&self, x: u16, y: u16) -> Option<String> {
+        for pane in &self.areas.tree_panes {
+            if x < pane.area.x || x >= pane.area.x + pane.area.width {
+                continue;
+            }
+            if y != pane.area.y {
+                continue;
+            }
+            return self.tree.rows.get(pane.header).map(|r| r.label.clone());
+        }
+        None
+    }
+
+    fn hit_tree_row(&self, x: u16, y: u16) -> Option<usize> {
+        if self.areas.tree_panes.is_empty() {
+            let row = (y.saturating_sub(self.areas.tree.y + 1)) as usize;
+            return Some(row.min(self.tree.rows.len().saturating_sub(1)));
+        }
+        for pane in &self.areas.tree_panes {
+            if y < pane.area.y || y >= pane.area.y + pane.area.height {
+                continue;
+            }
+            if x < pane.area.x || x >= pane.area.x + pane.area.width {
+                continue;
+            }
+            if pane.inner.is_empty() || y < pane.inner.y {
+                return Some(pane.header);
+            }
+            let row = (y.saturating_sub(pane.inner.y)) as usize;
+            let i = pane.start + pane.offset + row;
+            if i < pane.end {
+                return Some(i);
+            }
+            return Some(pane.header);
+        }
+        None
+    }
+
+    fn open_repo_config(&mut self, name: &str) {
+        let url = self
+            .cfg
+            .repo_url(name)
+            .filter(|u| !u.is_empty() && *u != "local" && *u != "gdrive")
+            .unwrap_or("")
+            .to_string();
+        self.overlay = Some(Overlay::RepoConfig(RepoConfig {
+            name: name.to_string(),
+            selected: 0,
+            url,
+        }));
     }
 
     pub fn collection_dirs(&self) -> Vec<PathBuf> {
         self.cfg.collections().into_iter().map(|(_, p)| p).collect()
+    }
+
+    pub fn refresh_git(&mut self) {
+        let dirs = self.collection_dirs();
+        self.git = GitMap::scan(&self.cfg.root, &dirs);
+        self.git_track = dirs
+            .iter()
+            .map(|p| (p.clone(), crate::vault::git::track_state(p, &self.cfg.root)))
+            .collect();
+    }
+
+    pub fn track_for(&self, path: &Path) -> TrackState {
+        self.git_track
+            .iter()
+            .find(|(p, _)| p == path)
+            .map(|(_, s)| *s)
+            .unwrap_or(TrackState::Untracked)
     }
 
     // ---------------------------------------------------------------- toasts
@@ -217,7 +510,7 @@ impl App {
 
     pub fn doc_width(&self) -> u16 {
         // Two columns of border plus one of padding on each side.
-        self.areas.doc.width.saturating_sub(4).max(20)
+        self.areas.doc.width.saturating_sub(4).max(20).min(crate::ui::markdown::MAX_WIDTH)
     }
 
     pub fn open_path(&mut self, path: &Path, push_history: bool) {
@@ -252,9 +545,11 @@ impl App {
         if open.editing() {
             return;
         }
-        let (path, anchor) = (open.page.path.clone(), open.doc.source_for_line(open.scroll));
+        let (path, anchor, inspect_scroll) =
+            (open.page.path.clone(), open.doc.source_for_line(open.scroll), open.inspect_scroll);
         if let Some(mut fresh) = Open::load(&path, &self.cfg.root, self.doc_width(), &self.theme) {
             fresh.scroll = fresh.doc.line_for_source(anchor);
+            fresh.inspect_scroll = inspect_scroll;
             self.open = Some(fresh);
         }
     }
@@ -266,16 +561,216 @@ impl App {
         }
     }
 
+    pub fn inspector_total_lines(&self) -> usize {
+        let Some(open) = self.open.as_ref() else { return 0 };
+        let lines = crate::ui::panes::inspector_lines(open, &self.index, &self.cfg.root, &self.theme);
+        // 2 columns of border, 2 of padding — matches the block the inspector
+        // is actually drawn into (`ui::panes::inspector`).
+        let width = self.areas.inspector.width.saturating_sub(4) as usize;
+        crate::ui::panes::wrap_lines(lines, width).len()
+    }
+
+    pub fn scroll_inspector(&mut self, delta: isize) {
+        let total = self.inspector_total_lines();
+        let height = self.areas.inspector.height.saturating_sub(2) as usize;
+        let max_scroll = total.saturating_sub(height);
+        let Some(open) = self.open.as_mut() else { return };
+        if delta < 0 {
+            open.inspect_scroll = open.inspect_scroll.saturating_sub(delta.unsigned_abs());
+        } else {
+            open.inspect_scroll = open.inspect_scroll.saturating_add(delta as usize).min(max_scroll);
+        }
+    }
+
+    pub fn scroll_inspector_to_y(&mut self, y: u16) {
+        let area = self.areas.inspector;
+        if area.height < 4 {
+            return;
+        }
+        let total = self.inspector_total_lines();
+        let height = area.height.saturating_sub(2) as usize;
+        if total <= height || height == 0 {
+            if let Some(open) = self.open.as_mut() {
+                open.inspect_scroll = 0;
+            }
+            return;
+        }
+        let max_scroll = total.saturating_sub(height);
+        let track_y = area.y + 1;
+        let track_len = area.height.saturating_sub(2) as usize;
+        let span = ((height * track_len) / total).max(1);
+        let scroll = Self::scroll_from_track_y(y, track_y, track_len, span, max_scroll);
+        if let Some(open) = self.open.as_mut() {
+            open.inspect_scroll = scroll;
+        }
+    }
+
+    pub fn scroll_doc_to_y(&mut self, y: u16) {
+        let area = if !self.areas.doc_main.is_empty() {
+            self.areas.doc_main
+        } else {
+            self.areas.doc
+        };
+        if area.height < 4 {
+            return;
+        }
+        let Some(open) = self.open.as_mut() else { return };
+        let total = open.doc.height();
+        let height = self.areas.doc_body.height as usize;
+        if total <= height || height == 0 {
+            open.scroll = 0;
+            return;
+        }
+        let max_scroll = total.saturating_sub(height);
+        let track_y = area.y + 1;
+        let track_len = area.height.saturating_sub(2) as usize;
+        let span = ((height * track_len) / total).max(1);
+        open.scroll = Self::scroll_from_track_y(y, track_y, track_len, span, max_scroll);
+    }
+
     // ----------------------------------------------------------------- mouse
 
-    /// Click to focus and select, wheel to scroll. The pane under the pointer
-    /// acts, whether or not it has keyboard focus — that is what a pointer is
-    /// for.
+fn scroll_from_track_y(y: u16, track_y: u16, track_len: usize, span: usize, max_scroll: usize) -> usize {
+    if track_len <= span || max_scroll == 0 {
+        return 0;
+    }
+    let click_offset = (y.saturating_sub(track_y) as usize).min(track_len.saturating_sub(1));
+    let target_top = click_offset.saturating_sub(span / 2);
+    let travel = track_len.saturating_sub(span);
+    // Rounded rather than truncated, so dragging the thumb to the bottom of the
+    // track really does reach the bottom of the document.
+    max_scroll
+        .checked_mul(target_top)
+        .and_then(|scaled| scaled.checked_add(travel / 2))
+        .and_then(|scaled| scaled.checked_div(travel))
+        .map_or(0, |scroll| scroll.min(max_scroll))
+}
+
+fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
+    if area.height < 4 || area.width < 2 {
+        return false;
+    }
+    let right_border = area.x + area.width.saturating_sub(1);
+    (x == right_border || x == right_border.saturating_sub(1))
+        && y > area.y
+        && y < area.y + area.height.saturating_sub(1)
+}
+
+    /// Click to focus and select, wheel to scroll, drag a divider to resize.
+    /// The pane under the pointer acts, whether or not it has keyboard focus —
+    /// that is what a pointer is for.
     pub fn on_mouse(&mut self, mouse: MouseEvent) {
+        // Number every Down, so a double-click pair must be two *adjacent*
+        // clicks on the same row — any click elsewhere in between disqualifies.
+        if matches!(mouse.kind, MouseEventKind::Down(_)) {
+            self.mouse_down += 1;
+        }
+
         if self.overlay.is_some() {
+            self.overlay_mouse(mouse);
             return;
         }
         let (x, y) = (mouse.column, mouse.row);
+
+        // A drag in progress owns the pointer until the button comes up, even
+        // if it strays outside the divider's own column.
+        if let Some(divider) = self.dragging {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) => return self.resize_to(divider, x, y),
+                MouseEventKind::Up(_) => {
+                    self.dragging = None;
+                    self.persist_widths();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(drag) = self.dragging_scrollbar {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    match drag {
+                        ScrollbarDrag::Doc => self.scroll_doc_to_y(y),
+                        ScrollbarDrag::Inspector => self.scroll_inspector_to_y(y),
+                    }
+                    return;
+                }
+                MouseEventKind::Up(_) => {
+                    self.dragging_scrollbar = None;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if self.selecting_text {
+            match mouse.kind {
+                MouseEventKind::Drag(btn) if (btn == MouseButton::Right) == self.selecting_right => {
+                    return self.extend_selection(x, y);
+                }
+                MouseEventKind::Up(btn) if (btn == MouseButton::Right) == self.selecting_right => {
+                    if self.selecting_right {
+                        return self.finish_selection_right(x, y);
+                    }
+                    return self.finish_selection(x, y);
+                }
+                _ => {}
+            }
+        }
+
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            if self.areas.tree_toggle.is_some_and(|r| r.x == x && r.y == y) {
+                self.run(Cmd::ToggleTree);
+                return;
+            }
+            if self.areas.sidebar_toggle.is_some_and(|r| r.x == x && r.y == y) {
+                self.run(Cmd::ToggleSidebar);
+                return;
+            }
+            if self.areas.inspector_toggle.is_some_and(|r| r.x == x && r.y == y) {
+                self.run(Cmd::ToggleInspector);
+                return;
+            }
+            if self.areas.nav_back.is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+                self.set_focus(Focus::Doc);
+                self.run(Cmd::Back);
+                return;
+            }
+            if self.areas.nav_forward.is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+                self.set_focus(Focus::Doc);
+                self.run(Cmd::Forward);
+                return;
+            }
+
+            let inspect_area = self.areas.inspector;
+            let inspect_total = self.inspector_total_lines();
+            let inspect_h = inspect_area.height.saturating_sub(2) as usize;
+            if !inspect_area.is_empty() && inspect_total > inspect_h && Self::is_on_scrollbar(inspect_area, x, y) {
+                self.dragging_scrollbar = Some(ScrollbarDrag::Inspector);
+                self.scroll_inspector_to_y(y);
+                return;
+            }
+
+            let doc_area = if !self.areas.doc_main.is_empty() {
+                self.areas.doc_main
+            } else {
+                self.areas.doc
+            };
+            let doc_total = self.open.as_ref().map(|o| o.doc.height()).unwrap_or(0);
+            let doc_h = self.areas.doc_body.height as usize;
+            if !doc_area.is_empty() && doc_total > doc_h && doc_h > 0 && Self::is_on_scrollbar(doc_area, x, y) {
+                self.dragging_scrollbar = Some(ScrollbarDrag::Doc);
+                self.scroll_doc_to_y(y);
+                return;
+            }
+
+            if let Some(divider) = self.divider_at(x, y) {
+                self.dragging = Some(divider);
+                self.zoom = false;
+                return;
+            }
+        }
+
         let inside = |rect: Rect| {
             !rect.is_empty()
                 && x >= rect.x
@@ -285,25 +780,92 @@ impl App {
         };
 
         if inside(self.areas.sidebar) {
-            // The child gets its own mouse protocol; forwarding raw events is
-            // more trouble than it is worth, so a click just moves focus.
-            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            let area = self.areas.sidebar;
+            let cols = area.width.saturating_sub(2);
+            let rows = area.height.saturating_sub(2);
+
+            if matches!(mouse.kind, MouseEventKind::Down(_)) {
                 self.set_focus(Focus::Sidebar);
+            }
+
+            if cols > 0 && rows > 0 {
+                let inside_inner = x > area.x
+                    && x <= area.x + cols
+                    && y > area.y
+                    && y <= area.y + rows;
+
+                if inside_inner || !matches!(mouse.kind, MouseEventKind::Down(_)) {
+                    let col = (x.saturating_sub(area.x)).clamp(1, cols);
+                    let row = (y.saturating_sub(area.y)).clamp(1, rows);
+                    let pixel = self.sidebar.as_ref().and_then(|pane| {
+                        pane.pixel_mouse().then_some(herdr::keys::PTY_CELL_PX)
+                    });
+                    let bytes = herdr::keys::encode_mouse(&mouse, col, row, pixel);
+                    if let Some(pane) = self.sidebar.as_mut() {
+                        pane.send(&bytes);
+                    }
+                }
             }
             return;
         }
 
         if inside(self.areas.tree) {
             match mouse.kind {
-                MouseEventKind::ScrollDown => self.tree.move_by(3),
-                MouseEventKind::ScrollUp => self.tree.move_by(-3),
+                MouseEventKind::ScrollDown => self.tree.move_by(1),
+                MouseEventKind::ScrollUp => self.tree.move_by(-1),
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.set_focus(Focus::Tree);
-                    let row = (y.saturating_sub(self.areas.tree.y + 1)) as usize;
-                    let offset = crate::ui::panes::tree_offset(self);
-                    self.tree.move_to(offset + row);
-                    if let Some(path) = self.tree.toggle() {
-                        self.open_path(&path, true);
+                    if let Some(name) = self.hit_tree_title(x, y) {
+                        self.open_repo_config(&name);
+                    } else if let Some(i) = self.hit_tree_row(x, y) {
+                        self.tree.move_to(i);
+                        let now = Instant::now();
+                        let double = match self.last_tree_click.replace((now, i, self.mouse_down)) {
+                            Some((at, row, gen)) => {
+                                row == i
+                                    && gen + 1 == self.mouse_down
+                                    && now.duration_since(at) <= DOUBLE_CLICK
+                            }
+                            None => false,
+                        };
+                        if double {
+                            // The first press already toggled, so a folder is
+                            // made sure to stay expanded before its index opens.
+                            if let Some(path) = self.tree.open_double(i) {
+                                self.open_path(&path, true);
+                            }
+                        } else {
+                            // A single click selects a page, and toggles a
+                            // folder — opening is saved for the double click.
+                            self.tree.toggle();
+                        }
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    self.set_focus(Focus::Tree);
+                    if let Some(i) = self.hit_tree_row(x, y) {
+                        self.tree.move_to(i);
+                        self.open_tree_menu(i, x, y);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if inside(self.areas.inspector) {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.scroll_inspector(3),
+                MouseEventKind::ScrollUp => self.scroll_inspector(-3),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.set_focus(Focus::Doc);
+                    let body = self.areas.inspector_body;
+                    if body.is_empty() || y < body.y || y >= body.y + body.height {
+                        return;
+                    }
+                    let row = (y - body.y) as usize;
+                    if let Some(Some(id)) = self.areas.inspector_rows.get(row).cloned() {
+                        self.open_source(&id);
                     }
                 }
                 _ => {}
@@ -315,8 +877,254 @@ impl App {
             match mouse.kind {
                 MouseEventKind::ScrollDown => self.scroll(3),
                 MouseEventKind::ScrollUp => self.scroll(-3),
-                MouseEventKind::Down(MouseButton::Left) => self.set_focus(Focus::Doc),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.set_focus(Focus::Doc);
+                    if self.open.as_ref().is_some_and(|o| !o.editing()) {
+                        self.start_selection(x, y);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    // A right-drag is the same selection gesture, paid to the
+                    // agent on release instead of the clipboard.
+                    self.set_focus(Focus::Doc);
+                    if self.open.as_ref().is_some_and(|o| !o.editing()) {
+                        self.selecting_right = true;
+                        self.start_selection(x, y);
+                    }
+                }
                 _ => {}
+            }
+        }
+    }
+
+    /// Whole terminal in cells, inferred from the panes being drawn.
+    fn viewport(&self) -> (u16, u16) {
+        let rects = [self.areas.tree, self.areas.doc, self.areas.sidebar, self.areas.inspector];
+        let width = rects
+            .iter()
+            .filter(|r| !r.is_empty())
+            .map(|r| r.x.saturating_add(r.width))
+            .max()
+            .unwrap_or(80);
+        let height = rects
+            .iter()
+            .filter(|r| !r.is_empty())
+            .map(|r| r.y.saturating_add(r.height))
+            .max()
+            .unwrap_or(24);
+        (width, height)
+    }
+
+    /// The right-click menu is the only overlay that takes the pointer. A left
+    /// press highlights the item under it and a release on the same row runs
+    /// it; a press anywhere else dismisses the menu.
+    fn overlay_mouse(&mut self, mouse: MouseEvent) {
+        let area = match self.overlay.as_ref() {
+            Some(Overlay::Menu(menu)) => menu.area,
+            _ => return,
+        };
+        if area.is_empty() {
+            return;
+        }
+        let inside = mouse.column >= area.x
+            && mouse.column < area.x + area.width
+            && mouse.row >= area.y
+            && mouse.row < area.y + area.height;
+        let row = mouse.row.saturating_sub(area.y + 1) as usize;
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) if inside => {
+                if let Some(Overlay::Menu(menu)) = self.overlay.as_mut() {
+                    menu.selected = row.min(menu.items.len().saturating_sub(1));
+                    menu.pressed = (row < menu.items.len()).then_some(row);
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => self.overlay = None,
+            MouseEventKind::Up(MouseButton::Left) if inside => {
+                let fire = self.overlay.as_ref().is_some_and(|o| match o {
+                    Overlay::Menu(menu) => menu.pressed == Some(row),
+                    _ => false,
+                });
+                if fire {
+                    self.activate_menu();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Open the right-click context menu for tree row `i`, positioned at the
+    /// pointer but clamped to the layout so it never leaves the screen.
+    fn open_tree_menu(&mut self, i: usize, x: u16, y: u16) {
+        let Some(row) = self.tree.rows.get(i).cloned() else { return };
+        let items: Vec<(MenuAction, &'static str)> = if row.is_collection {
+            // A collection root has no rename or delete: those names belong to
+            // `repositories:` in the config, not to the row in the tree.
+            vec![
+                (MenuAction::Open, "open"),
+                (MenuAction::CopyRelative, "copy relative path"),
+                (MenuAction::CopyAbsolute, "copy absolute path"),
+            ]
+        } else {
+            vec![
+                (MenuAction::Open, "open"),
+                (MenuAction::Rename, "rename…"),
+                (MenuAction::Delete, "delete…"),
+                (MenuAction::CopyRelative, "copy relative path"),
+                (MenuAction::CopyAbsolute, "copy absolute path"),
+            ]
+        };
+        let width = items.iter().map(|(_, label)| label.len()).max().unwrap_or(12) as u16 + 6;
+        let height = items.len() as u16 + 3;
+        let (screen_w, screen_h) = self.viewport();
+        let area = Rect {
+            x: x.saturating_add(1).min(screen_w.saturating_sub(width)),
+            y: y.saturating_sub(height / 2).min(screen_h.saturating_sub(height)),
+            width,
+            height,
+        };
+        self.overlay = Some(Overlay::Menu(Menu {
+            path: row.path,
+            items,
+            selected: 0,
+            area,
+            pressed: None,
+        }));
+    }
+
+    fn divider_at(&self, x: u16, y: u16) -> Option<Divider> {
+        let body = self.areas.doc;
+        if body.is_empty() {
+            return None;
+        }
+        let near = |pos: Option<u16>, coord: u16| {
+            pos.is_some_and(|p| coord.abs_diff(p) <= crate::ui::GRAB)
+        };
+        if y >= body.y && y < body.y + body.height {
+            if near(self.areas.tree_divider, x) {
+                return Some(Divider::Tree);
+            }
+            // Grab the shared border and the document side of it, not the first
+            // inner column of the herdr pane — that column is a real click target.
+            if self.areas.sidebar_divider.is_some_and(|p| x == p || x + 1 == p) {
+                return Some(Divider::Sidebar);
+            }
+        }
+        if x >= body.x && x < body.x + body.width
+            && near(self.areas.inspector_divider, y) {
+                return Some(Divider::Inspector);
+            }
+        None
+    }
+
+    /// Move a divider to column `x` or row `y`. Widths are clamped so neither the document
+    /// nor the pane being dragged can be squeezed out of existence.
+    fn resize_to(&mut self, divider: Divider, x: u16, y: u16) {
+        let total = self.areas.tree.width + self.areas.doc.width + self.areas.sidebar.width;
+        let origin = self.areas.tree.x.min(self.areas.doc.x);
+        let min_doc = 30u16;
+        match divider {
+            Divider::Tree => {
+                if total == 0 {
+                    return;
+                }
+                let max = total.saturating_sub(min_doc + self.areas.sidebar.width);
+                let width = x.saturating_sub(origin).saturating_add(1);
+                self.cfg.tree_width = width.clamp(MIN_PANE, max.max(MIN_PANE));
+            }
+            Divider::Sidebar => {
+                if total == 0 {
+                    return;
+                }
+                let max = total.saturating_sub(min_doc + self.areas.tree.width);
+                let width = (origin + total).saturating_sub(x);
+                self.cfg.sidebar_width = width.clamp(MIN_PANE, max.max(MIN_PANE));
+            }
+            Divider::Inspector => {
+                let doc_bottom = self.areas.doc.y + self.areas.doc.height;
+                let min_main = 8u16;
+                let min_inspect = 4u16;
+                let max_inspect = self.areas.doc.height.saturating_sub(min_main);
+                let new_h = doc_bottom.saturating_sub(y);
+                self.cfg.inspector_height = new_h.clamp(min_inspect, max_inspect.max(min_inspect));
+            }
+        }
+    }
+
+    pub fn persist_widths(&self) {
+        let _ = self.cfg.save_tui();
+    }
+
+    pub fn adjust_inspector_height(&mut self, delta: i16) {
+        let min_main = 8u16;
+        let min_inspect = 4u16;
+        let max_inspect = self.areas.doc.height.saturating_sub(min_main);
+        let current = self.cfg.inspector_height as i16;
+        let new_h = (current + delta).clamp(min_inspect as i16, max_inspect.max(min_inspect) as i16) as u16;
+        if new_h != self.cfg.inspector_height {
+            self.cfg.inspector_height = new_h;
+            self.persist_widths();
+        }
+    }
+
+    pub fn adjust_tree_width(&mut self, delta: i16) {
+        let total = self.areas.tree.width + self.areas.doc.width + self.areas.sidebar.width;
+        let min_doc = 30u16;
+        let sidebar_w = if self.show_sidebar { self.areas.sidebar.width } else { 0 };
+        let max = if total > 0 {
+            total.saturating_sub(min_doc + sidebar_w)
+        } else {
+            120
+        };
+        let current = self.cfg.tree_width as i16;
+        let new_w = (current + delta).clamp(MIN_PANE as i16, max.max(MIN_PANE) as i16) as u16;
+        if new_w != self.cfg.tree_width {
+            self.cfg.tree_width = new_w;
+            self.persist_widths();
+        }
+    }
+
+    pub fn adjust_sidebar_width(&mut self, delta: i16) {
+        let total = self.areas.tree.width + self.areas.doc.width + self.areas.sidebar.width;
+        let min_doc = 30u16;
+        let tree_w = if self.show_tree { self.areas.tree.width } else { 0 };
+        let max = if total > 0 {
+            total.saturating_sub(min_doc + tree_w)
+        } else {
+            120
+        };
+        let current = self.cfg.sidebar_width as i16;
+        let new_w = (current + delta).clamp(MIN_PANE as i16, max.max(MIN_PANE) as i16) as u16;
+        if new_w != self.cfg.sidebar_width {
+            self.cfg.sidebar_width = new_w;
+            self.persist_widths();
+        }
+    }
+
+    pub fn shrink_active_pane(&mut self) {
+        match self.focus {
+            Focus::Tree => self.adjust_tree_width(-4),
+            Focus::Sidebar => self.adjust_sidebar_width(-4),
+            Focus::Doc => {
+                if self.show_sidebar {
+                    self.adjust_sidebar_width(-4);
+                } else if self.show_tree {
+                    self.adjust_tree_width(-4);
+                }
+            }
+        }
+    }
+
+    pub fn widen_active_pane(&mut self) {
+        match self.focus {
+            Focus::Tree => self.adjust_tree_width(4),
+            Focus::Sidebar => self.adjust_sidebar_width(4),
+            Focus::Doc => {
+                if self.show_sidebar {
+                    self.adjust_sidebar_width(4);
+                } else if self.show_tree {
+                    self.adjust_tree_width(4);
+                }
             }
         }
     }
@@ -368,13 +1176,10 @@ impl App {
         }
     }
 
-    /// In the editor, only Save and Leave are ours; a visible completion popup
-    /// claims its own navigation keys. Everything else is edtui's.
+    /// The editor is modeless: every key is text unless it is one of the few
+    /// the editor itself claims. A visible completion popup claims its own
+    /// navigation keys first.
     fn editor_key(&mut self, key: KeyEvent) {
-        if let Resolved::Run(cmd) = keymap::resolve(&key, Ctx::Edit, None) {
-            return self.run(cmd);
-        }
-
         let has_completion = self
             .open
             .as_ref()
@@ -384,11 +1189,11 @@ impl App {
         if has_completion {
             let editor = self.open.as_mut().unwrap().editor.as_mut().unwrap();
             let handled = match (key.code, key.modifiers) {
-                (KeyCode::Tab, _) | (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+                (KeyCode::Tab, _) | (KeyCode::Down, _) => {
                     editor.completion.as_mut().unwrap().move_by(1);
                     true
                 }
-                (KeyCode::BackTab, _) | (KeyCode::Up, _) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+                (KeyCode::BackTab, _) | (KeyCode::Up, _) => {
                     editor.completion.as_mut().unwrap().move_by(-1);
                     true
                 }
@@ -407,10 +1212,54 @@ impl App {
             }
         }
 
+        if let Resolved::Run(cmd) = keymap::resolve(&key, Ctx::Edit, None) {
+            return self.run(cmd);
+        }
+
+        // Markdown-aware keys the editor handles before edtui sees them.
+        match (key.code, key.modifiers) {
+            (KeyCode::Enter, KeyModifiers::NONE) => {
+                let continued = self
+                    .open
+                    .as_mut()
+                    .and_then(|o| o.editor.as_mut())
+                    .is_some_and(Editor::continue_block);
+                if continued {
+                    return;
+                }
+            }
+            (KeyCode::Tab, _) => {
+                self.with_editor(|editor| editor.indent(false));
+                return;
+            }
+            (KeyCode::BackTab, _) => {
+                self.with_editor(|editor| editor.indent(true));
+                return;
+            }
+            (KeyCode::Down, KeyModifiers::NONE) => {
+                self.with_editor(|editor| editor.move_visual(true));
+                return;
+            }
+            (KeyCode::Up, KeyModifiers::NONE) => {
+                self.with_editor(|editor| editor.move_visual(false));
+                return;
+            }
+            _ => {}
+        }
+
         if let Some(editor) = self.open.as_mut().and_then(|o| o.editor.as_mut()) {
             editor.events.on_key_event(key, &mut editor.state);
+            editor.keep_modeless();
         }
+        // Typing again means the warning has to be re-earned.
+        self.discard_armed = false;
         self.refresh_completion();
+    }
+
+    fn with_editor(&mut self, action: impl FnOnce(&mut Editor)) {
+        if let Some(editor) = self.open.as_mut().and_then(|o| o.editor.as_mut()) {
+            action(editor);
+        }
     }
 
     fn refresh_completion(&mut self) {
@@ -433,7 +1282,7 @@ impl App {
                 if self.jobs.is_busy() && !self.quit_confirmed {
                     self.quit_confirmed = true;
                     let running = self.jobs.labels().join(", ");
-                    self.toast(Level::Warn, format!("still running: {running} — press q again to quit"));
+                    self.toast(Level::Warn, format!("still running: {running} — press ctrl+q again to quit"));
                 } else {
                     self.quit = true;
                 }
@@ -441,7 +1290,10 @@ impl App {
             Cmd::Help => self.overlay = Some(Overlay::Help { scroll: 0 }),
             Cmd::Palette => self.open_palette(),
             Cmd::Reload => self.reload_everything(),
-            Cmd::CycleTheme => self.cycle_theme(),
+            Cmd::Theme => {
+                let selected = Flavor::ALL.iter().position(|f| *f == self.cfg.flavor).unwrap_or(0);
+                self.overlay = Some(Overlay::Themes { selected, original: self.cfg.flavor });
+            }
 
             Cmd::FindFiles => self.open_finder(search::Mode::Files),
             Cmd::FindText => self.open_finder(search::Mode::Text),
@@ -468,7 +1320,15 @@ impl App {
                 }
             }
             Cmd::ToggleInspector => self.show_inspector = !self.show_inspector,
+            Cmd::ShrinkInspector => self.adjust_inspector_height(-2),
+            Cmd::GrowInspector => self.adjust_inspector_height(2),
             Cmd::ZoomPane => self.zoom = !self.zoom,
+            Cmd::ShrinkPane => self.shrink_active_pane(),
+            Cmd::WidenPane => self.widen_active_pane(),
+            Cmd::ShrinkTree => self.adjust_tree_width(-4),
+            Cmd::WidenTree => self.adjust_tree_width(4),
+            Cmd::ShrinkSidebar => self.adjust_sidebar_width(-4),
+            Cmd::WidenSidebar => self.adjust_sidebar_width(4),
             Cmd::LeaveSidebar => self.set_focus(Focus::Doc),
 
             Cmd::Back => self.go_back(),
@@ -512,13 +1372,22 @@ impl App {
                     self.overlay = Some(Overlay::Outline { selected: 0 });
                 }
             }
+            Cmd::Copy => self.copy_selection_or_page(),
+            Cmd::ClearSelection => self.clear_selection(),
 
             Cmd::Edit => self.enter_editor(),
             Cmd::Save => self.save(),
             Cmd::LeaveEdit => self.leave_editor(),
+            Cmd::Bold => self.with_editor(|editor| editor.wrap_emphasis("**")),
+            Cmd::Italic => self.with_editor(|editor| editor.wrap_emphasis("_")),
+            Cmd::Link => {
+                self.with_editor(crate::editor::Editor::insert_link);
+                self.refresh_completion();
+            }
+            Cmd::TogglePreview => self.preview = !self.preview,
 
-            Cmd::Lint => self.spawn(JobSpec::capturing("lint", &["lint", "--json"])),
-            Cmd::SyncRepos => self.spawn(JobSpec::new("sync", &["repo", "sync"])),
+            Cmd::Lint => self.run_lint(),
+            Cmd::SyncRepos => self.run_sync_repos(),
             Cmd::Commit => self.prompt(PromptKind::Commit, "commit message"),
             Cmd::NewPage => self.prompt(PromptKind::NewPage, "new page path (relative to the checkout)"),
             Cmd::Uncited => self.show_uncited(),
@@ -526,11 +1395,24 @@ impl App {
     }
 
     fn set_focus(&mut self, focus: Focus) {
-        self.focus = match focus {
+        let next = match focus {
             Focus::Tree if !self.show_tree => Focus::Doc,
             Focus::Sidebar if !self.show_sidebar || self.sidebar.is_none() => self.focus,
             other => other,
         };
+        if next != self.focus {
+            if self.focus == Focus::Sidebar {
+                if let Some(pane) = self.sidebar.as_mut() {
+                    pane.send(b"\x1b[O");
+                }
+            }
+            if next == Focus::Sidebar {
+                if let Some(pane) = self.sidebar.as_mut() {
+                    pane.send(b"\x1b[I");
+                }
+            }
+            self.focus = next;
+        }
         self.zoom = false;
     }
 
@@ -593,7 +1475,271 @@ impl App {
             LinkKind::External => self.toast(Level::Info, format!("external: {}", link.target)),
             LinkKind::Anchor => self.jump_to_anchor(&link.target),
             LinkKind::Wiki => self.toast(Level::Warn, "wikilinks are forbidden — use a relative link"),
+            LinkKind::Footnote => self.select_citation(&link.target),
         }
+    }
+
+    /// Highlight a citation in the inspector's sources section — from a click
+    /// or keyboard nav on its `[n]` mark in the body — and queue it to be
+    /// scrolled into view on the next inspector render.
+    fn select_citation(&mut self, id: &str) {
+        self.show_inspector = true;
+        if let Some(open) = self.open.as_mut() {
+            open.selected_citation = Some(id.to_string());
+            open.citation_scroll_pending = true;
+        }
+    }
+
+    /// Open a source's own file (its `resource:` path) in the main document
+    /// pane — the reader is the only "visualizer" this app has, so opening a
+    /// source means reading it the same way as any wiki page.
+    pub fn open_source(&mut self, id: &str) {
+        let Some(open) = self.open.as_ref() else { return };
+        // A frontmatter `sources:` entry names its own `resource:` path; a
+        // footnote-only citation carries its link target on the definition line.
+        let dir = open.page.path.parent().unwrap_or(&self.cfg.root).to_path_buf();
+        let resource = open
+            .page
+            .okf
+            .sources
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.resource.as_deref().map(str::to_string))
+            .or_else(|| {
+                open.page
+                    .footnote_defs()
+                    .into_iter()
+                    .find(|(fid, _, _)| fid == id)
+                    .and_then(|(_, _, target)| target)
+            });
+        let Some(resource) = resource else {
+            self.toast(Level::Info, format!("{id} has no resource path"));
+            return;
+        };
+        let target = crate::vault::links::normalize(&dir.join(&resource));
+        if target.starts_with(&self.cfg.root) && target.exists() {
+            self.open_path(&target, true);
+        } else {
+            self.toast(Level::Bad, format!("broken source: {resource}"));
+        }
+    }
+
+    pub fn reader_body(&self) -> Rect {
+        if !self.areas.doc_body.is_empty() {
+            return self.areas.doc_body;
+        }
+        let area = self.areas.doc;
+        if area.is_empty() {
+            return Rect::default();
+        }
+        let min_main = 8u16;
+        let min_inspect = 4u16;
+        let main = if self.show_inspector && area.height >= min_main + min_inspect {
+            let max_inspect = area.height.saturating_sub(min_main);
+            let height = self.cfg.inspector_height.clamp(min_inspect, max_inspect);
+            let [main, _] = Layout::vertical([Constraint::Min(min_main), Constraint::Length(height)]).areas(area);
+            main
+        } else {
+            area
+        };
+        let inner_x = main.x.saturating_add(2);
+        let inner_y = main.y.saturating_add(1);
+        let inner_w = main.width.saturating_sub(4);
+        let inner_h = main.height.saturating_sub(2);
+        Rect::new(
+            inner_x,
+            inner_y.saturating_add(2),
+            inner_w,
+            inner_h.saturating_sub(2),
+        )
+    }
+
+    pub fn char_pos_at(&self, x: u16, y: u16) -> Option<markdown::TextPos> {
+        let open = self.open.as_ref()?;
+        if open.doc.lines.is_empty() {
+            return None;
+        }
+        let body = self.reader_body();
+        if body.is_empty() || body.height == 0 {
+            return None;
+        }
+
+        let rel_y = if y < body.y {
+            0
+        } else if y >= body.y + body.height {
+            body.height.saturating_sub(1) as usize
+        } else {
+            (y - body.y) as usize
+        };
+
+        let line_idx = (open.scroll + rel_y).min(open.doc.lines.len().saturating_sub(1));
+        let line = &open.doc.lines[line_idx];
+        let plain = line.plain_text();
+
+        let rel_x = (x as isize - body.x as isize).max(0) as usize;
+        let mut cur_col = 0usize;
+        let mut char_idx = 0usize;
+        for c in plain.chars() {
+            let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+            if cur_col + w > rel_x {
+                break;
+            }
+            cur_col += w;
+            char_idx += 1;
+        }
+
+        Some(markdown::TextPos { line: line_idx, col: char_idx })
+    }
+
+    pub fn start_selection(&mut self, x: u16, y: u16) {
+        if let Some(pos) = self.char_pos_at(x, y) {
+            self.selecting_text = true;
+            if let Some(open) = self.open.as_mut() {
+                open.selection = Some(markdown::Selection::new(pos, pos));
+            }
+        }
+    }
+
+    pub fn extend_selection(&mut self, x: u16, y: u16) {
+        let body = self.reader_body();
+        if !body.is_empty() {
+            if y < body.y {
+                self.scroll(-1);
+            } else if y >= body.y + body.height {
+                self.scroll(1);
+            }
+        }
+
+        if let Some(pos) = self.char_pos_at(x, y) {
+            if let Some(open) = self.open.as_mut() {
+                if let Some(sel) = open.selection.as_mut() {
+                    sel.cursor = pos;
+                }
+            }
+        }
+    }
+
+    pub fn finish_selection(&mut self, x: u16, y: u16) {
+        self.selecting_text = false;
+        let click_pos = self.char_pos_at(x, y);
+        if let Some(pos) = click_pos {
+            if let Some(open) = self.open.as_mut() {
+                if let Some(sel) = open.selection.as_mut() {
+                    sel.cursor = pos;
+                }
+            }
+        }
+        let Some(open) = self.open.as_mut() else { return };
+        let Some(sel) = open.selection else { return };
+        if sel.is_empty() {
+            open.selection = None;
+            // A click without dragging on a link activates and follows that link
+            let mut clicked_link = None;
+            if let Some(pos) = click_pos {
+                if let Some(line) = open.doc.lines.get(pos.line) {
+                    let mut cur = 0;
+                    for seg in &line.segs {
+                        let len = seg.text.chars().count();
+                        if pos.col >= cur && pos.col < cur + len {
+                            if let Some(link_idx) = seg.link {
+                                open.link = Some(link_idx);
+                                clicked_link = Some(link_idx);
+                            }
+                            break;
+                        }
+                        cur += len;
+                    }
+                }
+            }
+            if clicked_link.is_some() {
+                self.follow_link();
+            }
+            return;
+        }
+        let text = open.selected_source_text(sel);
+        if !text.is_empty() {
+            crate::clipboard::copy(&text);
+            let n = text.lines().count().max(1);
+            let label = if n == 1 { "copied 1 line".to_string() } else { format!("copied {n} lines") };
+            self.toast(Level::Good, label);
+        } else {
+            open.selection = None;
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        if let Some(open) = self.open.as_mut() {
+            open.selection = None;
+        }
+    }
+
+    /// Right-button release ends the drag the same way as a left one, but the
+    /// selection is paid to the agents pane as a `@path:lines` mention rather
+    /// than copied to the clipboard. A click without a drag selects nothing and
+    /// sends nothing — and never follows a link, which is a left-button habit.
+    pub fn finish_selection_right(&mut self, x: u16, y: u16) {
+        self.selecting_text = false;
+        self.selecting_right = false;
+        if let Some(pos) = self.char_pos_at(x, y) {
+            if let Some(open) = self.open.as_mut() {
+                if let Some(sel) = open.selection.as_mut() {
+                    sel.cursor = pos;
+                }
+            }
+        }
+        let Some(mention) = self.selection_mention() else {
+            self.clear_selection();
+            return;
+        };
+        self.send_to_agent(&mention);
+    }
+
+    /// The `@<rel>:<first>-<last>` mention for the current selection, if there
+    /// is a non-empty one. Line numbers are the file's real 1-based numbers:
+    /// `source_for_line` indexes into the body, which starts at `body_start`.
+    fn selection_mention(&self) -> Option<String> {
+        let open = self.open.as_ref()?;
+        let sel = open.selection.filter(|s| !s.is_empty())?;
+        let (start, end) = sel.range();
+        let first = open.page.body_start + open.doc.source_for_line(start.line) + 1;
+        let last = open.page.body_start + open.doc.source_for_line(end.line) + 1;
+        let range = if first == last { format!("{first}") } else { format!("{first}-{last}") };
+        Some(format!("@{}:{range}", open.page.rel))
+    }
+
+    /// Type `text` into the herdr pane and press enter, so the mention arrives
+    /// in the agent session exactly as if the user had typed and submitted it.
+    fn send_to_agent(&mut self, text: &str) {
+        let Some(pane) = self.sidebar.as_mut() else {
+            self.toast(Level::Warn, "no agent session — open the agents pane (ctrl+g)");
+            return;
+        };
+        if !pane.is_alive() {
+            self.toast(Level::Warn, "the agent session has exited — ctrl+g to restart");
+            return;
+        }
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(b'\r');
+        pane.send(&bytes);
+        self.toast(Level::Good, "sent selection to the agent");
+    }
+
+    pub fn copy_selection_or_page(&mut self) {
+        let Some(open) = self.open.as_ref() else { return };
+        if let Some(sel) = open.selection {
+            if !sel.is_empty() {
+                let text = open.selected_source_text(sel);
+                if !text.is_empty() {
+                    crate::clipboard::copy(&text);
+                    let n = text.lines().count().max(1);
+                    let label = if n == 1 { "copied 1 line".to_string() } else { format!("copied {n} lines") };
+                    self.toast(Level::Good, label);
+                    return;
+                }
+            }
+        }
+        crate::clipboard::copy(&open.page.body);
+        self.toast(Level::Good, "copied page to clipboard");
     }
 
     fn jump_to_anchor(&mut self, anchor: &str) {
@@ -665,25 +1811,9 @@ impl App {
         );
     }
 
-    fn cycle_theme(&mut self) {
-        self.cfg.flavor = self.cfg.flavor.next();
-        self.theme = Theme::new(self.cfg.flavor);
-        self.reflow_forced();
-        herdr::pty::reload_config(self.cfg.flavor);
-        let flavor = self.cfg.flavor.as_str();
-        self.toast(Level::Info, format!("theme: catppuccin {flavor} (`podarcis config` to persist)"));
-    }
-
-    fn reflow_forced(&mut self) {
-        let (width, theme) = (self.doc_width(), self.theme);
-        if let Some(open) = self.open.as_mut() {
-            open.doc_width = 0;
-            open.reflow(width, &theme);
-        }
-    }
-
     fn reload_everything(&mut self) {
         self.tree.rebuild();
+        self.refresh_git();
         self.reload_open();
         self.start_indexing();
         self.toast(Level::Info, "reloading");
@@ -701,15 +1831,19 @@ impl App {
         editor.goto_line(line);
         open.editor = Some(editor);
         self.focus = Focus::Doc;
+        self.discard_armed = false;
     }
 
     fn save(&mut self) {
+        self.discard_armed = false;
         let Some(open) = self.open.as_mut() else { return };
         let Some(editor) = open.editor.as_mut() else { return };
         match editor.save() {
             Ok(()) => {
                 let path = editor.path.clone();
-                self.index.refresh(&path);
+                if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    self.index.refresh(&path);
+                }
                 self.toast(Level::Good, format!("saved {}", crate::vault::page::rel_path(&path, &self.cfg.root)));
                 self.refresh_page_after_save();
             }
@@ -718,32 +1852,34 @@ impl App {
     }
 
     /// Re-parse the page so the inspector and findings reflect what was saved,
-    /// without closing the editor.
+    /// without closing the editor. A CSV re-renders its table grid the same way.
     fn refresh_page_after_save(&mut self) {
         let root = self.cfg.root.clone();
         if let Some(open) = self.open.as_mut() {
             if let Ok(page) = Page::load(&open.page.path, &root) {
                 open.page = page;
+                if open.csv() {
+                    let width = open.doc_width.max(20);
+                    open.doc = crate::ui::csv::Grid::parse(&open.page.body).to_doc(width, &self.theme);
+                }
             }
         }
     }
 
+    /// Leaving with unsaved changes asks once, then discards on a second press.
     fn leave_editor(&mut self) {
         let dirty = self
             .open
             .as_ref()
             .and_then(|o| o.editor.as_ref())
             .is_some_and(Editor::dirty);
-        if dirty {
-            self.toast(Level::Warn, "unsaved changes — ctrl+s to save, ctrl+w again to discard");
-            if let Some(editor) = self.open.as_mut().and_then(|o| o.editor.as_mut()) {
-                // Second press discards: mark it by clearing the completion and
-                // letting the next call through.
-                if editor.completion.is_none() && editor.dirty() {
-                    editor.dismiss_completion();
-                }
-            }
+
+        if dirty && !self.discard_armed {
+            self.discard_armed = true;
+            self.toast(Level::Warn, "unsaved changes — ctrl+s to save, esc again to discard");
+            return;
         }
+        self.discard_armed = false;
         if let Some(open) = self.open.as_mut() {
             open.editor = None;
         }
@@ -801,6 +1937,24 @@ impl App {
         }));
     }
 
+    /// Switch theme: repaint, re-wrap the page, and hand the new flavour to
+    /// the agents pane so the two never disagree.
+    fn apply_flavor(&mut self, flavor: Flavor) {
+        if self.cfg.flavor == flavor {
+            return;
+        }
+        self.cfg.flavor = flavor;
+        self.theme = Theme::new(flavor);
+        // The document is re-rendered rather than re-wrapped: every span
+        // carries a colour from the old theme.
+        let (width, theme) = (self.doc_width(), self.theme);
+        if let Some(open) = self.open.as_mut() {
+            open.doc_width = 0;
+            open.reflow(width, &theme);
+        }
+        herdr::pty::reload_config(flavor);
+    }
+
     fn open_palette(&mut self) {
         let items = palette_items("");
         self.overlay = Some(Overlay::Palette(Palette { query: String::new(), items, selected: 0 }));
@@ -811,6 +1965,7 @@ impl App {
             kind,
             title: title.to_string(),
             value: String::new(),
+            path: None,
         }));
     }
 
@@ -837,10 +1992,42 @@ impl App {
                 }
                 _ => {}
             },
+            Some(Overlay::Themes { .. }) => self.theme_key(key),
             Some(Overlay::Palette(_)) => self.palette_key(key),
             Some(Overlay::Finder(_)) => self.finder_key(key),
             Some(Overlay::Prompt(_)) => self.prompt_key(key),
+            Some(Overlay::Menu(_)) => self.menu_key(key),
+            Some(Overlay::RepoConfig(_)) => self.repo_config_key(key),
             None => {}
+        }
+    }
+
+    fn theme_key(&mut self, key: KeyEvent) {
+        let Some(Overlay::Themes { selected, original }) = self.overlay.as_mut() else { return };
+        let original = *original;
+        let n = Flavor::ALL.len();
+        match key.code {
+            KeyCode::Esc => {
+                self.overlay = None;
+                self.apply_flavor(original);
+            }
+            KeyCode::Enter => {
+                self.overlay = None;
+                let _ = self.cfg.save_tui();
+                let name = self.cfg.flavor.display_name();
+                self.toast(Level::Good, format!("theme: {name}"));
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                *selected = (*selected + 1) % n;
+                let flavor = Flavor::ALL[*selected];
+                self.apply_flavor(flavor);
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                *selected = (*selected + n - 1) % n;
+                let flavor = Flavor::ALL[*selected];
+                self.apply_flavor(flavor);
+            }
+            _ => {}
         }
     }
 
@@ -963,21 +2150,248 @@ impl App {
             }
             return;
         }
-        let collection = finder.collection.unwrap_or("all");
-        let args = vec![
-            "wiki".to_string(),
-            "search".to_string(),
-            finder.query.clone(),
-            "--json".to_string(),
-            "--collection".to_string(),
-            collection.to_string(),
-        ];
-        let spec = JobSpec { label: "semantic search".into(), args, capture: true };
-        let id = self.jobs.spawn(&self.cfg.cli(), &self.cfg.root, spec, self.tx.clone());
+        let collection = finder.collection.unwrap_or("all").to_string();
+        let query = finder.query.clone();
+        let root = self.cfg.root.clone();
+        let tx = self.tx.clone();
+        let id = self.jobs.spawn_native(
+            "semantic search",
+            vec!["wiki".into(), "search".into(), query.clone(), "--json".into(), "--collection".into(), collection.clone()],
+            move || match search::semantic_search(&root, &query, &collection) {
+                Ok(stdout) => NativeOutcome { code: 0, stdout, stderr: String::new() },
+                Err(err) => NativeOutcome { code: 1, stdout: String::new(), stderr: err },
+            },
+            tx,
+        );
         if let Some(Overlay::Finder(finder)) = self.overlay.as_mut() {
             finder.running = Some(id);
             finder.warning = None;
         }
+    }
+
+    fn menu_key(&mut self, key: KeyEvent) {
+        let Some(Overlay::Menu(menu)) = self.overlay.as_ref() else { return };
+        let last = menu.items.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.overlay = None,
+            KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
+                if let Some(Overlay::Menu(menu)) = self.overlay.as_mut() {
+                    menu.selected = (menu.selected + 1).min(last);
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
+                if let Some(Overlay::Menu(menu)) = self.overlay.as_mut() {
+                    menu.selected = menu.selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => self.activate_menu(),
+            _ => {}
+        }
+    }
+
+    fn activate_menu(&mut self) {
+        let (action, path, area) = match self.overlay.as_ref() {
+            Some(Overlay::Menu(menu)) => (
+                menu.items.get(menu.selected).map(|(a, _)| *a),
+                menu.path.clone(),
+                menu.area,
+            ),
+            _ => return,
+        };
+        let rel = crate::vault::page::rel_path(&path, &self.cfg.root);
+        self.overlay = None;
+        match action {
+            Some(MenuAction::Open) => self.open_path(&path, true),
+            Some(MenuAction::Rename) => self.prompt_rename(&path),
+            Some(MenuAction::Delete) => self.confirm_delete(path, area),
+            Some(MenuAction::ConfirmDelete) => self.delete_path(&path),
+            Some(MenuAction::CopyRelative) => {
+                crate::clipboard::copy(&rel);
+                self.toast(Level::Good, format!("copied {rel}"));
+            }
+            Some(MenuAction::CopyAbsolute) => {
+                let abs = std::fs::canonicalize(&path)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string();
+                crate::clipboard::copy(&abs);
+                self.toast(Level::Good, format!("copied {abs}"));
+            }
+            _ => {}
+        }
+    }
+
+    /// Ask for the new basename. The tree label is a spaced rendering of the
+    /// snake_case filename, so the prompt opens on the slug without extension.
+    fn prompt_rename(&mut self, path: &Path) {
+        if self.tree.collection_paths().iter().any(|c| c == path) {
+            return self.toast(Level::Bad, "a collection root cannot be renamed");
+        }
+        let rel = crate::vault::page::rel_path(path, &self.cfg.root);
+        let mut name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        if path.is_file() {
+            let ext = path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+            name = name.trim_end_matches(&ext).trim_end_matches('.').to_string();
+        }
+        self.overlay = Some(Overlay::Prompt(Prompt {
+            kind: PromptKind::Rename,
+            title: format!("rename {rel}"),
+            value: name,
+            path: Some(path.to_path_buf()),
+        }));
+    }
+
+    fn rename_path(&mut self, path: &Path, value: &str) {
+        let Some(parent) = path.parent() else { return self.toast(Level::Bad, "cannot rename the checkout root") };
+        if !path.exists() {
+            return self.toast(Level::Bad, "no longer exists — reload");
+        }
+        let mut name = value.trim().replace(' ', "_");
+        if name.is_empty() {
+            return;
+        }
+        if path.is_file() {
+            let ext = path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+            if !name.ends_with(".md") && !name.ends_with(".pdf") && !name.ends_with(".csv") {
+                name = format!("{name}.{ext}");
+            }
+        }
+        let target = parent.join(&name);
+        if target == path {
+            return self.toast(Level::Info, "name unchanged");
+        }
+        if target.exists() {
+            return self.toast(Level::Bad, "a page with that name already exists");
+        }
+        let was_open = self.open.as_ref().map(|o| o.page.path == *path).unwrap_or(false);
+        match std::fs::rename(path, &target) {
+            Ok(()) => {
+                let rel = crate::vault::page::rel_path(path, &self.cfg.root);
+                let rel2 = crate::vault::page::rel_path(&target, &self.cfg.root);
+                self.open = None;
+                self.reload_everything();
+                if was_open {
+                    self.open_path(&target, false);
+                }
+                self.toast(Level::Good, format!("renamed {rel} → {rel2}"));
+            }
+            Err(err) => self.toast(Level::Bad, format!("could not rename: {err}")),
+        }
+    }
+
+    /// Deleting is destructive and never confirmed anywhere else in the app, so
+    /// the menu first narrows to a confirm overlay carrying the same path.
+    fn confirm_delete(&mut self, path: PathBuf, area: Rect) {
+        self.overlay = Some(Overlay::Menu(Menu {
+            path,
+            items: vec![(MenuAction::Cancel, "cancel"), (MenuAction::ConfirmDelete, "delete")],
+            selected: 0,
+            area,
+            pressed: None,
+        }));
+    }
+
+    fn delete_path(&mut self, path: &Path) {
+        if self.tree.collection_paths().iter().any(|c| c == path) {
+            return self.toast(Level::Bad, "a collection root cannot be deleted");
+        }
+        let rel = crate::vault::page::rel_path(path, &self.cfg.root);
+        let editing_target = self.open.as_ref().is_some_and(|open| {
+            let under = if path.is_dir() {
+                open.page.path.starts_with(path)
+            } else {
+                open.page.path == *path
+            };
+            under && open.editing()
+        });
+        if editing_target {
+            return self.toast(Level::Warn, "save or leave the editor first");
+        }
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+        match result {
+            Ok(()) => {
+                let open_under = self.open.as_ref().is_some_and(|open| {
+                    if path.is_dir() {
+                        open.page.path.starts_with(path)
+                    } else {
+                        open.page.path == *path
+                    }
+                });
+                if open_under {
+                    self.open = None;
+                }
+                self.reload_everything();
+                self.toast(Level::Good, format!("deleted {rel}"));
+            }
+            Err(err) => self.toast(Level::Bad, format!("could not delete {rel}: {err}")),
+        }
+    }
+
+    fn repo_config_key(&mut self, key: KeyEvent) {
+        let Some(Overlay::RepoConfig(state)) = self.overlay.as_mut() else { return };
+        let last = state.option_count().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc => self.overlay = None,
+            KeyCode::Down | KeyCode::Tab => state.selected = (state.selected + 1).min(last),
+            KeyCode::Up | KeyCode::BackTab => state.selected = state.selected.saturating_sub(1),
+            KeyCode::Backspace if state.selected == 0 => {
+                state.url.pop();
+            }
+            KeyCode::Char(c) if state.selected == 0 && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.url.push(c);
+            }
+            KeyCode::Enter => {
+                let name = state.name.clone();
+                let selected = state.selected;
+                let url = state.url.trim().to_string();
+                self.overlay = None;
+                self.apply_repo_config(&name, selected, &url);
+            }
+            _ => {}
+        }
+    }
+
+    /// Set `repositories.<name>` and, for a git URL or `local`, make sure the
+    /// checkout has a repo to match. Local, fast operations — no network call
+    /// happens here (a fresh remote is only pulled by `SyncRepos`), so this
+    /// runs synchronously rather than through a native job.
+    fn apply_repo_config(&mut self, name: &str, selected: usize, url: &str) {
+        let new_url = match selected {
+            1 => "local".to_string(),
+            2 => "gdrive".to_string(),
+            _ if url.is_empty() => {
+                self.toast(Level::Warn, "enter a git URL, or pick local");
+                self.open_repo_config(name);
+                return;
+            }
+            _ => url.to_string(),
+        };
+
+        self.cfg.repositories.insert(name.to_string(), new_url.clone());
+        if let Err(err) = self.cfg.save_repositories() {
+            self.toast(Level::Bad, format!("config {name} failed: {err}"));
+            return;
+        }
+
+        if new_url != "gdrive" {
+            let repo_dir = self.cfg.root.join(name);
+            if repo_dir.join(".git").is_dir() {
+                crate::vault::git::set_remote(&repo_dir, &new_url);
+            } else {
+                crate::vault::git::ensure_local_repo(&self.cfg.root, name);
+                if new_url != "local" {
+                    crate::vault::git::set_remote(&self.cfg.root.join(name), &new_url);
+                }
+            }
+        }
+
+        self.toast(Level::Good, format!("{name}: configured"));
+        self.refresh_git();
+        self.reload_everything();
     }
 
     fn prompt_key(&mut self, key: KeyEvent) {
@@ -989,16 +2403,21 @@ impl App {
             }
             KeyCode::Char(c) => prompt.value.push(c),
             KeyCode::Enter => {
-                let (kind, value) = (prompt.kind, prompt.value.trim().to_string());
+                let path = prompt.path.clone();
+                let kind = prompt.kind;
+                let value = prompt.value.trim().to_string();
                 self.overlay = None;
                 if value.is_empty() {
                     return;
                 }
                 match kind {
-                    PromptKind::Commit => {
-                        self.spawn(JobSpec::new("commit", &["repo", "commit", "-m", &value]))
-                    }
+                    PromptKind::Commit => self.run_commit(value),
                     PromptKind::NewPage => self.create_page(&value),
+                    PromptKind::Rename => {
+                        if let Some(path) = path {
+                            self.rename_path(&path, &value);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -1046,8 +2465,61 @@ impl App {
 
     // ------------------------------------------------------------------ jobs
 
-    fn spawn(&mut self, spec: JobSpec) {
-        self.jobs.spawn(&self.cfg.cli(), &self.cfg.root, spec, self.tx.clone());
+    /// The whole vault is already scanned and kept fresh by the file watcher
+    /// (`self.index`), so this needs no subprocess: assemble the same payload
+    /// `podarcis lint --json` used to produce and report it immediately.
+    fn run_lint(&mut self) {
+        let payload = crate::vault::lint::to_json_payload(&self.index);
+        let ok = payload.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+        let result = JobResult {
+            id: 0,
+            label: "lint".into(),
+            args: vec!["lint".into(), "--json".into()],
+            code: if ok { 0 } else { 1 },
+            stdout: payload.to_string(),
+            stderr: String::new(),
+        };
+        self.on_job_done(result);
+    }
+
+    fn run_sync_repos(&mut self) {
+        let root = self.cfg.root.clone();
+        let repos = self.cfg.repositories.clone();
+        let tx = self.tx.clone();
+        self.jobs.spawn_native(
+            "sync",
+            vec!["repo".into(), "sync".into()],
+            move || {
+                let results = crate::vault::git::sync_repos(&root, &repos);
+                let ok = results.iter().all(|r| r.status == "ok");
+                let stdout = serde_json::to_string(&results).unwrap_or_default();
+                NativeOutcome { code: if ok { 0 } else { 1 }, stdout, stderr: String::new() }
+            },
+            tx,
+        );
+    }
+
+    /// Lint-gate on the in-memory index, then `git add -A` + commit every
+    /// dirty configured repo. Mirrors `audit.py::audit_and_commit`, run
+    /// through `podarcis repo commit -m` until now.
+    fn run_commit(&mut self, message: String) {
+        let lint_ok = !self.index.entries.iter().any(|e| e.worst() == crate::vault::lint::Severity::Error);
+        let root = self.cfg.root.clone();
+        let repos = self.cfg.repositories.clone();
+        let tx = self.tx.clone();
+        self.jobs.spawn_native(
+            "commit",
+            vec!["repo".into(), "commit".into(), "-m".into(), message.clone()],
+            move || {
+                let outcome = crate::vault::git::commit_dirty(&root, &repos, lint_ok, &message);
+                if outcome.ok {
+                    NativeOutcome { code: 0, stdout: outcome.message, stderr: String::new() }
+                } else {
+                    NativeOutcome { code: 1, stdout: String::new(), stderr: outcome.message }
+                }
+            },
+            tx,
+        );
     }
 
     pub fn start_indexing(&mut self) {
@@ -1109,10 +2581,10 @@ impl App {
         let files = payload.get("files").and_then(|f| f.as_object());
         let count: usize = files.map(|f| f.values().filter_map(|v| v.as_array()).map(Vec::len).sum()).unwrap_or(0);
         if count == 0 {
-            self.toast(Level::Good, "podarcis lint: clean");
+            self.toast(Level::Good, "lint: clean");
         } else {
             let n = files.map(|f| f.len()).unwrap_or(0);
-            self.toast(Level::Warn, format!("podarcis lint: {count} findings across {n} files"));
+            self.toast(Level::Warn, format!("lint: {count} findings across {n} files"));
         }
     }
 
@@ -1130,6 +2602,7 @@ impl App {
         if structural {
             self.tree.rebuild();
         }
+        self.refresh_git();
         let open_changed = self
             .open
             .as_ref()
@@ -1142,7 +2615,7 @@ impl App {
 
     // --------------------------------------------------------------- sidebar
 
-    /// Start or resize the herdr pane to match the area it was drawn into.
+    /// Start or resize the agents pane to match the area it was drawn into.
     pub fn sync_sidebar(&mut self) {
         if !self.show_sidebar {
             self.sidebar = None;
@@ -1160,7 +2633,7 @@ impl App {
                 return;
             }
             self.sidebar = None;
-            self.sidebar_error = Some("herdr exited — ctrl+g twice to restart".into());
+            self.sidebar_error = Some("the agent session exited — ctrl+g twice to restart".into());
             if self.focus == Focus::Sidebar {
                 self.focus = Focus::Doc;
             }
@@ -1170,11 +2643,11 @@ impl App {
             return;
         }
         if !herdr::pty::available() {
-            self.sidebar_error = Some("herdr is not installed — see herdr.dev".into());
+            self.sidebar_error = Some("herdr is not installed — the agents pane needs it (herdr.dev)".into());
             return;
         }
         if let Err(err) = herdr::config::provision(self.cfg.flavor) {
-            self.sidebar_error = Some(format!("herdr config: {err}"));
+            self.sidebar_error = Some(format!("agents pane config: {err}"));
             return;
         }
         match herdr::pty::Pane::spawn(&self.cfg.root, rows, cols, self.tx.clone()) {
@@ -1232,7 +2705,20 @@ pub fn test_app(root: &Path) -> (App, std::sync::mpsc::Receiver<AppEvent>) {
     app.areas = Areas {
         tree: Rect::new(0, 0, 30, 40),
         doc: Rect::new(30, 0, 60, 40),
+        doc_main: Rect::new(30, 0, 60, 30),
+        doc_body: Rect::new(30, 0, 60, 30),
         sidebar: Rect::new(90, 0, 40, 40),
+        inspector: Rect::new(30, 30, 60, 10),
+        inspector_body: Rect::default(),
+        inspector_rows: Vec::new(),
+        tree_panes: Vec::new(),
+        tree_divider: Some(29),
+        sidebar_divider: Some(90),
+        inspector_divider: Some(30),
+        tree_toggle: Some(Rect::new(29, 20, 1, 1)),
+        sidebar_toggle: Some(Rect::new(90, 20, 1, 1)),
+        inspector_toggle: Some(Rect::new(75, 30, 1, 1)),
+        ..Default::default()
     };
     app.index = Index::build(root, &app.collection_dirs());
     app.indexing = false;
@@ -1257,7 +2743,7 @@ mod tests {
                 ("wiki/_index.md", "# Wiki\n"),
                 (
                     "wiki/a.md",
-                    "---\ntitle: Alpha\ntype: concept\ncategory: c\nrationale: r\nsources:\n  - id: s1\n---\n# Alpha\n\nSee [Beta](b.md) and [gone](nope.md).\n\n## Section two\n\nCites[^s1].\n",
+                    "---\ntitle: Alpha\ntype: concept\ncategory: c\nrationale: r\nsources:\n  - id: s1\n    resource: ../sources/s1/metadata.md\n---\n# Alpha\n\nSee [Beta](b.md) and [gone](nope.md).\n\n## Section two\n\nCites[^s1].\n",
                 ),
                 ("wiki/b.md", "---\ntitle: Beta\ntype: concept\ncategory: c\nrationale: r\n---\n# Beta\n\nLeaf page.\n"),
                 ("workspace/p.md", "---\ntitle: Protocol\ntype: protocol\ncategory: c\nrationale: r\n---\n# Protocol\n"),
@@ -1274,6 +2760,12 @@ mod tests {
         fn path(&self, rel: &str) -> PathBuf {
             self.0.join(rel)
         }
+        fn write(&self, rel: &str, content: &str) -> PathBuf {
+            let path = self.0.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            path
+        }
     }
 
     impl Drop for Vault {
@@ -1285,6 +2777,10 @@ mod tests {
     fn ch(c: char) -> KeyEvent {
         let mods = if c.is_uppercase() { KeyModifiers::SHIFT } else { KeyModifiers::NONE };
         KeyEvent::new(KeyCode::Char(c), mods)
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
     }
 
     #[test]
@@ -1299,10 +2795,38 @@ mod tests {
     }
 
     #[test]
+    fn a_csv_opens_as_a_table_and_edits_as_text() {
+        let v = Vault::new("csv");
+        v.write("workspace/finance/quotes.csv", "symbol,price\nAAPL,232.1\nMSFT,417.4\n");
+        let mut app = v.app();
+        app.open_path(&v.path("workspace/finance/quotes.csv"), true);
+        let open = app.open.as_ref().unwrap();
+        assert!(open.csv(), "a csv is a csv open, not a markdown one");
+        let text = open.doc.lines.iter().map(|l| l.plain_text()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("symbol") && text.contains("AAPL") && text.contains("MSFT"), "{text}");
+
+        // The editor opens on the same raw file line the reader was showing.
+        let msft = open.doc.lines.iter().position(|l| l.plain_text().contains("MSFT")).unwrap();
+        app.open.as_mut().unwrap().scroll = msft;
+        app.run(Cmd::Edit);
+        let editor = app.open.as_ref().unwrap().editor.as_ref().unwrap();
+        assert_eq!(editor.cursor_line(), 2, "editor lands on the MSFT row");
+    }
+
+    #[test]
     fn opening_a_directory_opens_its_index_page() {
         let v = Vault::new("dir");
         let mut app = v.app();
         app.open_path(&v.path("wiki"), true);
+        assert_eq!(app.open.as_ref().unwrap().page.path, v.path("wiki/_index.md"));
+    }
+
+    #[test]
+    fn selecting_the_wiki_folder_in_the_tree_opens_its_index_page() {
+        let v = Vault::new("tree-dir");
+        let mut app = v.app();
+        app.tree.move_to(0); // the "wiki" collection row
+        app.run(Cmd::TreeExpand);
         assert_eq!(app.open.as_ref().unwrap().page.path, v.path("wiki/_index.md"));
     }
 
@@ -1319,6 +2843,99 @@ mod tests {
         assert_eq!(app.open.as_ref().unwrap().page.title(), "Alpha");
         app.run(Cmd::Forward);
         assert_eq!(app.open.as_ref().unwrap().page.title(), "Beta");
+    }
+
+    #[test]
+    fn clicking_a_link_navigates_to_page() {
+        let v = Vault::new("click-link");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        // In wiki/a.md:
+        // Line 0: the doc's leading blank row
+        // Line 1: "# Alpha"
+        // Line 2: the rule the reader draws under an h1
+        // Line 3: ""
+        // Line 4: "See Beta and gone."
+        // doc_body starts at x=30, y=0. "Beta" link is on line 4, around col 4..8.
+        let x = 30 + 5;
+        let y = 4;
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Beta");
+    }
+
+    #[test]
+    fn clicking_navigation_arrows_goes_back_and_forward() {
+        let v = Vault::new("click-nav-arrows");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.open_path(&v.path("wiki/b.md"), true);
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Beta");
+
+        app.areas.nav_back = Some(Rect::new(31, 0, 3, 1));
+        app.areas.nav_forward = Some(Rect::new(34, 0, 3, 1));
+
+        // Click back arrow
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 32,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Alpha");
+
+        // Click forward arrow
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 35,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Beta");
+    }
+
+    #[test]
+    fn following_a_citation_selects_it_then_clicking_its_row_opens_the_source() {
+        let v = Vault::new("citation");
+        v.write(
+            "sources/s1/metadata.md",
+            "---\ntitle: Source One\nauthors: [\"A. One\", \"B. Two\"]\nyear: 2024\n---\n# Source One\n\nAbstract.\n",
+        );
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.show_inspector = false;
+
+        // Links in wiki/a.md, in order: Beta, gone, then the `[^s1]` citation.
+        app.run(Cmd::NextLink);
+        app.run(Cmd::NextLink);
+        app.run(Cmd::NextLink);
+        app.run(Cmd::FollowLink);
+        assert_eq!(app.open.as_ref().unwrap().selected_citation.as_deref(), Some("s1"));
+        assert!(app.show_inspector, "following a citation reveals the inspector");
+
+        // The renderer would normally fill these in; set them directly to
+        // isolate the click-handling logic from layout.
+        app.areas.inspector = Rect::new(30, 30, 60, 10);
+        app.areas.inspector_body = Rect::new(31, 31, 58, 8);
+        app.areas.inspector_divider = None;
+        app.areas.inspector_rows = vec![Some("s1".to_string())];
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 32,
+            row: 31,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Source One");
     }
 
     #[test]
@@ -1563,17 +3180,15 @@ mod tests {
         let v = Vault::new("palette");
         let mut app = v.app();
         app.run(Cmd::Palette);
-        for c in "theme".chars() {
+        for c in "reload".chars() {
             app.on_key(ch(c));
         }
         let Some(Overlay::Palette(p)) = app.overlay.as_ref() else { panic!() };
         assert_eq!(p.items.len(), 1);
-        assert_eq!(p.items[0].0, Cmd::CycleTheme);
+        assert_eq!(p.items[0].0, Cmd::Reload);
 
-        let before = app.theme.flavor;
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.overlay.is_none());
-        assert_ne!(app.theme.flavor, before);
     }
 
     #[test]
@@ -1586,15 +3201,11 @@ mod tests {
     fn quitting_with_a_job_in_flight_asks_once() {
         let v = Vault::new("quit-busy");
         let mut app = v.app();
-        app.jobs.running.push(crate::actions::Running {
-            id: 1,
-            label: "sync".into(),
-            last_line: String::new(),
-        });
-        app.on_key(ch('q'));
+        app.jobs.running.push(crate::actions::Running { id: 1, label: "sync".into() });
+        app.on_key(ctrl('q'));
         assert!(!app.quit);
         assert!(app.toasts.last().unwrap().text.contains("sync"));
-        app.on_key(ch('q'));
+        app.on_key(ctrl('q'));
         assert!(app.quit);
     }
 
@@ -1602,31 +3213,316 @@ mod tests {
     fn any_other_key_resets_the_quit_confirmation() {
         let v = Vault::new("quit-reset");
         let mut app = v.app();
-        app.jobs.running.push(crate::actions::Running {
-            id: 1,
-            label: "sync".into(),
-            last_line: String::new(),
-        });
-        app.on_key(ch('q'));
+        app.jobs.running.push(crate::actions::Running { id: 1, label: "sync".into() });
+        app.on_key(ctrl('q'));
         app.on_key(ch('j'));
-        app.on_key(ch('q'));
+        app.on_key(ctrl('q'));
         assert!(!app.quit, "the warning has to be re-earned");
     }
 
     #[test]
-    fn a_click_in_the_tree_selects_and_opens() {
+    fn q_does_not_quit_ctrl_q_does() {
+        let v = Vault::new("quit-keys");
+        let mut app = v.app();
+        app.on_key(ch('q'));
+        assert!(!app.quit);
+        app.on_key(ch('q'));
+        assert!(!app.quit, "double q does not quit either");
+
+        app.on_key(ctrl('q'));
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn a_single_click_in_the_tree_selects_but_does_not_open() {
         let v = Vault::new("mouse");
         let mut app = v.app();
-        app.tree.move_to(0);
         let target = app.tree.rows.iter().position(|r| r.label == "a").unwrap();
+        let (x, y) = (app.areas.tree.x + 2, app.areas.tree.y + 1 + target as u16);
+        press(&mut app, x, y);
+        assert_eq!(app.tree.selected, target, "the click selects the row");
+        assert!(app.open.is_none(), "a single click must not open the page");
+        assert_eq!(app.focus, Focus::Tree);
+    }
+
+    #[test]
+    fn a_double_click_in_the_tree_opens_the_page() {
+        let v = Vault::new("mouse-double");
+        let mut app = v.app();
+        let target = app.tree.rows.iter().position(|r| r.label == "a").unwrap();
+        let (x, y) = (app.areas.tree.x + 2, app.areas.tree.y + 1 + target as u16);
+        press(&mut app, x, y);
+        assert!(app.open.is_none());
+        press(&mut app, x, y);
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Alpha");
+        assert_eq!(app.focus, Focus::Doc, "opening a page focuses it");
+    }
+
+    #[test]
+    fn two_clicks_on_different_rows_never_open() {
+        let v = Vault::new("mouse-diff-rows");
+        let mut app = v.app();
+        let a = app.tree.rows.iter().position(|r| r.label == "a").unwrap();
+        let b = app.tree.rows.iter().position(|r| r.label == "b").unwrap();
+        let (x, ya) = (app.areas.tree.x + 2, app.areas.tree.y + 1 + a as u16);
+        let yb = app.areas.tree.y + 1 + b as u16;
+        press(&mut app, x, ya);
+        press(&mut app, x, yb);
+        assert!(app.open.is_none(), "fast clicks on different rows are singles");
+        assert_eq!(app.tree.selected, b, "the last row is the one selected");
+    }
+
+    #[test]
+    fn a_single_click_on_a_folder_toggles_it_without_opening() {
+        let v = Vault::new("mouse-folder");
+        v.write("wiki/health/_index.md", "# Health\n");
+        let mut app = v.app();
+        app.tree.rebuild();
+        let folder = app.tree.rows.iter().position(|r| r.label == "health").unwrap();
+        let (x, y) = (app.areas.tree.x + 2, app.areas.tree.y + 1 + folder as u16);
+        press(&mut app, x, y);
+        assert!(app.tree.rows[folder].expanded, "a single click expands a folder");
+        assert!(app.open.is_none(), "and does not open its index");
+    }
+
+    #[test]
+    fn a_double_click_on_a_folder_opens_its_index_page() {
+        let v = Vault::new("mouse-folder-double");
+        v.write("wiki/health/_index.md", "# Health\n");
+        let mut app = v.app();
+        app.tree.rebuild();
+        let folder = app.tree.rows.iter().position(|r| r.label == "health").unwrap();
+        let (x, y) = (app.areas.tree.x + 2, app.areas.tree.y + 1 + folder as u16);
+        press(&mut app, x, y);
+        press(&mut app, x, y);
+        assert!(app.tree.rows[folder].expanded, "the folder stays expanded");
+        assert_eq!(
+            app.open.as_ref().unwrap().page.path,
+            v.path("wiki/health/_index.md"),
+            "the double click opens the folder's index"
+        );
+    }
+
+    #[test]
+    fn clicking_a_collection_title_opens_repo_config() {
+        let v = Vault::new("repo-config");
+        let mut app = v.app();
+        app.areas.tree_panes = vec![crate::app::TreePane {
+            area: Rect::new(0, 0, 30, 12),
+            inner: Rect::new(1, 1, 28, 10),
+            header: 0,
+            start: 1,
+            end: app.tree.rows.len(),
+            offset: 0,
+        }];
         app.on_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: app.areas.tree.x + 2,
-            row: app.areas.tree.y + 1 + target as u16,
+            column: 2,
+            row: 0,
             modifiers: KeyModifiers::NONE,
         });
-        assert_eq!(app.focus, Focus::Doc, "opening a page focuses it");
-        assert_eq!(app.open.as_ref().unwrap().page.title(), "Alpha");
+        match app.overlay {
+            Some(Overlay::RepoConfig(ref state)) => {
+                assert_eq!(state.name, app.tree.rows[0].label);
+                assert_eq!(state.selected, 0);
+            }
+            _ => panic!("expected repo config overlay"),
+        }
+        assert!(app.tree.rows[0].expanded, "the collection stays expanded");
+    }
+
+    fn right_press(app: &mut App, x: u16, y: u16) {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    /// Right-click the tree row labelled `label` and return its row index.
+    fn right_click(app: &mut App, label: &str) -> usize {
+        let (i, y) = {
+            let x0 = app.areas.tree.x;
+            let y0 = app.areas.tree.y;
+            let i = app.tree.rows.iter().position(|r| r.label == label).unwrap();
+            (i, (x0 + 2, y0 + 1 + i as u16))
+        };
+        right_press(app, y.0, y.1);
+        i
+    }
+
+    #[test]
+    fn right_click_opens_a_context_menu_on_that_row() {
+        let v = Vault::new("menu-open");
+        let mut app = v.app();
+        let i = right_click(&mut app, "a");
+        assert_eq!(app.tree.selected, i, "the right-click selects the row");
+        assert_eq!(app.focus, Focus::Tree);
+        let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { panic!("expected menu overlay") };
+        assert_eq!(menu.path, v.path("wiki/a.md"));
+        let labels: Vec<&str> = menu.items.iter().map(|(_, l)| *l).collect();
+        assert_eq!(labels, vec!["open", "rename…", "delete…", "copy relative path", "copy absolute path"]);
+    }
+
+    #[test]
+    fn a_collection_root_offers_no_rename_or_delete() {
+        let v = Vault::new("menu-collection");
+        let mut app = v.app();
+        right_click(&mut app, "wiki");
+        let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { panic!("expected menu overlay") };
+        let labels: Vec<&str> = menu.items.iter().map(|(_, l)| *l).collect();
+        assert_eq!(labels, vec!["open", "copy relative path", "copy absolute path"]);
+    }
+
+    #[test]
+    fn the_menu_scrolls_by_keypress_and_activates_on_enter() {
+        let v = Vault::new("menu-keys");
+        let mut app = v.app();
+        right_click(&mut app, "a");
+        app.on_key(ch('j'));
+        app.on_key(ch('j'));
+        let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { panic!("expected menu") };
+        assert_eq!(menu.selected, 2, "j moves past open and rename…");
+        app.on_key(ch('k'));
+        let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { panic!("expected menu") };
+        assert_eq!(menu.selected, 1);
+        // Enter on rename… hands the slug to the prompt.
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let Some(Overlay::Prompt(prompt)) = app.overlay.as_ref() else { panic!("expected prompt") };
+        assert_eq!(prompt.kind, PromptKind::Rename);
+        assert_eq!(prompt.value, "a");
+        assert_eq!(prompt.path.as_deref(), Some(v.path("wiki/a.md").as_path()));
+    }
+
+    #[test]
+    fn esc_closes_the_menu_without_running_anything() {
+        let v = Vault::new("menu-esc");
+        let mut app = v.app();
+        right_click(&mut app, "b");
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.overlay.is_none(), "esc dismisses");
+        assert!(app.open.is_none());
+    }
+
+    #[test]
+    fn the_menu_renames_a_page_on_disk() {
+        let v = Vault::new("menu-rename");
+        let mut app = v.app();
+        right_click(&mut app, "a");
+        app.on_key(ch('j')); // rename…
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        // Backspace the slug "a", type "z", confirm.
+        app.on_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        app.on_key(ch('z'));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.overlay.is_none());
+        assert!(!v.path("wiki/a.md").exists(), "the old file is gone");
+        assert!(v.path("wiki/z.md").exists(), "the new file is there");
+        assert!(app.tree.rows.iter().any(|r| r.label == "z"), "the tree sees the new name");
+        assert!(app.toasts.last().unwrap().text.contains("renamed wiki/a.md → wiki/z.md"));
+    }
+
+    #[test]
+    fn the_menu_deletes_a_page_only_after_confirmation() {
+        let v = Vault::new("menu-delete");
+        let mut app = v.app();
+        right_click(&mut app, "b");
+        app.on_key(ch('j'));
+        app.on_key(ch('j')); // delete…
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let Some(Overlay::Menu(confirm)) = app.overlay.as_ref() else { panic!("expected confirm menu") };
+        assert_eq!(confirm.path, v.path("wiki/b.md"));
+        assert_eq!(confirm.items.iter().map(|(_, l)| *l).collect::<Vec<_>>(), vec!["cancel", "delete"]);
+        // Esc on the confirm leaves the file alone.
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.overlay.is_none());
+        assert!(v.path("wiki/b.md").exists());
+
+        // Back through the whole flow and confirm this time.
+        right_click(&mut app, "b");
+        app.on_key(ch('j'));
+        app.on_key(ch('j'));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.on_key(ch('j')); // move onto "delete"
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.overlay.is_none());
+        assert!(!v.path("wiki/b.md").exists());
+        assert!(!app.tree.rows.iter().any(|r| r.label == "b"));
+    }
+
+    #[test]
+    fn renaming_or_deleting_a_collection_root_is_refused() {
+        let v = Vault::new("menu-rename-root");
+        let mut app = v.app();
+        app.prompt_rename(&v.path("wiki"));
+        assert!(app.overlay.is_none(), "no rename prompt opens for a collection root");
+        assert!(app.toasts.last().unwrap().text.contains("cannot be renamed"));
+
+        app.delete_path(&v.path("workspace"));
+        assert!(v.path("workspace").is_dir(), "the collection survives");
+        assert!(app.toasts.last().unwrap().text.contains("cannot be deleted"));
+    }
+
+    #[test]
+    fn clicking_outside_the_menu_dismisses_it() {
+        let v = Vault::new("menu-dismiss");
+        let mut app = v.app();
+        right_click(&mut app, "a");
+        assert!(app.overlay.is_some());
+        // Click in the document area, well away from the popup.
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: app.areas.doc.x + 5,
+            row: app.areas.doc.y + 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.overlay.is_none(), "a press outside the popup dismisses it");
+    }
+
+    #[test]
+    fn releasing_on_a_menu_item_activates_it() {
+        let v = Vault::new("menu-mouse");
+        let mut app = v.app();
+        right_click(&mut app, "a");
+        let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { panic!("expected menu") };
+        let area = menu.area;
+        // Down on the second item, up on the same row -> rename prompt.
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x + 2,
+            row: area.y + 1 + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: area.x + 2,
+            row: area.y + 1 + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let Some(Overlay::Prompt(prompt)) = app.overlay.as_ref() else { panic!("expected rename prompt") };
+        assert_eq!(prompt.kind, PromptKind::Rename);
+    }
+
+    #[test]
+    fn the_menu_copies_relative_and_absolute_paths() {
+        let v = Vault::new("menu-copy");
+        let mut app = v.app();
+        right_click(&mut app, "a");
+        app.on_key(ch('j'));
+        app.on_key(ch('j'));
+        app.on_key(ch('j')); // copy relative path
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.overlay.is_none());
+        assert!(app.toasts.last().unwrap().text.contains("wiki/a.md"));
+
+        right_click(&mut app, "a");
+        app.on_key(ch('j'));
+        app.on_key(ch('j'));
+        app.on_key(ch('j'));
+        app.on_key(ch('j')); // copy absolute path
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.toasts.last().unwrap().text.contains("wiki/a.md"));
     }
 
     #[test]
@@ -1646,6 +3542,333 @@ mod tests {
         assert_eq!(app.focus, Focus::Tree, "scrolling does not steal focus");
     }
 
+    fn right_press_at(app: &mut App, x: u16, y: u16) {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    fn right_drag_to(app: &mut App, x: u16, y: u16) {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Right),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    fn right_release_at(app: &mut App, x: u16, y: u16) {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Right),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    #[test]
+    fn right_drag_sends_a_file_mention_into_the_agent_session() {
+        let v = Vault::new("right-send");
+        let mut app = laid_out(&v);
+        app.open_path(&v.path("wiki/a.md"), true);
+
+        // A real child that echoes what it reads, so the test proves the bytes
+        // actually leave the app rather than only updating state.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut cmd = portable_pty::CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", "read line; printf 'GOT:%s\\n' \"$line\""]);
+        cmd.env("TERM", "xterm-256color");
+        let pane = crate::herdr::pty::Pane::spawn_command(cmd, 10, 40, tx, None).unwrap();
+        app.sidebar = Some(pane);
+
+        // Right-drag across "See Beta and gone." (wiki/a.md line 4, the one
+        // body source line it renders from, starting at file line 9): the
+        // mention must name file line 12 — not the rendered line 4.
+        right_press_at(&mut app, 32, 4);
+        right_drag_to(&mut app, 50, 4);
+        right_release_at(&mut app, 50, 4);
+
+        for _ in 0..50 {
+            match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(crate::event::AppEvent::PtyExited) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+        app.sidebar.as_ref().unwrap().with_screen(|s| {
+            let text = s.contents();
+            assert!(text.contains("GOT:@wiki/a.md:12"), "{text:?}");
+        });
+        assert!(app.toasts.last().unwrap().text.contains("sent selection to the agent"));
+        assert!(
+            !app.toasts.last().unwrap().text.contains("@wiki/a.md"),
+            "the toast must not leak the file path: {:?}",
+            app.toasts.last().unwrap().text
+        );
+        assert!(app.open.as_ref().unwrap().selection.is_some(), "the selection stays visible");
+    }
+
+    #[test]
+    fn right_drag_without_an_agent_session_warns_and_keeps_the_selection() {
+        let v = Vault::new("right-send-none");
+        let mut app = laid_out(&v);
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.sidebar = None;
+
+        right_press_at(&mut app, 32, 4);
+        right_drag_to(&mut app, 50, 4);
+        right_release_at(&mut app, 50, 4);
+
+        assert!(app.toasts.last().unwrap().text.contains("no agent session"));
+        assert!(app.open.as_ref().unwrap().selection.is_some());
+    }
+
+    #[test]
+    fn a_right_click_without_a_drag_sends_nothing() {
+        let v = Vault::new("right-click-none");
+        let mut app = laid_out(&v);
+        app.open_path(&v.path("wiki/a.md"), true);
+
+        right_press_at(&mut app, 32, 4);
+        right_release_at(&mut app, 32, 4);
+
+        assert!(app.toasts.is_empty(), "a click without a drag sends nothing");
+        assert!(app.open.as_ref().unwrap().selection.is_none());
+    }
+
+    fn press(app: &mut App, x: u16, y: u16) {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    fn drag(app: &mut App, x: u16, y: u16) {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    fn release(app: &mut App, x: u16, y: u16) {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    fn laid_out(v: &Vault) -> App {
+        let mut app = v.app();
+        app.areas = Areas {
+            tree: Rect::new(0, 0, 30, 40),
+            doc: Rect::new(30, 0, 90, 40),
+            doc_main: Rect::new(30, 0, 90, 30),
+            doc_body: Rect::new(30, 0, 90, 30),
+            sidebar: Rect::new(120, 0, 40, 40),
+            inspector: Rect::new(30, 30, 90, 10),
+            inspector_body: Rect::default(),
+            inspector_rows: Vec::new(),
+            tree_panes: Vec::new(),
+            tree_divider: Some(29),
+            sidebar_divider: Some(120),
+            inspector_divider: Some(30),
+            tree_toggle: Some(Rect::new(29, 20, 1, 1)),
+            sidebar_toggle: Some(Rect::new(120, 20, 1, 1)),
+            inspector_toggle: Some(Rect::new(75, 30, 1, 1)),
+            ..Default::default()
+        };
+        app
+    }
+
+    #[test]
+    fn clicking_the_tree_handle_collapses_it_instead_of_dragging() {
+        let v = Vault::new("toggle-tree");
+        let mut app = laid_out(&v);
+        assert!(app.show_tree);
+        press(&mut app, 29, 20);
+        assert!(!app.show_tree, "the handle toggles, it does not start a drag");
+        assert!(app.dragging.is_none());
+    }
+
+    #[test]
+    fn clicking_the_sidebar_handle_collapses_it_instead_of_dragging() {
+        let v = Vault::new("toggle-sidebar");
+        let mut app = laid_out(&v);
+        assert!(app.show_sidebar);
+        press(&mut app, 120, 20);
+        assert!(!app.show_sidebar);
+        assert!(app.dragging.is_none());
+    }
+
+    #[test]
+    fn clicking_the_inspector_handle_hides_the_sources_section() {
+        let v = Vault::new("toggle-inspector");
+        let mut app = laid_out(&v);
+        assert!(app.show_inspector);
+        press(&mut app, 75, 30);
+        assert!(!app.show_inspector, "the handle toggles the inspector, it does not start a drag");
+        assert!(app.dragging.is_none());
+        // And it comes back from the same spot.
+        press(&mut app, 75, 30);
+        assert!(app.show_inspector);
+    }
+
+    #[test]
+    fn dragging_the_tree_divider_resizes_it() {
+        let v = Vault::new("drag-tree");
+        let mut app = laid_out(&v);
+        press(&mut app, 29, 5);
+        assert_eq!(app.dragging, Some(Divider::Tree));
+        drag(&mut app, 49, 5);
+        assert_eq!(app.cfg.tree_width, 50);
+        release(&mut app, 49, 5);
+        assert!(app.dragging.is_none());
+    }
+
+    #[test]
+    fn dragging_the_agents_divider_resizes_from_the_right() {
+        let v = Vault::new("drag-sidebar");
+        let mut app = laid_out(&v);
+        press(&mut app, 120, 5);
+        assert_eq!(app.dragging, Some(Divider::Sidebar));
+        drag(&mut app, 100, 5);
+        assert_eq!(app.cfg.sidebar_width, 60);
+    }
+
+    #[test]
+    fn a_divider_can_be_grabbed_from_a_column_either_side() {
+        let v = Vault::new("drag-grab");
+        let mut app = laid_out(&v);
+        press(&mut app, 30, 5);
+        assert_eq!(app.dragging, Some(Divider::Tree), "one column of slack each way");
+    }
+
+    #[test]
+    fn a_drag_never_squeezes_the_document_away() {
+        let v = Vault::new("drag-clamp");
+        let mut app = laid_out(&v);
+        press(&mut app, 29, 5);
+        drag(&mut app, 500, 5);
+        assert!(app.cfg.tree_width <= 160 - 30 - 40, "the document keeps 30 columns");
+        drag(&mut app, 0, 5);
+        assert_eq!(app.cfg.tree_width, 12, "and the tree keeps a usable minimum");
+    }
+
+    #[test]
+    fn a_drag_that_wanders_off_the_divider_still_resizes() {
+        let v = Vault::new("drag-wander");
+        let mut app = laid_out(&v);
+        press(&mut app, 29, 5);
+        // Straying into the tree pane must not be read as a click in the tree.
+        drag(&mut app, 40, 5);
+        assert_eq!(app.cfg.tree_width, 41);
+        assert!(app.open.is_none(), "no page was opened by the wandering drag");
+    }
+
+    #[test]
+    fn a_click_away_from_a_divider_is_an_ordinary_click() {
+        let v = Vault::new("drag-none");
+        let mut app = laid_out(&v);
+        press(&mut app, 60, 5);
+        assert!(app.dragging.is_none());
+        assert_eq!(app.focus, Focus::Doc);
+    }
+
+    #[test]
+    fn dragging_the_inspector_divider_resizes_height() {
+        let v = Vault::new("drag-inspector");
+        let mut app = laid_out(&v);
+        press(&mut app, 60, 30);
+        assert_eq!(app.dragging, Some(Divider::Inspector));
+        drag(&mut app, 60, 25);
+        assert_eq!(app.cfg.inspector_height, 15);
+        drag(&mut app, 60, 35);
+        assert_eq!(app.cfg.inspector_height, 5);
+        release(&mut app, 60, 35);
+        assert!(app.dragging.is_none());
+    }
+
+    #[test]
+    fn inspector_drag_clamps_to_min_and_max() {
+        let v = Vault::new("drag-inspector-clamp");
+        let mut app = laid_out(&v);
+        press(&mut app, 60, 30);
+        drag(&mut app, 60, 0);
+        assert_eq!(app.cfg.inspector_height, 32);
+        drag(&mut app, 60, 50);
+        assert_eq!(app.cfg.inspector_height, 4);
+    }
+
+    #[test]
+    fn scrolling_inspector_with_mouse_wheel() {
+        let v = Vault::new("scroll-inspect");
+        let mut app = laid_out(&v);
+        let path = v.write(
+            "wiki/sources.md",
+            "---\ntitle: S\ntype: concept\ncategory: c\nsources:\n  - id: s1\n  - id: s2\n  - id: s3\n  - id: s4\n  - id: s5\n  - id: s6\n  - id: s7\n  - id: s8\n  - id: s9\n  - id: s10\n---\nbody\n",
+        );
+        app.open_path(&path, false);
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 60,
+            row: 35,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.open.as_ref().unwrap().inspect_scroll > 0);
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 60,
+            row: 35,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.open.as_ref().unwrap().inspect_scroll, 0);
+    }
+
+    #[test]
+    fn clicking_and_dragging_inspector_scrollbar() {
+        let v = Vault::new("scrollbar-inspect");
+        let mut app = laid_out(&v);
+        let sources_yaml = (0..20).map(|i| format!("  - id: s{i}\n")).collect::<String>();
+        let path = v.write(
+            "wiki/long_sources.md",
+            &format!("---\ntitle: LS\ntype: concept\ncategory: c\nsources:\n{sources_yaml}---\nbody\n"),
+        );
+        app.open_path(&path, false);
+        press(&mut app, 119, 37);
+        assert_eq!(app.dragging_scrollbar, Some(ScrollbarDrag::Inspector));
+        let scroll_after_press = app.open.as_ref().unwrap().inspect_scroll;
+        assert!(scroll_after_press > 0);
+        drag(&mut app, 119, 32);
+        assert!(app.open.as_ref().unwrap().inspect_scroll < scroll_after_press);
+        release(&mut app, 119, 32);
+        assert!(app.dragging_scrollbar.is_none());
+    }
+
+    #[test]
+    fn clicking_and_dragging_doc_scrollbar() {
+        let v = Vault::new("scrollbar-doc");
+        let mut app = laid_out(&v);
+        let long_body = (0..100).map(|i| format!("Line {i}\n\n")).collect::<String>();
+        let path = v.write(
+            "wiki/long_doc.md",
+            &format!("---\ntitle: LD\ntype: concept\ncategory: c\n---\n{long_body}"),
+        );
+        app.open_path(&path, false);
+        press(&mut app, 119, 20);
+        assert_eq!(app.dragging_scrollbar, Some(ScrollbarDrag::Doc));
+        assert!(app.open.as_ref().unwrap().scroll > 0);
+        release(&mut app, 119, 20);
+        assert!(app.dragging_scrollbar.is_none());
+    }
+
     #[test]
     fn a_click_in_an_empty_pane_is_ignored() {
         let v = Vault::new("mouse-empty");
@@ -1658,6 +3881,141 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert!(app.open.is_none());
+    }
+
+    #[test]
+    fn keyboard_resize_adjusts_active_pane_and_persists() {
+        let v = Vault::new("key-resize");
+        let mut app = laid_out(&v);
+        app.focus = Focus::Tree;
+        let initial_tree = app.cfg.tree_width;
+        app.run(Cmd::WidenPane);
+        assert_eq!(app.cfg.tree_width, initial_tree + 4);
+        app.run(Cmd::ShrinkPane);
+        assert_eq!(app.cfg.tree_width, initial_tree);
+
+        // Focusing sidebar resizes sidebar
+        app.focus = Focus::Sidebar;
+        let initial_sidebar = app.cfg.sidebar_width;
+        app.run(Cmd::WidenSidebar);
+        assert_eq!(app.cfg.sidebar_width, initial_sidebar + 4);
+        app.run(Cmd::ShrinkSidebar);
+        assert_eq!(app.cfg.sidebar_width, initial_sidebar);
+
+        // When in Doc, Shrink/WidenPane adjusts sidebar if open
+        app.focus = Focus::Doc;
+        app.show_sidebar = true;
+        app.run(Cmd::WidenPane);
+        assert_eq!(app.cfg.sidebar_width, initial_sidebar + 4);
+
+        // And verifies persistence to config.yaml
+        let reloaded = Config::load_with_herdr_theme(&app.cfg.root, None);
+        assert_eq!(reloaded.sidebar_width, initial_sidebar + 4);
+    }
+
+    #[test]
+    fn mouse_drag_release_persists_new_widths() {
+        let v = Vault::new("drag-persist");
+        let mut app = laid_out(&v);
+        press(&mut app, 29, 5);
+        drag(&mut app, 49, 5);
+        release(&mut app, 49, 5);
+        assert_eq!(app.cfg.tree_width, 50);
+
+        let reloaded = Config::load_with_herdr_theme(&app.cfg.root, None);
+        assert_eq!(reloaded.tree_width, 50);
+    }
+
+    #[test]
+    fn drag_in_reader_selects_and_copies_text() {
+        let v = Vault::new("drag-select");
+        let mut app = laid_out(&v);
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.areas.doc_body = Rect::new(32, 3, 50, 30);
+        // Press at row 4 (line 1, the "# Alpha" title — line 0 is the doc's
+        // leading blank), col 32
+        press(&mut app, 32, 4);
+        assert!(app.selecting_text);
+        assert!(app.open.as_ref().unwrap().selection.is_some());
+
+        // Drag to col 40, past the end of the rendered "# Alpha", which clamps
+        // to its 7 columns — the `#` is drawn, so it is also selectable.
+        drag(&mut app, 40, 4);
+        let sel = app.open.as_ref().unwrap().selection.unwrap();
+        assert_eq!(sel.anchor.col, 0);
+        assert_eq!(sel.cursor.col, 7);
+
+        // Release to copy
+        release(&mut app, 40, 4);
+        assert!(!app.selecting_text);
+        assert!(app.open.as_ref().unwrap().selection.is_some());
+        let toast = app.toasts.last().unwrap();
+        assert!(toast.text.contains("copied"), "toast must announce copy: {}", toast.text);
+    }
+
+    #[test]
+    fn click_without_drag_clears_selection() {
+        let v = Vault::new("click-clear");
+        let mut app = laid_out(&v);
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.areas.doc_body = Rect::new(32, 3, 50, 30);
+        // First, drag to select
+        press(&mut app, 32, 4);
+        drag(&mut app, 40, 4);
+        release(&mut app, 40, 4);
+        assert!(app.open.as_ref().unwrap().selection.is_some());
+
+        // Click without dragging
+        press(&mut app, 35, 4);
+        release(&mut app, 35, 4);
+        assert!(app.open.as_ref().unwrap().selection.is_none());
+    }
+
+    #[test]
+    fn cmd_copy_copies_selection_then_page() {
+        let v = Vault::new("cmd-copy");
+        let mut app = laid_out(&v);
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.areas.doc_body = Rect::new(32, 3, 50, 30);
+
+        // With selection
+        press(&mut app, 32, 3);
+        drag(&mut app, 40, 3);
+        release(&mut app, 40, 3);
+        app.toasts.clear();
+        app.run(Cmd::Copy);
+        assert!(app.toasts.last().unwrap().text.contains("copied"));
+
+        // Clear selection and copy page
+        app.run(Cmd::ClearSelection);
+        assert!(app.open.as_ref().unwrap().selection.is_none());
+        app.toasts.clear();
+        app.run(Cmd::Copy);
+        assert!(app.toasts.last().unwrap().text.contains("copied page"));
+    }
+
+    #[test]
+    fn selecting_rendered_text_still_copies_raw_markdown_syntax() {
+        // "See Beta and gone." renders from a body line that reads
+        // "See [Beta](b.md) and [gone](nope.md)." in the source — a partial
+        // selection over the rendered prose must still yield that markdown
+        // syntax, not the stripped display text.
+        let v = Vault::new("copy-raw-source");
+        let mut app = laid_out(&v);
+        app.open_path(&v.path("wiki/a.md"), true);
+        let open = app.open.as_ref().unwrap();
+        let line = open
+            .doc
+            .lines
+            .iter()
+            .position(|l| l.plain_text().contains("See Beta and gone."))
+            .expect("rendered line with the stripped link text");
+        let sel = markdown::Selection::new(
+            markdown::TextPos { line, col: 0 },
+            markdown::TextPos { line, col: open.doc.lines[line].plain_text().chars().count() },
+        );
+        let text = open.selected_source_text(sel);
+        assert_eq!(text, "See [Beta](b.md) and [gone](nope.md).");
     }
 
     #[test]
@@ -1683,7 +4041,7 @@ mod tests {
         assert!(!app.quit, "q typed into the finder is a query, not a quit");
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.overlay.is_none());
-        app.on_key(ch('q'));
+        app.on_key(ctrl('q'));
         assert!(app.quit);
     }
 
@@ -1770,17 +4128,6 @@ mod tests {
         app.toasts[0].at = Instant::now() - TOAST_TTL - Duration::from_secs(1);
         app.expire_toasts();
         assert_eq!(app.toasts.len(), 2);
-    }
-
-    #[test]
-    fn cycling_the_theme_reflows_the_document() {
-        let v = Vault::new("theme");
-        let mut app = v.app();
-        app.open_path(&v.path("wiki/a.md"), true);
-        let before = app.theme.flavor;
-        app.run(Cmd::CycleTheme);
-        assert_ne!(app.theme.flavor, before);
-        assert_eq!(app.open.as_ref().unwrap().doc_width, app.doc_width());
     }
 
     #[test]

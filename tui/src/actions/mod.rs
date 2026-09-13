@@ -1,42 +1,16 @@
-//! Background work: everything that shells out to the Python engine.
+//! Background work.
 //!
 //! The rule is that no action ever runs on the UI thread. `qmd query` measures
 //! around thirty seconds on a real checkout and a `git pull` is unbounded, so a
-//! job is spawned, its output streamed back as events, and the app stays
+//! job runs on its own thread and reports back as an event, keeping the app
 //! interactive while it runs.
 
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 
 use crate::event::AppEvent;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Clone, Debug)]
-pub struct JobSpec {
-    /// Shown in the status bar while the job runs.
-    pub label: String,
-    pub args: Vec<String>,
-    /// Collect stdout for the caller instead of streaming it as progress.
-    pub capture: bool,
-}
-
-impl JobSpec {
-    pub fn new(label: impl Into<String>, args: &[&str]) -> Self {
-        Self {
-            label: label.into(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            capture: false,
-        }
-    }
-
-    pub fn capturing(label: impl Into<String>, args: &[&str]) -> Self {
-        Self { capture: true, ..Self::new(label, args) }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct JobResult {
@@ -65,7 +39,6 @@ impl JobResult {
 pub struct Running {
     pub id: u64,
     pub label: String,
-    pub last_line: String,
 }
 
 #[derive(Debug, Default)]
@@ -73,16 +46,41 @@ pub struct JobRunner {
     pub running: Vec<Running>,
 }
 
-impl JobRunner {
-    /// Spawn `podarcis <args>` in the checkout. Returns the job id.
-    pub fn spawn(&mut self, cli: &Path, root: &Path, spec: JobSpec, tx: Sender<AppEvent>) -> u64 {
-        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        self.running.push(Running { id, label: spec.label.clone(), last_line: String::new() });
+/// What a native (in-process) job reports back, once it finishes.
+pub struct NativeOutcome {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
 
-        let cli = cli.to_path_buf();
-        let root = root.to_path_buf();
+impl JobRunner {
+    /// Run a Rust closure on its own thread and report the result back as a
+    /// `JobResult`, exactly as a shelled-out subprocess would have.
+    /// `args` is cosmetic — `on_job_done` dispatches on it, so callers should
+    /// pass whatever a shelled-out equivalent would have used.
+    pub fn spawn_native<F>(
+        &mut self,
+        label: impl Into<String>,
+        args: Vec<String>,
+        f: F,
+        tx: Sender<AppEvent>,
+    ) -> u64
+    where
+        F: FnOnce() -> NativeOutcome + Send + 'static,
+    {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let label = label.into();
+        self.running.push(Running { id, label: label.clone() });
         std::thread::spawn(move || {
-            let result = run(id, &cli, &root, &spec, &tx);
+            let outcome = f();
+            let result = JobResult {
+                id,
+                label,
+                args,
+                code: outcome.code,
+                stdout: outcome.stdout,
+                stderr: outcome.stderr,
+            };
             let _ = tx.send(AppEvent::JobDone(result));
         });
         id
@@ -90,12 +88,6 @@ impl JobRunner {
 
     pub fn finish(&mut self, id: u64) {
         self.running.retain(|j| j.id != id);
-    }
-
-    pub fn note(&mut self, id: u64, line: String) {
-        if let Some(job) = self.running.iter_mut().find(|j| j.id == id) {
-            job.last_line = line;
-        }
     }
 
     pub fn is_busy(&self) -> bool {
@@ -107,72 +99,9 @@ impl JobRunner {
     }
 }
 
-fn run(id: u64, cli: &Path, root: &Path, spec: &JobSpec, tx: &Sender<AppEvent>) -> JobResult {
-    let mut child = match Command::new(cli)
-        .args(&spec.args)
-        .current_dir(root)
-        .env("PODARCIS_ROOT", root)
-        // The engine's rich output is for a human terminal; ours is a pane.
-        .env("NO_COLOR", "1")
-        .env("TERM", "dumb")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(err) => {
-            return JobResult {
-                id,
-                label: spec.label.clone(),
-                args: spec.args.clone(),
-                code: -1,
-                stdout: String::new(),
-                stderr: format!("could not run {}: {err}", cli.display()),
-            }
-        }
-    };
-
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-
-    let err_handle = std::thread::spawn(move || {
-        let mut buf = String::new();
-        if let Some(stderr) = stderr {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                buf.push_str(&line);
-                buf.push('\n');
-            }
-        }
-        buf
-    });
-
-    let mut collected = String::new();
-    if let Some(stdout) = stdout {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if !spec.capture && !line.trim().is_empty() {
-                let _ = tx.send(AppEvent::JobLine(id, line.trim().to_string()));
-            }
-            collected.push_str(&line);
-            collected.push('\n');
-        }
-    }
-
-    let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
-    JobResult {
-        id,
-        label: spec.label.clone(),
-        args: spec.args.clone(),
-        code,
-        stdout: collected,
-        stderr: err_handle.join().unwrap_or_default(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn result(stdout: &str, code: i32) -> JobResult {
         JobResult {
@@ -210,51 +139,33 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_binary_is_reported_not_panicked() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let spec = JobSpec::new("t", &["status"]);
-        let r = run(1, &PathBuf::from("/nonexistent/podarcis"), &std::env::temp_dir(), &spec, &tx);
-        assert_eq!(r.code, -1);
-        assert!(r.stderr.contains("could not run"));
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn streams_progress_lines_then_reports_the_result() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let spec = JobSpec::new("echo", &["-e", "one\\ntwo"]);
-        let r = run(7, &PathBuf::from("/bin/echo"), &std::env::temp_dir(), &spec, &tx);
-        assert_eq!(r.code, 0);
-        let lines: Vec<String> = rx
-            .try_iter()
-            .filter_map(|e| match e {
-                AppEvent::JobLine(id, line) => {
-                    assert_eq!(id, 7);
-                    Some(line)
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(lines, vec!["one", "two"]);
-    }
-
-    #[test]
-    fn capturing_jobs_do_not_stream() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let spec = JobSpec::capturing("echo", &["hello"]);
-        let r = run(1, &PathBuf::from("/bin/echo"), &std::env::temp_dir(), &spec, &tx);
-        assert_eq!(r.stdout.trim(), "hello");
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
     fn runner_tracks_and_clears_running_jobs() {
         let mut runner = JobRunner::default();
-        runner.running.push(Running { id: 3, label: "lint".into(), last_line: String::new() });
+        runner.running.push(Running { id: 3, label: "lint".into() });
         assert!(runner.is_busy());
-        runner.note(3, "checking".into());
-        assert_eq!(runner.running[0].last_line, "checking");
         runner.finish(3);
+        assert!(!runner.is_busy());
+    }
+
+    #[test]
+    fn spawn_native_reports_the_outcome_and_clears_from_running() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut runner = JobRunner::default();
+        let id = runner.spawn_native(
+            "test job",
+            vec!["repo".into(), "sync".into()],
+            || NativeOutcome { code: 0, stdout: "{\"ok\": true}".into(), stderr: String::new() },
+            tx,
+        );
+        assert!(runner.is_busy());
+        assert_eq!(runner.labels(), vec!["test job"]);
+
+        let event = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        let AppEvent::JobDone(result) = event else { panic!("expected JobDone") };
+        assert_eq!(result.id, id);
+        assert!(result.ok());
+        assert_eq!(result.args, vec!["repo".to_string(), "sync".to_string()]);
+        runner.finish(result.id);
         assert!(!runner.is_busy());
     }
 }

@@ -1,17 +1,5 @@
 //! `podarcis-tui` — the Podarcis wiki front-end.
 
-mod actions;
-mod app;
-mod config;
-mod editor;
-mod event;
-mod herdr;
-mod keymap;
-mod search;
-mod theme;
-mod ui;
-mod vault;
-
 use std::io::stdout;
 use std::path::PathBuf;
 
@@ -22,12 +10,11 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::ExecutableCommand;
+use podarcis::app::App;
+use podarcis::config::Config;
+use podarcis::event::{AppEvent, Events};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-
-use crate::app::App;
-use crate::config::Config;
-use crate::event::{AppEvent, Events};
 
 #[derive(Parser, Debug)]
 #[command(name = "podarcis-tui", version, about = "Browse, search and edit the Podarcis wiki")]
@@ -51,14 +38,14 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let cwd = std::env::current_dir()?;
     let env_root = std::env::var("PODARCIS_ROOT").ok();
-    let root = config::find_root(args.root.as_deref(), &cwd, env_root.as_deref())?;
+    let root = podarcis::config::find_root(args.root.as_deref(), &cwd, env_root.as_deref())?;
     let cfg = Config::load(&root);
 
     if args.check {
         println!("root: {}", root.display());
-        println!("theme: catppuccin-{}", cfg.flavor.as_str());
+        println!("theme: {}", cfg.flavor.as_str());
         println!("qmd: {}", cfg.qmd_enabled);
-        println!("herdr: {}", if herdr::pty::available() { "found" } else { "missing" });
+        println!("herdr: {}", if podarcis::herdr::pty::available() { "found" } else { "missing" });
         for (label, path) in cfg.collections() {
             println!("{label}: {}", path.display());
         }
@@ -66,7 +53,10 @@ fn main() -> Result<()> {
     }
 
     if args.lint {
-        let index = vault::index::Index::build(&root, &cfg.collections().into_iter().map(|(_, p)| p).collect::<Vec<_>>());
+        let index = podarcis::vault::index::Index::build(
+            &root,
+            &cfg.collections().into_iter().map(|(_, p)| p).collect::<Vec<_>>(),
+        );
         let mut files = serde_json::Map::new();
         for entry in &index.entries {
             if entry.findings.is_empty() {
@@ -89,7 +79,7 @@ fn main() -> Result<()> {
     let open = args
         .path
         .as_deref()
-        .map(|p| config::resolve_open_path(p, &root, &cwd))
+        .map(|p| podarcis::config::resolve_open_path(p, &root, &cwd))
         .transpose()?;
 
     let mut events = Events::new();
@@ -107,13 +97,13 @@ fn main() -> Result<()> {
     result
 }
 
-fn findings_json(findings: &[vault::lint::Finding]) -> serde_json::Value {
+fn findings_json(findings: &[podarcis::vault::lint::Finding]) -> serde_json::Value {
     serde_json::Value::Array(
         findings
             .iter()
             // A code the engine does not emit would make the two linters
             // undiffable, which is the one thing this output exists for.
-            .filter(|f| vault::lint::is_known(f.code))
+            .filter(|f| podarcis::vault::lint::is_known(f.code))
             .map(|f| serde_json::json!({"code": f.code, "detail": f.detail}))
             .collect(),
     )
@@ -159,7 +149,7 @@ fn run(
     events: &Events,
 ) -> Result<()> {
     let _guard = Guard;
-    terminal.draw(|frame| ui::draw(frame, app))?;
+    terminal.draw(|frame| podarcis::ui::draw(frame, app))?;
 
     while let Ok(first) = events.rx.recv() {
         // A burst of pty output or filesystem events collapses into one frame.
@@ -201,10 +191,6 @@ fn run(
                     app.on_job_done(result);
                     redraw = true;
                 }
-                AppEvent::JobLine(id, line) => {
-                    app.jobs.note(id, line);
-                    redraw = true;
-                }
                 AppEvent::PtyOutput => redraw = true,
                 AppEvent::PtyExited => redraw = true,
             }
@@ -220,9 +206,9 @@ fn run(
         if app.quit {
             return Ok(());
         }
-        if redraw {
+if redraw {
             app.reflow();
-            terminal.draw(|frame| ui::draw(frame, app))?;
+            terminal.draw(|frame| podarcis::ui::draw(frame, app))?;
         }
     }
     Ok(())
