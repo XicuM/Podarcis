@@ -880,7 +880,7 @@ def main() -> None:
     # ── wiki ──────────────────────────────────────────────────────────────
     wiki_p = add(
         'wiki',
-        'tmux files | editor | herdr-agents. Subcommands: edit, persona, context, search',
+        'tmux files | editor | herdr companion. Subcommands: edit, persona, context, search',
         dispatch_wiki,
     )
     wiki_p.add_argument(

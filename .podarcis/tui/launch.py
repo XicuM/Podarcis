@@ -77,6 +77,11 @@ def _flavor_dir(deps: ResolvedDeps, wiki_root: Path) -> Path:
     return deps.flavor_dir or resolved_herdr_dir(wiki_root) or package_herdr_dir()
 
 
+def _agents_panel_argv() -> list[str]:
+    '''Right pane is the companion list, not the herdr TUI.'''
+    return [sys.executable, '-m', 'podarcis.tui.agents_panel']
+
+
 def _files_argv(deps: ResolvedDeps, wiki_root: Path) -> list[str] | None:
     return files_run_argv(
         deps.file_manager, deps.file_manager_name, wiki_root, _flavor_dir(deps, wiki_root),
@@ -114,7 +119,7 @@ def _print_plan(
     tmux = resolve_tmux()
     console.print(f'  wiki root : {wiki_root}')
     console.print(f'  compositor: tmux ({tmux or "missing"}) session {TMUX_SESSION}')
-    console.print(f'  herdr     : {deps.herdr or "(missing)"}  (right pane only, session {SESSION_NAME})')
+    console.print(f'  herdr     : {deps.herdr or "(missing)"}  (sidecar daemon, session {SESSION_NAME})')
     console.print(f'  editor    : {shlex.join(deps.editor) if deps.editor else "(missing)"}')
     console.print(f'  files     : {deps.file_manager_name or "shell"}')
     console.print(f'  harness   : {deps.harness or "(missing)"}')
@@ -127,12 +132,12 @@ def _print_plan(
 
     files_argv = _files_argv(deps, wiki_root)
     edit_argv = _edit_argv(deps, wiki_root, open_path)
-    herdr_argv = [deps.herdr or 'herdr', '--session', SESSION_NAME]
+    agents_argv = _agents_panel_argv()
     env_s = ' '.join(f'{k}={v}' for k, v in deps.pane_env.items())
-    console.print('Intended tmux columns (files | editor | herdr-agents):')
-    console.print(f'  files  : {shlex.join(files_argv) if files_argv else "(shell at wiki root)"}')
-    console.print(f'  editor : {shlex.join(edit_argv) if edit_argv else "(missing editor)"}')
-    console.print(f'  herdr  : {shlex.join(herdr_argv)}')
+    console.print('Intended tmux columns (files | editor | herdr companion):')
+    console.print(f'  files    : {shlex.join(files_argv) if files_argv else "(shell at wiki root)"}')
+    console.print(f'  editor   : {shlex.join(edit_argv) if edit_argv else "(missing editor)"}')
+    console.print(f'  companion: {shlex.join(agents_argv)}')
     if env_s:
         console.print(f'  env    : {env_s}')
     if reset_layout:
@@ -376,7 +381,7 @@ def cmd_wiki(args: argparse.Namespace) -> int:
             env['YAZI_CONFIG_HOME'] = str(cfg_home)
     files_argv = _files_argv(deps, wiki_root)
     edit_argv = _edit_argv(deps, wiki_root, open_path)
-    herdr_argv = [deps.herdr, '--session', SESSION_NAME]
+    herdr_argv = _agents_panel_argv()
 
     if tmux_has_session(tmux) and (reset_layout or tmux_pane_count(tmux) != 3):
         tmux_kill(tmux)
