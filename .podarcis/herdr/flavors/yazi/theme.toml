@@ -1,5 +1,5 @@
 [filetype]
 rules = [
-  { name = "_index.md", fg = "#29b8db", bold = true },
-  { name = "index.md", fg = "#29b8db", bold = true },
+  { url = "*/_index.md", fg = "#29b8db", bold = true },
+  { url = "*/index.md", fg = "#29b8db", bold = true },
 ]

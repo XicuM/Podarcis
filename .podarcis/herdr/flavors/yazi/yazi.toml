@@ -15,8 +15,8 @@ wiki-edit = [
 
 [open]
 rules = [
-  { name = "*.md", use = "wiki-edit" },
+  { url = "*.md", use = "wiki-edit" },
   { mime = "text/*", use = "wiki-edit" },
   { mime = "application/json", use = "wiki-edit" },
-  { name = "*", use = "wiki-edit" },
+  { url = "*", use = "wiki-edit" },
 ]
