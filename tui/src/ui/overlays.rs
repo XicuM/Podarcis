@@ -31,9 +31,12 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     match app.overlay.as_ref() {
         Some(Overlay::Finder(_)) => finder(frame, app, area),
         Some(Overlay::Palette(_)) => palette(frame, app, area),
+        Some(Overlay::Themes { selected, .. }) => themes(frame, app, area, *selected),
         Some(Overlay::Help { scroll }) => help(frame, app, area, *scroll),
         Some(Overlay::Outline { selected }) => outline(frame, app, area, *selected),
         Some(Overlay::Prompt(_)) => prompt(frame, app, area),
+        Some(Overlay::RepoConfig(_)) => repo_config(frame, app, area),
+        Some(Overlay::Menu(_)) => menu(frame, app),
         None => {}
     }
 }
@@ -142,6 +145,61 @@ fn finder(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(hints), hint);
 }
 
+/// The theme picker. Each row is painted in its own theme, so the list is the
+/// preview — and the page behind it is repainted live as the cursor moves.
+fn themes(frame: &mut Frame, app: &App, area: Rect, selected: usize) {
+    use crate::theme::Flavor;
+
+    let theme = &app.theme;
+    let all = Flavor::ALL;
+    let height = (all.len() as u16 + 3).min(area.height.saturating_sub(4)).max(6);
+    let box_area = crate::ui::centered(area, 52.min(area.width), height);
+    let inner = popup(frame, theme, box_area, "theme");
+    if inner.is_empty() {
+        return;
+    }
+
+    let [list, hint] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let rows = list.height as usize;
+    let start = selected.saturating_sub(rows / 2).min(all.len().saturating_sub(rows.max(1)));
+
+    let lines: Vec<Line> = all
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(rows)
+        .map(|(i, flavor)| {
+            let swatch = Theme::new(*flavor);
+            let on = i == selected;
+            let name = Style::default().fg(if on { theme.accent } else { theme.text });
+            let name = if on { name.add_modifier(Modifier::BOLD) } else { name };
+            Line::from(vec![
+                Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(theme.accent)),
+                Span::styled(format!("{:<22}", flavor.display_name()), name),
+                // A strip of the theme's own colours, painted in that theme.
+                Span::styled("  ", Style::default().bg(swatch.bg)),
+                Span::styled("  ", Style::default().bg(swatch.surface)),
+                Span::styled("  ", Style::default().bg(swatch.accent)),
+                Span::styled("  ", Style::default().bg(swatch.ok)),
+                Span::styled("  ", Style::default().bg(swatch.warn)),
+                Span::styled("  ", Style::default().bg(swatch.err)),
+                Span::styled(" Aa", Style::default().fg(swatch.text).bg(swatch.bg)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), list);
+
+    let hints = Line::from(vec![
+        Span::styled("j/k ", theme.faint_style()),
+        Span::styled("preview   ", theme.dim()),
+        Span::styled("enter ", theme.faint_style()),
+        Span::styled("keep   ", theme.dim()),
+        Span::styled("esc ", theme.faint_style()),
+        Span::styled("cancel", theme.dim()),
+    ]);
+    frame.render_widget(Paragraph::new(hints), hint);
+}
+
 fn palette(frame: &mut Frame, app: &App, area: Rect) {
     let Some(Overlay::Palette(state)) = app.overlay.as_ref() else { return };
     let theme = &app.theme;
@@ -223,19 +281,116 @@ fn outline(frame: &mut Frame, app: &App, area: Rect, selected: usize) {
         return;
     }
     let selected = selected.min(open.doc.headings.len().saturating_sub(1));
+    // Indented by level: the outline is there to show the shape of the page,
+    // and a flat list of titles shows only its length.
     let lines: Vec<Line> = open
         .doc
         .headings
         .iter()
         .enumerate()
         .take(inner.height as usize)
-        .map(|(i, (_, _, text))| {
+        .map(|(i, (_, level, text))| {
             let on = i == selected;
-            let style = if on { theme.selection(true) } else { Style::default().fg(theme.text) };
-            Line::from(Span::styled(format!(" {text} "), style))
+            let style = if on { theme.selection(true) } else { theme.heading(*level) };
+            let indent = "  ".repeat(level.saturating_sub(1) as usize);
+            Line::from(Span::styled(format!(" {indent}{text} "), style))
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn repo_config(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(Overlay::RepoConfig(state)) = app.overlay.as_ref() else { return };
+    let theme = &app.theme;
+    let height = if state.name == "sources" { 14 } else { 13 };
+    let box_area = crate::ui::centered(area, area.width.saturating_sub(16).min(72), height);
+    let inner = popup(frame, theme, box_area, &format!("configure {}", state.name));
+    if inner.is_empty() {
+        return;
+    }
+
+    let current = app.cfg.repo_url(&state.name).unwrap_or("local-only");
+    let path = app.cfg.root.join(&state.name);
+    let mut options = vec![
+        ("git URL", "point this collection at another remote"),
+        ("local only", "keep a git repo here with no origin"),
+    ];
+    if state.name == "sources" {
+        options.push(("Google Drive", "no local sources/ checkout"));
+    }
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("current  {current}"),
+            theme.dim(),
+        )),
+        Line::from(Span::styled(format!("path     {}", path.display()), theme.faint_style())),
+        Line::from(""),
+    ];
+    for (i, (label, hint)) in options.iter().enumerate() {
+        let on = i == state.selected;
+        let style = if on { theme.selection(true) } else { Style::default().fg(theme.text) };
+        lines.push(Line::from(vec![
+            Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(theme.accent)),
+            Span::styled(format!("{label:<14}"), style.add_modifier(Modifier::BOLD)),
+            Span::styled(*hint, if on { style } else { theme.faint_style() }),
+        ]));
+    }
+    lines.push(Line::from(""));
+    if state.selected == 0 {
+        lines.push(query_line(theme, "› ", &state.url));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "enter applies the selected option",
+            theme.faint_style(),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        "↑↓ choose · enter apply · esc cancel",
+        theme.faint_style(),
+    )));
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// A right-click context menu, drawn at the popup rectangle the app recorded
+/// when the menu was opened. The title is the row's path so the target is never
+/// ambiguous, and a trailing hint answers the only two questions a context menu
+/// invites: what keys, and how to leave.
+fn menu(frame: &mut Frame, app: &App) {
+    let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { return };
+    let theme = &app.theme;
+    if menu.area.is_empty() {
+        return;
+    }
+    let title = crate::vault::page::rel_path(&menu.path, &app.cfg.root);
+    let inner = popup(frame, theme, menu.area, &title);
+    if inner.is_empty() {
+        return;
+    }
+    let height = inner.height.saturating_sub(1) as usize;
+    let lines: Vec<Line> = menu
+        .items
+        .iter()
+        .enumerate()
+        .take(height)
+        .map(|(i, (_, label))| {
+            let on = i == menu.selected;
+            let style = if on { theme.selection(true) } else { Style::default().fg(theme.text) };
+            Line::from(vec![
+                Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(theme.accent)),
+                Span::styled(label.to_string(), style),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+
+    let hint = Line::from(Span::styled("↑↓ choose · enter run · esc close", theme.faint_style()));
+    frame.render_widget(Paragraph::new(hint), Rect {
+        x: inner.x,
+        y: inner.y + inner.height.saturating_sub(1),
+        width: inner.width,
+        height: 1,
+    });
 }
 
 fn prompt(frame: &mut Frame, app: &App, area: Rect) {
