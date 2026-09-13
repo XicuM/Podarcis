@@ -80,10 +80,10 @@ def _edit_argv(deps: ResolvedDeps, wiki_root: Path, open_path: Path | None) -> l
 
 def _link_plugin(session: HerdrSession, wiki_root: Path) -> None:
     herdr_dir = ensure_checkout_herdr(wiki_root)
-    dest = write_linked_plugin(herdr_dir)
     try:
+        dest = write_linked_plugin(herdr_dir)
         session.cli('plugin', 'link', str(dest))
-    except RuntimeError as exc:
+    except (RuntimeError, OSError) as exc:
         msg = str(exc).lower()
         if 'already' in msg or 'exists' in msg or 'linked' in msg:
             return
@@ -253,7 +253,8 @@ def dispatch_wiki(args: argparse.Namespace) -> int:
                 return _die('wiki context requires a PATH')
             args.path = path_parts[0]
             return cmd_wiki_context(args)
-        args.path = head
+        path_parts = _rest_after(rest)
+        args.path = path_parts[0] if path_parts else None
     return cmd_wiki(args)
 
 

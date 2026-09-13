@@ -10,8 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from podarcis.herdr.layout import editor_run_argv, files_run_argv, foreground_occupant
-from podarcis.tui.actions.edit import open_in_edit_pane, vim_escape
+from podarcis.herdr.layout import (
+    editor_run_argv,
+    files_run_argv,
+    foreground_occupant,
+    is_named_shell_foreground,
+)
+from podarcis.tui.actions.edit import helix_escape, open_in_edit_pane, vim_escape
 from podarcis.tui.actions.spawn_persona import persona_prompt_text, persona_start_argv, spawn_persona
 from podarcis.tui.context import write_current
 from podarcis.tui.session import in_wiki_session
@@ -194,7 +199,24 @@ def test_empty_process_list_is_not_idle_shell():
     assert foreground_occupant({'process_info': {'foreground_processes': []}}) is None
     assert foreground_occupant({
         'process_info': {'foreground_processes': [], 'shell_pid': 7},
-    }) == 'shell'
+    }) is None
+    assert is_named_shell_foreground({
+        'process_info': {'foreground_processes': [], 'shell_pid': 7},
+    }) is False
+    assert is_named_shell_foreground({
+        'foreground_processes': [{'name': 'bash', 'pid': 1}],
+    }) is True
+
+
+def test_edit_empty_process_list_with_shell_pid_is_busy(tmp_path):
+    session = FakeSession(occupant=None, shell_pid=1)
+    err = open_in_edit_pane(
+        session, tmp_path / 'page.md', editor=['nvim'], flavor_dir=tmp_path,
+    )
+    kinds = [c[1] for c in session.calls if c and c[0] == 'pane']
+    assert err is not None and 'busy' in err
+    assert 'run' not in kinds
+    assert 'send-keys' not in kinds
 
 
 @pytest.mark.parametrize(
@@ -273,6 +295,20 @@ def test_plugin_spawn_persona_noops_outside_wiki_session(monkeypatch):
     monkeypatch.delenv('HERDR_SOCKET_PATH', raising=False)
     from podarcis.tui.actions import spawn_persona as sp
     assert sp.main(['researcher']) == 0
+
+
+def test_plugin_spawn_persona_usage_without_name(monkeypatch, capsys):
+    monkeypatch.setenv('HERDR_SESSION', 'podarcis')
+    monkeypatch.delenv('PODARCIS_PERSONA', raising=False)
+    from podarcis.tui.actions import spawn_persona as sp
+    assert sp.main([]) == 1
+    err = capsys.readouterr()
+    text = err.err + err.out
+    assert 'usage:' in text
+    assert 'researcher' in text
+    assert 'synthesizer' in text
+    assert 'protocol-architect' in text
+    assert 'auditor' in text
 
 
 def test_plugin_edit_noops_outside_wiki_session(monkeypatch):
@@ -396,13 +432,17 @@ def test_yazi_flavor_files_cover_design_rules():
     assert 'podarcis wiki edit --' in yazi
     assert 'linemode = "lint"' in yazi
     assert 'show_hidden = false' in yazi
-    assert 'cd wiki' in keymap
-    assert 'cd sources' in keymap
-    assert 'cd workspace' in keymap
-    assert 'cd tmp' in keymap
+    assert 'plugin cd-root -- wiki' in keymap
+    assert 'plugin cd-root -- sources' in keymap
+    assert 'plugin cd-root -- workspace' in keymap
+    assert 'plugin cd-root -- tmp' in keymap
+    cd_root = (flavor / 'plugins' / 'cd-root.yazi' / 'main.lua').read_text(encoding='utf-8')
+    assert 'PROJECT_ROOT' in cd_root
+    assert 'root .. "/" .. dest' in cd_root
     for name in ('tmp', '.git', '.venv', '__pycache__', 'node_modules', '.obsidian', '.claude', '.opencode'):
         assert name in init
     assert 'lint.json' in init
+    assert 'path:match("([^/]+)$")' not in init
     assert '_index.md' in theme
     assert 'index.md' in theme
     assert '_index.md' in smart
@@ -424,6 +464,20 @@ def test_vim_escape_spaces():
     assert '\\ ' in vim_escape('/tmp/my file.md')
 
 
+def test_helix_escape_quotes_spaces():
+    assert helix_escape('/tmp/my file.md') == '"/tmp/my file.md"'
+
+
+def test_helix_open_quotes_spaces(tmp_path):
+    session = FakeSession(occupant='helix')
+    path = tmp_path / 'my page.md'
+    path.write_text('# hi\n', encoding='utf-8')
+    err = open_in_edit_pane(session, path, editor=['helix'], flavor_dir=tmp_path)
+    assert err is None
+    texts = [c[3] for c in session.calls if c[:2] == ('pane', 'send-text')]
+    assert any(':open "' in t and 'my page.md' in t for t in texts)
+
+
 def test_dispatch_wiki_edit_and_persona(tmp_path, monkeypatch, capsys):
     checkout = _checkout(tmp_path / 'wiki')
     page = _page(checkout)
@@ -443,3 +497,84 @@ def test_dispatch_wiki_edit_and_persona(tmp_path, monkeypatch, capsys):
     ))
     assert rc == 1
     assert 'persona requires a NAME' in capsys.readouterr().out
+
+    args = Namespace(
+        root=str(checkout), wiki_rest=['--', 'wiki/health/caffeine.md'],
+        path=None, name=None, dry_run=True, sync=False,
+        reset_layout=False, reset_config=False,
+    )
+    from podarcis.tui import launch as launch_mod
+    monkeypatch.setattr(launch_mod, 'get_repo_status', lambda _root=None: [
+        {'repo': n, 'status': 'synced', 'branch': 'master', 'changes': 0,
+         'ahead': 0, 'behind': 0, 'type': 'git', 'url': 'local'}
+        for n in ('sources', 'wiki', 'workspace')
+    ])
+    bindir = tmp_path / 'bin'
+    if not bindir.exists():
+        bindir.mkdir()
+        _exe(bindir / 'herdr')
+        _exe(bindir / 'nvim')
+        _exe(bindir / 'opencode')
+    monkeypatch.setenv('HERDR_BIN', str(bindir / 'herdr'))
+    monkeypatch.setenv('PODARCIS_EDITOR', str(bindir / 'nvim'))
+    monkeypatch.setenv('PATH', f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}')
+    rc = dispatch_wiki(args)
+    assert args.path == 'wiki/health/caffeine.md'
+    assert args.path != '--'
+    assert rc == 0
+
+
+def test_stale_pr1_herdr_still_uses_package_flavors(tmp_path, monkeypatch, capsys):
+    checkout = _checkout(tmp_path / 'wiki')
+    stale = checkout / '.podarcis' / 'herdr'
+    stale.mkdir()
+    (stale / 'session.toml').write_text('onboarding = false\n', encoding='utf-8')
+    (stale / 'layout.py').write_text('# pr1 layout stub\n', encoding='utf-8')
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    herdr = _exe(bindir / 'herdr')
+    _exe(bindir / 'nvim')
+    _exe(bindir / 'opencode')
+    _exe(bindir / 'yazi')
+    monkeypatch.setenv('HERDR_BIN', str(herdr))
+    monkeypatch.setenv('PODARCIS_EDITOR', str(bindir / 'nvim'))
+    monkeypatch.setenv('PATH', f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}')
+    monkeypatch.chdir(checkout)
+
+    from podarcis.tui import launch as launch_mod
+    monkeypatch.setattr(launch_mod, 'get_repo_status', lambda _root=None: [
+        {'repo': n, 'status': 'synced', 'branch': 'master', 'changes': 0,
+         'ahead': 0, 'behind': 0, 'type': 'git', 'url': 'local'}
+        for n in ('sources', 'wiki', 'workspace')
+    ])
+    from podarcis.tui.launch import cmd_wiki
+    from podarcis.tui.server import package_herdr_dir, resolved_herdr_dir, write_linked_plugin
+    assert resolved_herdr_dir(checkout) == package_herdr_dir()
+    dest = tmp_path / 'plugin-link'
+    out = write_linked_plugin(stale, python=str(tmp_path / 'venv' / 'bin' / 'python'), dest=dest)
+    assert (out / 'herdr-plugin.toml').is_file()
+    assert 'podarcis.wiki' in (out / 'herdr-plugin.toml').read_text(encoding='utf-8')
+
+    rc = cmd_wiki(Namespace(
+        root=str(checkout), dry_run=True, sync=False, reset_layout=False,
+        reset_config=False, path=None, wiki_rest=[],
+    ))
+    assert rc == 0
+    printed = capsys.readouterr().out
+    assert 'YAZI_CONFIG_HOME=' in printed
+    assert 'luafile' in printed
+    assert 'wiki.lua' in printed
+
+
+def test_ensure_checkout_herdr_merges_missing_flavors(tmp_path):
+    from podarcis.tui.server import ensure_checkout_herdr, herdr_dir_has_flavors
+    checkout = _checkout(tmp_path / 'wiki')
+    stale = checkout / '.podarcis' / 'herdr'
+    stale.mkdir()
+    (stale / 'session.toml').write_text('onboarding = false\n', encoding='utf-8')
+    (stale / 'layout.py').write_text('# pr1\n', encoding='utf-8')
+    dest = ensure_checkout_herdr(checkout)
+    assert dest == stale
+    assert herdr_dir_has_flavors(dest)
+    assert (dest / 'herdr-plugin.toml').is_file()
+    assert (dest / 'session.toml').read_text(encoding='utf-8') == 'onboarding = false\n'

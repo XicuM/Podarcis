@@ -1,24 +1,25 @@
 # Bookmarks: w→wiki/, s→sources/, p→workspace/, t→tmp/ (hidden from default listing).
+# Absolute $PROJECT_ROOT/… — yazi `cd wiki` is cwd-relative and fails from wiki/health/.
 # g-prefix so we do not clobber yazi search (s) or paste (p).
 
 [[mgr.prepend_keymap]]
 on = [ "g", "w" ]
-run = "cd wiki"
+run = "plugin cd-root -- wiki"
 desc = "Bookmark w → wiki/"
 
 [[mgr.prepend_keymap]]
 on = [ "g", "s" ]
-run = "cd sources"
+run = "plugin cd-root -- sources"
 desc = "Bookmark s → sources/"
 
 [[mgr.prepend_keymap]]
 on = [ "g", "p" ]
-run = "cd workspace"
+run = "plugin cd-root -- workspace"
 desc = "Bookmark p → workspace/"
 
 [[mgr.prepend_keymap]]
 on = [ "g", "t" ]
-run = "cd tmp"
+run = "plugin cd-root -- tmp"
 desc = "Bookmark t → tmp/"
 
 [[mgr.prepend_keymap]]

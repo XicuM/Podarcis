@@ -30,6 +30,12 @@ end
 
 local lint_cache, lint_stamp = {}, -1
 
+local function normalize_url(url)
+	url = tostring(url or "")
+	url = url:gsub("^file://", "")
+	return url
+end
+
 local function lint_map()
 	local now = os.time()
 	if now == lint_stamp then
@@ -52,27 +58,22 @@ local function lint_map()
 	end
 	for path in raw:gmatch('"([^"]+)"%s*:%s*%[') do
 		lint_cache[path] = true
-		local base = path:match("([^/]+)$")
-		if base then
-			lint_cache[base] = true
+		if not path:match("^/") then
+			lint_cache[root .. "/" .. path] = true
 		end
 	end
 	return lint_cache
 end
 
 function Linemode:lint()
-	local url = tostring(self._file.url)
-	local name = self._file.name
+	local url = normalize_url(self._file.url)
 	local badges = lint_map()
-	if badges[url] or badges[name] then
+	if badges[url] then
 		return "✗"
 	end
 	local root = os.getenv("PROJECT_ROOT") or ""
-	if root ~= "" then
-		local rel = url
-		if url:sub(1, #root) == root then
-			rel = url:sub(#root + 2)
-		end
+	if root ~= "" and url:sub(1, #root) == root then
+		local rel = url:sub(#root + 2)
 		if badges[rel] then
 			return "✗"
 		end

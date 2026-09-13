@@ -132,6 +132,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     argv = list(sys.argv[1:] if argv is None else argv)
     name = argv[0] if argv else os.environ.get('PODARCIS_PERSONA', '')
+    if not name:
+        sys.stderr.write(
+            'usage: podarcis wiki persona NAME\n'
+            f'personas: {", ".join(PERSONAS)}\n'
+        )
+        return 1
     ns = argparse.Namespace(name=name, root=os.environ.get('PROJECT_ROOT'))
     return cmd_wiki_persona(ns)
 

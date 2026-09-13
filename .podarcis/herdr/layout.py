@@ -128,8 +128,17 @@ def is_shell_foreground(result: dict) -> bool:
     return info.get('shell_pid') is not None
 
 
+def is_named_shell_foreground(result: dict) -> bool:
+    '''True only when a named shell is in ``foreground_processes``. Empty lists are busy.'''
+    info = result.get('process_info', result)
+    procs = info.get('foreground_processes') or []
+    if not procs:
+        return False
+    return all(_proc_name(p) in SHELL_NAMES for p in procs)
+
+
 def foreground_occupant(result: dict) -> str | None:
-    '''Foreground process name, or ``shell`` when idle. Empty lists are not idle.'''
+    '''Foreground process name. Empty lists are not idle, even with ``shell_pid``.'''
     info = result.get('process_info', result)
     procs = info.get('foreground_processes') or []
     non_shell = []
@@ -141,8 +150,6 @@ def foreground_occupant(result: dict) -> str | None:
         return non_shell[0]
     if procs:
         return _proc_name(procs[0]) or 'shell'
-    if info.get('shell_pid') is not None:
-        return 'shell'
     return None
 
 

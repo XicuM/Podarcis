@@ -13,8 +13,8 @@ from podarcis.herdr.layout import (
     editor_run_argv,
     foreground_occupant,
     is_helix,
+    is_named_shell_foreground,
     is_nvim,
-    is_shell_foreground,
     panes_by_label,
 )
 from podarcis.tui import PANE_EDIT, SESSION_NAME
@@ -33,6 +33,11 @@ def vim_escape(path: str) -> str:
         .replace('|', '\\|')
         .replace('"', '\\"')
     )
+
+
+def helix_escape(path: str) -> str:
+    s = str(path).replace('\\', '\\\\').replace('"', '\\"')
+    return f'"{s}"'
 
 
 def resolve_edit_path(path: str, wiki_root: Path) -> Path:
@@ -59,7 +64,8 @@ def open_in_edit_pane(
     if not edit_id:
         return 'edit pane not found; focus it or open the file yourself.'
     info = session.cli('pane', 'process-info', '--pane', edit_id)
-    if is_shell_foreground(info):
+    # Empty foreground_processes is not idle even when shell_pid is set.
+    if is_named_shell_foreground(info):
         argv = editor_run_argv(editor, flavor_dir, open_path=path)
         session.cli('pane', 'run', edit_id, shlex.join(argv))
         return None
@@ -72,7 +78,7 @@ def open_in_edit_pane(
         return None
     if is_helix(occupant):
         session.cli('pane', 'send-keys', edit_id, 'esc')
-        session.cli('pane', 'send-text', edit_id, f':open {path}')
+        session.cli('pane', 'send-text', edit_id, f':open {helix_escape(str(path))}')
         session.cli('pane', 'send-keys', edit_id, 'enter')
         return None
     name = occupant or 'unknown'
