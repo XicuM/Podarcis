@@ -1,310 +1,31 @@
 #!/usr/bin/env python3
-'''Podarcis CLI tool for agentic configuration management, testing, and lifecycle.'''
+'''Python surface of the Podarcis CLI.
+
+The Rust `podarcis` binary owns the command tree; the core subcommands
+(status, config, repo, lint, diagnose, test, wiki, frontend, clean) run
+natively on the shared library. What remains here is the engine-bound work
+with no Rust home yet — install/uninstall lifecycle, research/ingest HTTP and
+pdf service, systemd job timers, and the interactive menu — reachable through
+`python -m podarcis.cli <…>` dispatched by the Rust CLI.
+'''
 
 import argparse
 import json
-import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'none': None}
-FRONTEND_NAMES = ('tui', 'vscode', 'obsidian', 'none')
-
-from podarcis import PODARCIS_DIR, ROOT_DIR
-from podarcis.common import get_config_value, load_version_info, set_config_value
+from podarcis import ROOT_DIR
+from podarcis.common import load_version_info
 from podarcis.console import console
-from podarcis.components import (
-    discover_components,
-    external_skills,
-    get_enabled_mcp_servers,
-    set_mcp_server_status,
-)
-
-from podarcis.repos import (
-    get_repo_names,
-    get_repo_url,
-    set_repo_url,
-    get_repo_status,
-    sync_repos_full,
-    push_repos,
-)
-from podarcis.root import WikiRootError, find_wiki_root, find_wiki_root_or_none
-from podarcis.wiki import cmd_wiki, cmd_wiki_search
-
-
-def _get_python_bin() -> str:
-    '''Get path to python binary inside virtualenv if available.'''
-    venv_py = ROOT_DIR / '.venv' / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
-    if venv_py.exists():
-        return str(venv_py)
-    return sys.executable
-
-
-def _get_pytest_bin() -> str:
-    '''Get path to pytest binary inside virtualenv if available.'''
-    venv_pytest = ROOT_DIR / '.venv' / ('Scripts/pytest.exe' if sys.platform == 'win32' else 'bin/pytest')
-    if venv_pytest.exists():
-        return str(venv_pytest)
-    return 'pytest'
-
-
-def cmd_status(args: argparse.Namespace) -> int:
-    '''List component, job, and repository status.'''
-    mcp_servers, skills, agents = discover_components(ROOT_DIR)
-    enabled_mcp = get_enabled_mcp_servers(ROOT_DIR)
-    from podarcis.jobs import discover_jobs
-    jobs = discover_jobs(ROOT_DIR)
-    external = external_skills(ROOT_DIR)
-
-    from podarcis.wiki import find_binary as _tui_binary, version as _tui_version
-    tui_root = find_wiki_root_or_none(explicit=getattr(args, 'root', None)) or ROOT_DIR
-    tui_binary = _tui_binary(tui_root)
-
-    status_data = {
-        'frontend': {
-            'name': (get_config_value(tui_root, 'frontend', default='none') or 'none'),
-            'binary': str(tui_binary) if tui_binary else '',
-            'version': _tui_version(tui_root) or '',
-            'built': tui_binary is not None,
-        },
-        'mcp_servers': {},
-        'skills': {},
-        'agents': {},
-        'external_skills': {},
-        'jobs': {},
-        'repositories': {},
-    }
-
-    for key, info in sorted(mcp_servers.items()):
-        is_on = key in enabled_mcp
-        status_data['mcp_servers'][key] = {
-            'enabled': is_on,
-            'tokens': info.get('tokens', 0),
-            'dir_name': info.get('dir_name', key),
-        }
-
-    for key, info in sorted(skills.items()):
-        status_data['skills'][key] = {
-            'enabled': info.get('enabled', False),
-            'tokens': info.get('tokens', 0),
-        }
-
-    for key, info in sorted(agents.items()):
-        status_data['agents'][key] = {
-            'enabled': info.get('enabled', False),
-            'tokens': info.get('tokens', 0),
-        }
-
-    for key, info in sorted(external.items()):
-        status_data['external_skills'][key] = {
-            'executables': info['executables'],
-            'ok': all(info['executables'].values()),
-        }
-
-    for key, info in sorted(jobs.items()):
-        status_data['jobs'][key] = {
-            'enabled': info.get('enabled', False),
-            'schedule': info.get('schedule', ''),
-            'description': info.get('description', ''),
-            'last_run': info.get('last_run', ''),
-        }
-
-    for r_name in get_repo_names(ROOT_DIR):
-        url = get_repo_url(ROOT_DIR, r_name)
-        status_data['repositories'][r_name] = {
-            'remote_url': url,
-            'is_local_only': not bool(url),
-        }
-
-    if getattr(args, 'json', False):
-        print(json.dumps(status_data, indent=2))
-        return 0
-
-    console.print('[bold #29b8db]Podarcis Configuration Status[/bold #29b8db]\n')
-
-    # Tool modules are the only context cost paid up front, so they get the budget.
-    live_tk = sum(v['tokens'] for v in status_data['mcp_servers'].values() if v['enabled'])
-    console.print(f'[bold white]MCP tool modules:[/bold white] [dim]{live_tk:,} tokens per session[/dim]')
-    for k, v in sorted(status_data['mcp_servers'].items(), key=lambda i: -i[1]['tokens']):
-        st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
-        console.print(f'  • {k:<20} [{st}] ({v["tokens"]} tokens)')
-
-    # Skills and personas load on invocation, so there is no per-session budget
-    # and nothing to toggle — list them, don't imply a switch.
-    for label, section in (('Personas', 'agents'), ('Skills', 'skills')):
-        console.print(f'\n[bold white]{label}:[/bold white] [dim]loaded on demand[/dim]')
-        for k, v in status_data[section].items():
-            console.print(f'  • {k:<20} [dim]({v["tokens"]} tokens when invoked)[/dim]')
-
-    # APM deploys a skill's files but installs no runtime, and a failing
-    # lifecycle script does not fail `apm install` — so a deployed skill whose
-    # CLI never got installed looks fine everywhere except here.
-    if status_data['external_skills']:
-        console.print('\n[bold white]External skills:[/bold white] [dim]installed via `apm install`[/dim]')
-        for k, v in status_data['external_skills'].items():
-            if not v['executables']:
-                detail = '[dim]no CLI declared[/dim]'
-            else:
-                detail = ', '.join(
-                    f'[green]{name}[/green]' if path else f'[bold red]{name} MISSING[/bold red]'
-                    for name, path in v['executables'].items())
-            console.print(f'  • {k:<20} {detail}')
-        if any(not v['ok'] for v in status_data['external_skills'].values()):
-            console.print('  [yellow]Run `apm lifecycle trust` then `apm install` to install missing CLIs.[/yellow]')
-
-    console.print('\n[bold white]Jobs:[/bold white]')
-    for k, v in status_data['jobs'].items():
-        st = '[green]enabled[/green]' if v['enabled'] else '[dim red]disabled[/dim red]'
-        sched = f'({v["schedule"]})' if v["schedule"] else ''
-        console.print(f'  • {k:<20} [{st}] {sched}')
-
-    console.print('\n[bold white]Frontend:[/bold white]')
-    fe = status_data['frontend']
-    if fe['built']:
-        detail = f'{fe["version"]}  [dim]{fe["binary"]}[/dim]' if fe['version'] else f'[dim]{fe["binary"]}[/dim]'
-        console.print(f'  • [bold #29b8db]{fe["name"]:<20}[/bold #29b8db] [bold green]✓[/bold green] {detail}')
-    else:
-        console.print(
-            f'  • [bold #29b8db]{fe["name"]:<20}[/bold #29b8db] [yellow]not built[/yellow] '
-            f'[dim]run `podarcis wiki build`[/dim]'
-        )
-
-    console.print('\n[bold white]Repositories:[/bold white]')
-    for k, v in status_data['repositories'].items():
-        url_str = v['remote_url'] if v['remote_url'] else 'local-only'
-        console.print(f'  • [bold #29b8db]{k:<20}[/bold #29b8db] {url_str}')
-
-    return 0
-
-
-def _cmd_config_set_status(args: argparse.Namespace, enable: bool) -> int:
-    '''Enable or disable an MCP tool module.
-
-    Tool modules are the only toggleable component: their schemas load into
-    every session up front. The harness loads only a skill's or persona's
-    one-line description until something invokes it, so gating those saves
-    ~60 tokens and is not worth a config surface.
-    '''
-    name = args.name
-    mcp_servers, _, _ = discover_components(ROOT_DIR)
-
-    if name not in mcp_servers:
-        skills, agents = discover_components(ROOT_DIR)[1:]
-        if name in skills or name in agents:
-            console.print(
-                f'[bold red]Error:[/bold red] "{name}" is a '
-                f'{"skill" if name in skills else "persona"}, not a tool module, '
-                f'and is not toggleable. To retire it, set '
-                f'[bold]disabled: true[/bold] in its own frontmatter.'
-            )
-            return 1
-        console.print(
-            f'[bold red]Error:[/bold red] Tool module "{name}" not found. '
-            f'Available: {", ".join(sorted(mcp_servers))}'
-        )
-        return 1
-
-    set_mcp_server_status(ROOT_DIR, name, enable, mcp_servers[name])
-    msg = '[bold green]✓ Enabled[/bold green]' if enable else '[yellow]Disabled[/yellow]'
-    console.print(f'{msg} tool module "{name}".')
-    return 0
-
-
-def cmd_config_enable(args: argparse.Namespace) -> int:
-    '''Enable an MCP tool module.'''
-    return _cmd_config_set_status(args, True)
-
-
-def cmd_config_disable(args: argparse.Namespace) -> int:
-    '''Disable an MCP tool module.'''
-    return _cmd_config_set_status(args, False)
-
-
-def cmd_config_repo(args: argparse.Namespace) -> int:
-    '''Update repository remote or local path configuration.'''
-    from podarcis.repos import ensure_local_git_repo
-    repo_name = getattr(args, 'repo_name', None)
-    known_repos = get_repo_names(ROOT_DIR)
-
-    if not repo_name:
-        console.print('[bold #29b8db]Configured Podarcis Repositories:[/bold #29b8db]\n')
-        for r_name in known_repos:
-            url = get_repo_url(ROOT_DIR, r_name)
-            url_str = url if url else 'local-only'
-            console.print(f'  • [bold white]{r_name:<15}[/bold white] {url_str}')
-        return 0
-
-    target_val = (getattr(args, 'url', None) or getattr(args, 'path', None) or '')
-    if target_val is not None:
-        target_val = target_val.strip()
-
-    if getattr(args, 'local', False):
-        set_repo_url(ROOT_DIR, repo_name, '')
-        ensure_local_git_repo(ROOT_DIR, repo_name)
-        console.print(f'[bold green]✓ Set {repo_name} to local-only.[/bold green]')
-    elif getattr(args, 'url', None) is not None or getattr(args, 'path', None) is not None:
-        set_repo_url(ROOT_DIR, repo_name, target_val)
-        ensure_local_git_repo(ROOT_DIR, repo_name)
-        if target_val:
-            console.print(f'[bold green]✓ Set remote/path for {repo_name} to {target_val}[/bold green]')
-        else:
-            console.print(f'[bold green]✓ Set {repo_name} to local-only.[/bold green]')
-    else:
-        current_url = get_repo_url(ROOT_DIR, repo_name)
-        remote_label = current_url if current_url else 'local-only'
-        console.print(f'Repository "{repo_name}": {remote_label}')
-
-    return 0
-
-
-
-def cmd_repo_status(args: argparse.Namespace) -> int:
-    '''Show git and sync status across all workspace repositories.'''
-    from rich.table import Table
-
-    statuses = get_repo_status(ROOT_DIR)
-    if getattr(args, 'json', False):
-        print(json.dumps(statuses, indent=2))
-        return 0
-
-    table = Table(title="Workspace Repositories Status", border_style="cyan")
-    for col, style, width in (
-        ("Repo", "bold white", 12), ("Type", "cyan", 8), ("Branch", "magenta", 12),
-        ("Status", "yellow", 16),
-    ):
-        table.add_column(col, style=style, width=width)
-    table.add_column("Changes", justify="right", width=8)
-    table.add_column("Ahead/Behind", justify="right", width=12)
-    table.add_column("Remote / Target", style="dim")
-
-    for s in statuses:
-        st = s['status']
-        st_str = f"[green]✓ {st}[/green]" if st in ('synced', 'ready', 'gdrive_managed') else f"[yellow]{st}[/yellow]"
-        ab = f"+{s['ahead']} / -{s['behind']}" if (s['ahead'] or s['behind']) else "—"
-        table.add_row(
-            s['repo'], s['type'], s['branch'] or '—', st_str,
-            str(s['changes']) if s['changes'] else "0", ab, s['url'] or 'local',
-        )
-    console.print(table)
-    return 0
+from podarcis.repos import push_repos
 
 
 def _print_repo_results(res: dict, symbols: dict[str, str]) -> None:
-    for rname, rinfo in res.items():
-        sym = symbols.get(rinfo.get('status'), '[red]✗[/red]')
-        console.print(f'  {sym} [bold]{rname:<12}[/bold] {rinfo.get("message")}')
-
-
-def cmd_repo_sync(args: argparse.Namespace) -> int:
-    '''Pull git remotes and ingest gdrive deltas for every workspace repository.'''
-    console.print('[bold #29b8db]Synchronizing all workspace repositories...[/bold #29b8db]\n')
-    _print_repo_results(
-        sync_repos_full(ROOT_DIR),
-        {'ok': '[green]✓[/green]', 'warning': '[yellow]⚠️[/yellow]'},
-    )
-    return 0
+    '''Print the `{repo: status}` mapping from repos.py with per-status symbols.'''
+    for repo, status in res.items():
+        print(f"  {symbols.get(status, '•')} {repo:<15} {status}")
+    console.print()
 
 
 def cmd_repo_push(args: argparse.Namespace) -> int:
@@ -322,93 +43,10 @@ def cmd_repo_push(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_repo_commit(args: argparse.Namespace) -> int:
-    '''Lint-gated per-repo commit. Does not push and does not flatten repos.'''
-    from podarcis.audit import audit_and_commit
-    root = find_wiki_root_or_none(explicit=getattr(args, 'root', None)) or ROOT_DIR
-    result = audit_and_commit(root, args.message)
-    if not result.get('ok'):
-        console.print('[bold red]Audit gate failed; nothing committed.[/bold red]')
-        if result.get('message'):
-            console.print(result['message'])
-        return 1
-    committed = result.get('committed') or []
-    if committed:
-        console.print('[bold green]✓ Committed[/bold green] ' + ', '.join(committed))
-    else:
-        console.print(result.get('message') or 'nothing to commit')
-    return 0
-
-
-def _ensure_vscode_config(root: Path) -> None:
-    '''Ensure .vscode user configuration directories are initialized from templates if missing.'''
-    template_dir = root / '.podarcis' / 'templates' / 'vscode'
-    target_dir = root / '.vscode'
-    if template_dir.exists():
-        target_dir.mkdir(parents=True, exist_ok=True)
-        for item in template_dir.iterdir():
-            target_file = target_dir / item.name
-            if not target_file.exists():
-                shutil.copy2(item, target_file)
-                console.print(f'[dim]Initialized .vscode/{item.name} from template[/dim]')
-
-
-def cmd_config_frontend(args: argparse.Namespace) -> int:
-    '''Set the frontend tool. ``tui`` is written only to a wiki-root config.'''
-    name = args.frontend_name.lower()
-    try:
-        wiki_root = find_wiki_root_or_none(explicit=getattr(args, 'root', None))
-    except WikiRootError as exc:
-        console.print(f'[bold red]Error:[/bold red] {exc.message}')
-        return 1
-    if name == 'tui':
-        if wiki_root is None:
-            console.print(
-                '[bold red]Error:[/bold red] not a Podarcis checkout '
-                '(no AGENTS.md + .podarcis/config.yaml). Pass --root.'
-            )
-            return 1
-        set_config_value(wiki_root, name, 'frontend')
-        console.print(f'[bold green]✓ Frontend set to {name}.[/bold green]')
-        return 0
-    cfg_root = wiki_root if wiki_root is not None else ROOT_DIR
-    set_config_value(cfg_root, name, 'frontend')
-    if name == 'vscode':
-        _ensure_vscode_config(cfg_root)
-    if name == 'none':
-        console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.')
-    else:
-        console.print(f'[bold green]✓ Frontend set to {name}.[/bold green]')
-    return 0
-
-
-def cmd_frontend(args: argparse.Namespace) -> int:
-    '''Open the configured frontend. ``tui`` launches the wiki front-end.'''
-    try:
-        wiki_root = find_wiki_root_or_none(explicit=getattr(args, 'root', None))
-    except WikiRootError as exc:
-        console.print(f'[bold red]Error:[/bold red] {exc.message}')
-        return 1
-    cfg_root = wiki_root if wiki_root is not None else ROOT_DIR
-    frontend = (get_config_value(cfg_root, 'frontend', default='none') or 'none').lower()
-    if frontend == 'tui':
-        if wiki_root is None:
-            console.print(
-                '[bold red]Error:[/bold red] not a Podarcis checkout '
-                '(no AGENTS.md + .podarcis/config.yaml). Pass --root.'
-            )
-            return 1
-        return cmd_wiki(args)
-    from podarcis.banner import display_project_banner
-    display_project_banner(cfg_root)
-    if frontend == 'none':
-        return 0
-    return cmd_open_tool(cfg_root)
-
-
 def cmd_interactive(args: argparse.Namespace) -> int:
     '''Launch TUI interactive menu.'''
     from podarcis.interactive import interactive_config
+
     interactive_config(ROOT_DIR)
     return 0
 
@@ -418,30 +56,6 @@ def cmd_install(args: argparse.Namespace) -> int:
     install_script = ROOT_DIR / '.podarcis' / 'install.py'
     py_bin = sys.executable
     return subprocess.run([py_bin, str(install_script)] + args.remaining_args).returncode
-
-
-def cmd_clean(args: argparse.Namespace) -> int:
-    '''Clean Python build artifacts and cache files.'''
-    import shutil
-    count = 0
-    for p in ROOT_DIR.rglob('__pycache__'):
-        if p.is_dir():
-            shutil.rmtree(p, ignore_errors=True)
-            count += 1
-    for p in ROOT_DIR.rglob('*.pyc'):
-        if p.is_file():
-            p.unlink(missing_ok=True)
-            count += 1
-    for p in ROOT_DIR.glob('.pytest_cache'):
-        if p.is_dir():
-            shutil.rmtree(p, ignore_errors=True)
-            count += 1
-    for p in ROOT_DIR.rglob('*.egg-info'):
-        if p.is_dir():
-            shutil.rmtree(p, ignore_errors=True)
-            count += 1
-    console.print(f'[bold green]✓ Cleaned {count} build artifacts and cache directories.[/bold green]')
-    return 0
 
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
@@ -456,99 +70,6 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     if getattr(args, 'purge', False):
         extra += ['--purge']
     return subprocess.run([py_bin, str(uninstall_script)] + extra).returncode
-
-
-def cmd_test(args: argparse.Namespace) -> int:
-    '''Run the pytest suite, then the front-end crate's tests.
-
-    Both halves are the platform, so `podarcis test` covers both. Cargo is
-    skipped — not failed — when it is not installed, since a checkout without a
-    Rust toolchain is still a working Podarcis.
-    '''
-    from podarcis.wiki import crate_dir
-
-    pytest_bin = _get_pytest_bin()
-    code = subprocess.run([pytest_bin] + args.remaining_args).returncode
-    if getattr(args, 'python_only', False):
-        return code
-
-    root = find_wiki_root_or_none(explicit=getattr(args, 'root', None)) or ROOT_DIR
-    manifest = crate_dir(root) / 'Cargo.toml'
-    cargo = shutil.which('cargo')
-    if not manifest.is_file():
-        return code
-    if cargo is None:
-        console.print('[dim]cargo not found — skipping the frontend tests.[/dim]')
-        return code
-    console.print('\n[bold #29b8db]podarcis-tui[/bold #29b8db]')
-    rust = subprocess.run([cargo, 'test', '--manifest-path', str(manifest), '--quiet']).returncode
-    return code or rust
-
-
-def cmd_lint(args: argparse.Namespace) -> int:
-    '''Run markdown link checker. ``--json`` is structured; human text stays default.'''
-    from podarcis.audit import run_lint
-    extra = list(getattr(args, 'remaining_args', None) or [])
-    as_json = bool(getattr(args, 'json', False) or '--json' in extra)
-    fix = bool(getattr(args, 'fix', False) or '--fix' in extra)
-    extra = [a for a in extra if a not in ('--json', '--fix')]
-    root = find_wiki_root_or_none(explicit=getattr(args, 'root', None)) or ROOT_DIR
-    target = extra[0] if extra else str(root)
-    return run_lint(root, target, as_json=as_json, fix=fix)
-
-
-def cmd_diagnose(args: argparse.Namespace) -> int:
-    '''Display platform pain points and current logged issues.'''
-    diag_script = ROOT_DIR / '.apm' / 'skills' / 'self-improvement' / 'scripts' / 'diagnose_session.py'
-    if not diag_script.exists():
-        console.print('[bold red]Error:[/bold red] diagnose_session.py script not found.')
-        return 1
-
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('diagnose_session', diag_script)
-    if spec is None or spec.loader is None:
-        console.print('[bold red]Error:[/bold red] Could not load diagnose_session module.')
-        return 1
-    diag_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(diag_mod)
-
-    resolve_id, resolve_cat = getattr(args, 'resolve', None), getattr(args, 'resolve_category', None)
-    if resolve_id or resolve_cat or getattr(args, 'clear', False):
-        resolved = diag_mod.resolve_issues(
-            base_dir=ROOT_DIR, ids=[resolve_id] if resolve_id else (),
-            category=resolve_cat or '', sweep=getattr(args, 'clear', False),
-        )
-        if not resolved:
-            console.print('[bold yellow]No unresolved pain points matched.[/bold yellow]')
-            return 1
-        console.print(f"[bold green]✓ Resolved {len(resolved)} pain point(s): {', '.join(resolved)}[/bold green]")
-        return 0
-
-    log_sess = getattr(args, 'log_session', None)
-    if log_sess:
-        p = Path(log_sess)
-        points = diag_mod.parse_transcript(p)
-        diag_mod.log_pain_points(points, base_dir=ROOT_DIR)
-        console.print(f'[bold green]Parsed {p.name} and logged {len(points)} pain point(s).[/bold green]')
-
-    issues = diag_mod.get_active_issues(base_dir=ROOT_DIR)
-    if getattr(args, 'json', False):
-        print(json.dumps(issues, indent=2))
-        return 0
-
-    if not issues:
-        console.print('[bold green]No active platform pain points logged in .podarcis/diagnostics/[/bold green]')
-    else:
-        console.print(f'[bold #29b8db]Current Platform Pain Points ({len(issues)} active):[/bold #29b8db]\n')
-        for idx, issue in enumerate(issues, 1):
-            sev = issue.get('severity', 'medium')
-            cat = issue.get('category', 'issue')
-            summ = issue.get('summary', '')
-            ts = issue.get('timestamp', '')
-            color = 'red' if sev == 'high' else 'yellow'
-            console.print(f'{idx}. [{color}][{sev.upper()}][/{color}] [bold white][{cat}][/bold white] {summ} [dim]({ts})[/dim]')
-        console.print()
-    return 0
 
 
 def cmd_research(args: argparse.Namespace) -> int:
@@ -568,9 +89,6 @@ def cmd_research(args: argparse.Namespace) -> int:
         research_server = importlib.util.module_from_spec(spec)
         sys.modules['research_mcp_server'] = research_server
         spec.loader.exec_module(research_server)
-
-
-
 
     action = getattr(args, 'research_action', None)
     if action == 'search':
@@ -594,7 +112,7 @@ def cmd_research(args: argparse.Namespace) -> int:
             doi = ext.get('DOI')
             arxiv = ext.get('ArXiv')
             pmid = ext.get('PubMed')
-            id_str = pid if pid else (f"DOI:{doi}" if doi else (f"arXiv:{arxiv}" if arxiv else (f"pmid:{pmid}" if pmid else "N/A")))
+            id_str = pid if pid else (f'DOI:{doi}' if doi else (f'arXiv:{arxiv}' if arxiv else (f'pmid:{pmid}' if pmid else 'N/A')))
             abstract = (item.get('abstract') or '').replace('\n', ' ').strip()
             if len(abstract) > 180:
                 abstract = abstract[:180] + '...'
@@ -637,12 +155,6 @@ def cmd_research(args: argparse.Namespace) -> int:
     else:
         console.print('[yellow]Usage: podarcis research [search|ingest] ...[/yellow]')
         return 1
-
-
-
-
-
-
 
 
 def cmd_job_list(args: argparse.Namespace) -> int:
@@ -712,39 +224,18 @@ def cmd_job_logs(args: argparse.Namespace) -> int:
     ).returncode
 
 
-def cmd_open_tool(root: Path | None = None) -> int:
-    '''Open the configured frontend tool at the checkout root.'''
-    root = root if root is not None else ROOT_DIR
-    name = get_config_value(root, 'frontend', default='vscode')
-    cwd = str(root)
-
-    if name.lower() == 'vscode':
-        _ensure_vscode_config(root)
-
-    command = FRONTENDS.get(name.lower(), name)
-    if not command:
-        return 0
-
-    try:
-        if name.lower() == 'obsidian':
-            import urllib.parse
-            uri = f"obsidian://open?path={urllib.parse.quote(cwd)}"
-            subprocess.Popen([command, uri], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            subprocess.Popen([command, cwd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        console.print(f'[bold green]✓ Opened {name} at {cwd}[/bold green]')
-    except FileNotFoundError:
-        console.print(f'[bold red]Error:[/bold red] "{command}" not found on PATH.')
-        return 1
-    return 0
-
-
 def cmd_ingest(args: argparse.Namespace) -> int:
     '''Run the Google Drive delta ingestion job.'''
     from podarcis.jobs import run_job
 
     res = run_job(ROOT_DIR, 'gdrive_sync', dry_run=args.dry_run)
     return 0 if res.get('status') != 'error' else 1
+
+
+def _unsupported(_args: argparse.Namespace) -> int:
+    '''Core subcommands are Rust now; this Python parser no longer knows them.'''
+    console.print('[bold yellow]This command lives in the Rust `podarcis` CLI.[/bold yellow]')
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -764,19 +255,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument('-i', '--interactive', action='store_true', help='Launch interactive TUI menu')
     parser.add_argument('--root', help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml)')
-    parser.set_defaults(func=cmd_frontend)
 
     sub = parser.add_subparsers(dest='subcommand', title='Subcommands', help='Action to perform')
+    parser.set_defaults(func=_unsupported)
 
     def add(name, help_text, handler, *, parent=sub, **kwargs):
         '''Register a subparser bound to its handler.'''
         p = parent.add_parser(name, help=help_text, **kwargs)
         p.set_defaults(func=handler)
         return p
-
-    # ── status ────────────────────────────────────────────────────────────
-    add('status', 'Display status of MCP tool modules, skills, agents, jobs, and repos',
-        cmd_status).add_argument('--json', action='store_true', help='Output status in JSON format')
 
     # ── job ───────────────────────────────────────────────────────────────
     job_p = add('job', 'Manage and execute scheduled jobs (.agents/jobs/*.yaml)', cmd_job_list)
@@ -795,24 +282,10 @@ def main(argv: list[str] | None = None) -> int:
     jlog.add_argument('-n', '--lines', type=int, default=50, help='Lines to show')
 
     # ── repo ──────────────────────────────────────────────────────────────
-    def add_repo_config(parent):
-        '''The repo-configuration flags, shared by `repo config` and `config repo`.'''
-        rc = add('repo' if parent is config_sub else 'config',
-                 'Configure repository Git remotes or local paths',
-                 cmd_config_repo, parent=parent)
-        rc.add_argument('repo_name', nargs='?', help='Repository name (wiki, workspace, sources, …)')
-        rc.add_argument('--url', help='Remote Git URL or repository path')
-        rc.add_argument('--path', help='Local directory path or target path')
-        rc.add_argument('--local', action='store_true', help='Set repository to local-only (no remote)')
-
-    repo_p = add('repo', 'Manage and synchronize workspace repositories', cmd_repo_status,
+    # Only `push` remains on the Python engine; the rest is the Rust CLI.
+    repo_p = add('repo', 'Manage and synchronize workspace repositories', _unsupported,
                  aliases=['repos'])
     repo_sub = repo_p.add_subparsers(dest='repo_action', help='Repository action')
-    add('status', 'Display Git and sync status across all workspace repositories',
-        cmd_repo_status, parent=repo_sub) \
-        .add_argument('--json', action='store_true', help='Output repository status in JSON format')
-    add('sync', 'Synchronize workspace repositories (pull git remotes & ingest gdrive deltas)',
-        cmd_repo_sync, parent=repo_sub, aliases=['pull'])
     rp = add('push', 'Push local commits to remotes for workspace repositories',
              cmd_repo_push, parent=repo_sub)
     rp.add_argument('--commit', '-c', action='store_true', help='Commit uncommitted local changes before pushing')
@@ -821,64 +294,11 @@ def main(argv: list[str] | None = None) -> int:
         help='Lint-gate: with --commit, lint then commit; without, lint and refuse a dirty/failing tree, then push existing commits',
     )
     rp.add_argument('--message', '-m', default='chore: sync workspace changes', help='Commit message')
-    rc = add('commit', 'Lint-gated per-repo commit of dirty workspace repositories',
-             cmd_repo_commit, parent=repo_sub)
-    rc.add_argument('-m', '--message', default='chore: wiki commit', help='Commit message')
 
-    # ── config ────────────────────────────────────────────────────────────
+    # ── config (interactive only) ─────────────────────────────────────────
     config_p = add('config', 'Configure components and repositories', cmd_interactive)
     config_sub = config_p.add_subparsers(dest='config_action', help='Config action')
-    add('list', 'List status of components and repositories', cmd_status, parent=config_sub) \
-        .add_argument('--json', action='store_true', help='Output status in JSON format')
-    for verb, handler in (('enable', cmd_config_enable), ('disable', cmd_config_disable)):
-        add(verb, f'{verb.capitalize()} an MCP tool module', handler, parent=config_sub) \
-            .add_argument('name', help='Tool module name (skills and personas are not toggleable)')
-    add_repo_config(config_sub)
-    add_repo_config(repo_sub)
-    add('frontend', 'Set the frontend tool (tui, vscode, obsidian, none)',
-        cmd_config_frontend, parent=config_sub) \
-        .add_argument('frontend_name', choices=FRONTEND_NAMES,
-                      metavar='{tui,vscode,obsidian,none}', help='Frontend name')
     add('interactive', 'Launch interactive TUI menu', cmd_interactive, parent=config_sub)
-
-    # ── wiki ──────────────────────────────────────────────────────────────
-    wiki_p = add(
-        'wiki',
-        'Browse, search and edit the wiki (Ratatui frontend)',
-        cmd_wiki,
-    )
-    wiki_p.add_argument(
-        '--root', default=argparse.SUPPRESS,
-        help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml)',
-    )
-    from podarcis.wiki import add_arguments as _wiki_arguments
-    _wiki_arguments(wiki_p, add=add)
-
-    # ── lifecycle ─────────────────────────────────────────────────────────
-    add('frontend', 'Open the configured frontend tool', cmd_frontend)
-    add('install', 'Run bootstrap installer', cmd_install) \
-        .add_argument('remaining_args', nargs=argparse.REMAINDER)
-    add('clean', 'Clean Python build artifacts and cache files', cmd_clean)
-    un = add('uninstall', 'Remove global symlink, virtualenv, and build artefacts', cmd_uninstall)
-    un.add_argument('-y', '--yes', action='store_true', help='Skip all confirmations')
-    un.add_argument('--dry-run', action='store_true', dest='dry_run', help='Preview without removing anything')
-    un.add_argument('--purge', action='store_true', help='Also remove .podarcis/config.yaml')
-    test_p = add('test', 'Run the pytest suite and the frontend crate tests', cmd_test)
-    test_p.add_argument('--python-only', action='store_true', dest='python_only',
-                        help='Skip the frontend crate tests')
-    test_p.add_argument('remaining_args', nargs=argparse.REMAINDER)
-    lint_p = add('lint', 'Run link integrity check', cmd_lint)
-    lint_p.add_argument('--json', action='store_true', help='Output findings as JSON')
-    lint_p.add_argument('--fix', action='store_true', help='Apply safe auto-fixes')
-    lint_p.add_argument('remaining_args', nargs=argparse.REMAINDER)
-
-    # ── diagnose ──────────────────────────────────────────────────────────
-    diag = add('diagnose', 'Display current platform pain points and logged issues', cmd_diagnose)
-    diag.add_argument('--json', action='store_true', help='Output issues in JSON format')
-    diag.add_argument('--clear', action='store_true', help='Resolve every unresolved pain point')
-    diag.add_argument('--resolve', type=str, metavar='ID', help='Mark a specific pain point ID as resolved')
-    diag.add_argument('--resolve-category', type=str, metavar='CAT', help='Resolve every unresolved pain point in a category')
-    diag.add_argument('--log-session', type=str, metavar='PATH', help='Parse and log pain points for a transcript file')
 
     # ── research ──────────────────────────────────────────────────────────
     research_p = add('research', 'Search peer-reviewed literature and ingest papers into sources/',
@@ -903,12 +323,18 @@ def main(argv: list[str] | None = None) -> int:
     ing = add('ingest', 'Run automated source ingestion (GDrive API delta check)', cmd_ingest)
     ing.add_argument('--dry-run', action='store_true', help='Scan deltas without modifying files')
 
-    from podarcis.wiki import normalize_argv
-    argv = normalize_argv(sys.argv[1:] if argv is None else list(argv))
+    # ── lifecycle ─────────────────────────────────────────────────────────
+    add('install', 'Run bootstrap installer', cmd_install) \
+        .add_argument('remaining_args', nargs=argparse.REMAINDER)
+    un = add('uninstall', 'Remove global symlink, virtualenv, and build artefacts', cmd_uninstall)
+    un.add_argument('-y', '--yes', action='store_true', help='Skip all confirmations')
+    un.add_argument('--dry-run', action='store_true', dest='dry_run', help='Preview without removing anything')
+    un.add_argument('--purge', action='store_true', help='Also remove .podarcis/config.yaml')
+
+    argv = list(sys.argv[1:] if argv is None else argv)
 
     # `argparse.REMAINDER` only starts collecting after a non-flag token, so
-    # `podarcis test -q` would otherwise fail at the top-level parser. Any
-    # subcommand that declares a pass-through gets the leftovers instead.
+    # `podarcis install --xyz` would otherwise fail at the top-level parser.
     args, unknown = parser.parse_known_args(argv)
     if unknown:
         if not hasattr(args, 'remaining_args'):

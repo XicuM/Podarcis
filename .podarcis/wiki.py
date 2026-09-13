@@ -32,6 +32,36 @@ def crate_dir(root: Path) -> Path:
     return Path(root) / CRATE_DIR
 
 
+def _source_mtime(root: Path) -> float:
+    '''Newest mtime among files that change the compiled frontend.'''
+    newest = 0.0
+    crate = crate_dir(root)
+    watched = [crate / 'Cargo.toml', crate / 'Cargo.lock', crate / 'src', crate / 'assets']
+    for path in watched:
+        if path.is_file():
+            newest = max(newest, path.stat().st_mtime)
+        elif path.is_dir():
+            for child in path.rglob('*'):
+                if child.is_file():
+                    newest = max(newest, child.stat().st_mtime)
+    return newest
+
+
+def crate_binary_is_stale(root: Path, binary: Path) -> bool:
+    '''True when ``binary`` is this crate's build and sources are newer.
+
+    Env overrides and ``$PATH`` copies are left alone — those are not ours to rebuild.
+    '''
+    try:
+        binary.resolve().relative_to((crate_dir(root) / 'target').resolve())
+    except (ValueError, OSError):
+        return False
+    try:
+        return _source_mtime(root) > binary.stat().st_mtime
+    except OSError:
+        return True
+
+
 def find_binary(root: Path | None = None) -> Path | None:
     '''Resolve the front-end: release build, then debug, then ``$PATH``.
 
@@ -98,10 +128,16 @@ def cmd_wiki(args: argparse.Namespace) -> int:
         return 1
 
     binary = find_binary(wiki_root)
-    if binary is None and shutil.which('cargo') is not None:
-        console.print('[dim]Building the wiki frontend (first run)…[/dim]')
-        build(wiki_root)
-        binary = find_binary(wiki_root)
+    stale = binary is not None and crate_binary_is_stale(wiki_root, binary)
+    if (binary is None or stale) and shutil.which('cargo') is not None:
+        reason = 'sources changed' if stale else 'first run'
+        console.print(f'[dim]Building the wiki frontend ({reason})…[/dim]')
+        if not build(wiki_root):
+            if binary is None:
+                console.print(f'[bold red]Error:[/bold red] {BINARY} not found. {INSTALL_HINT}')
+                return 1
+        else:
+            binary = find_binary(wiki_root)
     if binary is None:
         console.print(f'[bold red]Error:[/bold red] {BINARY} not found. {INSTALL_HINT}')
         return 1

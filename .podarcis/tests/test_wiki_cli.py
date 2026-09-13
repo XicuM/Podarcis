@@ -95,6 +95,28 @@ def test_env_override_beats_everything(checkout, monkeypatch, tmp_path):
     assert wiki.find_binary(checkout) == override
 
 
+def test_crate_binary_is_stale_when_sources_are_newer(checkout, tmp_path):
+    target = checkout / 'tui' / 'target' / 'release'
+    target.mkdir(parents=True)
+    binary = target / wiki.BINARY
+    binary.write_text('', encoding='utf-8')
+    src = checkout / 'tui' / 'src'
+    src.mkdir(parents=True)
+    (src / 'main.rs').write_text('fn main() {}\n', encoding='utf-8')
+    older = (src / 'main.rs').stat().st_mtime - 60
+    os.utime(binary, (older, older))
+    assert wiki.crate_binary_is_stale(checkout, binary)
+    newer = (src / 'main.rs').stat().st_mtime + 60
+    os.utime(binary, (newer, newer))
+    assert not wiki.crate_binary_is_stale(checkout, binary)
+
+
+def test_path_binary_is_never_treated_as_stale(checkout, tmp_path):
+    foreign = tmp_path / 'podarcis-tui'
+    foreign.write_text('', encoding='utf-8')
+    assert not wiki.crate_binary_is_stale(checkout, foreign)
+
+
 def test_a_missing_override_resolves_to_nothing(checkout, monkeypatch):
     monkeypatch.setenv('PODARCIS_TUI_BIN', '/nonexistent/podarcis-tui')
     assert wiki.find_binary(checkout) is None
@@ -229,28 +251,6 @@ def test_no_source_file_still_references_the_compositor():
         if 'podarcis.tui' in text or 'podarcis.herdr' in text:
             offenders.append(str(path.relative_to(root)))
     assert not offenders
-
-
-def test_frontend_names_offer_the_tui_and_not_herdr():
-    from podarcis import cli
-
-    assert 'tui' in cli.FRONTEND_NAMES
-    assert 'herdr' not in cli.FRONTEND_NAMES
-
-
-def test_pass_through_flags_reach_the_subcommand(monkeypatch, capsys):
-    '''`podarcis test -q` must not die at the top-level parser.'''
-    from podarcis import cli
-
-    seen = {}
-
-    def fake_test(args):
-        seen['args'] = list(args.remaining_args)
-        return 0
-
-    monkeypatch.setattr(cli, 'cmd_test', fake_test)
-    assert cli.main(['test', '-q', '-x']) == 0
-    assert seen['args'] == ['-q', '-x']
 
 
 def test_an_unknown_flag_on_a_plain_subcommand_still_errors():
