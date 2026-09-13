@@ -106,6 +106,7 @@ First `podarcis` run after install downloads the GGUF models (EmbeddingGemma-300
 | `podarcis config interactive` | Launch interactive TUI configuration menu |
 | `podarcis test` | Run test suite across all MCP servers and skills |
 | `podarcis lint` | Run link integrity check across wiki markdown files |
+| `podarcis wiki` | Attach a herdr wiki layout (files \| edit \| agent) at the checkout root |
 
 ### 5. Subagent Quick Reference
 

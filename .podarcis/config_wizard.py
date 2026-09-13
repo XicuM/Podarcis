@@ -14,7 +14,7 @@ from podarcis.components import (
 from podarcis.console import console, QSTYLE
 from podarcis.repos import get_repo_names, get_repo_url, prompt_configure_repo
 
-_FRONTEND_CHOICES = ['vscode', 'obsidian', 'none']
+_FRONTEND_CHOICES = ['vscode', 'obsidian', 'herdr', 'none']
 
 
 def _style(style):

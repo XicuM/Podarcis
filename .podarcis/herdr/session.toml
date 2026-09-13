@@ -1,0 +1,14 @@
+# Template copied to ~/.config/herdr/sessions/podarcis/config.toml
+# on first `podarcis wiki` (or `--reset-config`). herdr writes into the live
+# path; this file is never pointed at with HERDR_CONFIG_PATH.
+
+onboarding = false
+
+[keys]
+prefix = "ctrl+space"
+
+[ui]
+sidebar_start_collapsed = false
+
+[experimental]
+allow_nested = false
