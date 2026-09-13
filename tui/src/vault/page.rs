@@ -39,9 +39,7 @@ pub struct Okf {
     pub title: Option<String>,
     /// The `type:` key. `type` is a keyword in Rust.
     pub kind: Option<String>,
-    pub description: Option<String>,
     pub category: Option<String>,
-    pub rationale: Option<String>,
     pub status: Option<String>,
     pub generated: Generated,
     pub sources: Vec<SourceRef>,
@@ -59,10 +57,6 @@ pub struct Page {
     /// before it, so `body_line(n) == file_line(n + body_start)`.
     pub body_start: usize,
     pub body: String,
-    /// Words in the body, for the reader's header.
-    pub words: usize,
-    /// Words as the engine counts them: the whole file, split on whitespace.
-    pub raw_words: usize,
     pub is_index: bool,
 }
 
@@ -86,8 +80,6 @@ impl Page {
         let mut okf = okf;
         okf.title = Some(title);
         Self {
-            words: count_words(&body),
-            raw_words: raw.split_whitespace().count(),
             path: path.to_path_buf(),
             rel,
             okf,
@@ -99,23 +91,6 @@ impl Page {
 
     pub fn title(&self) -> &str {
         self.okf.title.as_deref().unwrap_or("untitled")
-    }
-
-    /// Frontmatter is required for non-index pages under `wiki/`, `workspace/`
-    /// or `user/` — the same scope the linter enforces.
-    pub fn needs_frontmatter(&self) -> bool {
-        !self.is_index
-            && self
-                .rel
-                .split('/')
-                .next()
-                .is_some_and(|first| ["wiki", "workspace", "user"].contains(&first))
-    }
-
-    /// Over the linter's 1500-word cap. Mirrors the engine: the count is a
-    /// whitespace split of the whole file, frontmatter included.
-    pub fn over_word_limit(&self) -> bool {
-        self.needs_frontmatter() && self.raw_words > MAX_WORDS
     }
 
     /// `[^id]: text` definitions, as `(id, a short description)`.
@@ -145,6 +120,37 @@ impl Page {
             .collect()
     }
 
+    /// Full `[^id]: …` definitions, untruncated: `(label, link text, link
+    /// target)`. Unlike `footnote_definitions`, the text keeps its whole
+    /// citation and the `(…)` of a definition written as a markdown link is
+    /// captured too, so a reader's source row can open the page it points at.
+    /// Prose definitions carry no target.
+    pub fn footnote_defs(&self) -> Vec<(String, String, Option<String>)> {
+        self.body
+            .lines()
+            .filter_map(|line| {
+                let rest = line.trim_start().strip_prefix("[^")?;
+                let end = rest.find("]:")?;
+                let label = rest[..end].to_string();
+                if label.is_empty() {
+                    return None;
+                }
+                let text = rest[end + 2..].trim();
+                let (text, target) = match text.strip_prefix('[').and_then(|t| t.split_once(']')) {
+                    Some((name, tail)) => {
+                        let target = tail
+                            .trim()
+                            .strip_prefix('(')
+                            .and_then(|t| t.split_once(')').map(|(url, _)| url.trim().to_string()));
+                        (name.to_string(), target)
+                    }
+                    None => (text.to_string(), None),
+                };
+                Some((label, text, target))
+            })
+            .collect()
+    }
+
     /// Footnote references in the body, in order of first appearance.
     pub fn footnote_refs(&self) -> Vec<String> {
         let mut seen: Vec<String> = Vec::new();
@@ -158,27 +164,71 @@ impl Page {
 
 }
 
-/// Split a leading `---` YAML block. Returns the parsed frontmatter and the
-/// 0-based line the body starts on.
-fn split_frontmatter(raw: &str) -> (Okf, usize) {
+/// Raw text of a leading `---` YAML block, plus the 0-based line the body
+/// starts on. `None` for an absent or unterminated block.
+fn frontmatter_block(raw: &str) -> Option<(String, usize)> {
     let mut lines = raw.lines();
     if lines.next().map(str::trim_end) != Some("---") {
-        return (Okf::default(), 0);
+        return None;
     }
     let mut block = String::new();
     let mut consumed = 1usize;
     for line in lines {
         consumed += 1;
         if line.trim_end() == "---" {
-            let mut okf = parse_okf(&block);
-            okf.present = true;
-            return (okf, consumed);
+            return Some((block, consumed));
         }
         block.push_str(line);
         block.push('\n');
     }
     // Unterminated block: treat the whole file as body rather than swallowing it.
-    (Okf::default(), 0)
+    None
+}
+
+/// Split a leading `---` YAML block. Returns the parsed frontmatter and the
+/// 0-based line the body starts on.
+fn split_frontmatter(raw: &str) -> (Okf, usize) {
+    match frontmatter_block(raw) {
+        Some((block, consumed)) => {
+            let mut okf = parse_okf(&block);
+            okf.present = true;
+            (okf, consumed)
+        }
+        None => (Okf::default(), 0),
+    }
+}
+
+/// A source's own bibliographic facts, read straight from its `metadata.md`
+/// frontmatter — a real author list and year, rather than the abbreviated
+/// `Author et al.` copy a wiki page's own `sources:` entry keeps.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceMeta {
+    pub title: Option<String>,
+    pub authors: Vec<String>,
+    pub year: Option<String>,
+}
+
+impl SourceMeta {
+    pub fn load(path: &Path) -> Option<Self> {
+        let raw = std::fs::read_to_string(path).ok()?;
+        let (block, _) = frontmatter_block(&raw)?;
+        let doc: Value = serde_yaml_ng::from_str(&block).ok()?;
+        let authors: Vec<String> = doc
+            .get("authors")
+            .and_then(Value::as_sequence)
+            .map(|seq| seq.iter().filter_map(as_text).collect())
+            .unwrap_or_default();
+        let authors = if authors.is_empty() {
+            doc.get("author").and_then(as_text).into_iter().collect()
+        } else {
+            authors
+        };
+        Some(Self { title: doc.get("title").and_then(as_text), authors, year: doc.get("year").and_then(as_text) })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none() && self.authors.is_empty() && self.year.is_none()
+    }
 }
 
 fn parse_okf(block: &str) -> Okf {
@@ -192,9 +242,7 @@ fn parse_okf(block: &str) -> Okf {
     Okf {
         title: get("title"),
         kind: get("type"),
-        description: get("description"),
         category: get("category"),
-        rationale: get("rationale"),
         status: get("status"),
         generated: doc.get("generated").map(parse_generated).unwrap_or_default(),
         sources: doc.get("sources").map(parse_sources).unwrap_or_default(),
@@ -257,21 +305,6 @@ fn first_heading(body: &str) -> Option<String> {
     body.lines()
         .find_map(|line| line.strip_prefix("# ").map(|t| t.trim().to_string()))
         .filter(|t| !t.is_empty())
-}
-
-/// Word count over the body only, matching the linter: fenced code is skipped.
-fn count_words(body: &str) -> usize {
-    let mut in_fence = false;
-    body.lines()
-        .filter(|line| {
-            if line.trim_start().starts_with("```") {
-                in_fence = !in_fence;
-                return false;
-            }
-            !in_fence
-        })
-        .map(|line| line.split_whitespace().count())
-        .sum()
 }
 
 /// `[^label]` occurrences outside fenced code, excluding definitions
@@ -376,18 +409,24 @@ mod tests {
     }
 
     #[test]
-    fn word_count_skips_fenced_code_and_frontmatter() {
-        let p = page("---\ntitle: t\n---\none two three\n\n```\nfour five six seven\n```\n");
-        assert_eq!(p.words, 3);
+    fn footnote_defs_keep_the_full_citation_and_its_target() {
+        let p = page(
+            "---\ntitle: T\n---\nBody[^a]\n\n[^a]: [Omer, K. T. G. (2023). Testing the Weak Form of Efficient Market Hypothesis in Developing Countries (LDCs) Stock Markets: Limits and Suggestions. *Journal of Development Economics and Finance*, 4(1), 57-78.](../../../sources/literature/fama_1970/metadata.md)\n",
+        );
+        assert_eq!(
+            p.footnote_defs(),
+            vec![(
+                "a".to_string(),
+                "Omer, K. T. G. (2023). Testing the Weak Form of Efficient Market Hypothesis in Developing Countries (LDCs) Stock Markets: Limits and Suggestions. *Journal of Development Economics and Finance*, 4(1), 57-78.".to_string(),
+                Some("../../../sources/literature/fama_1970/metadata.md".to_string()),
+            )]
+        );
     }
 
     #[test]
-    fn index_pages_are_exempt_from_frontmatter() {
-        let idx = Page::parse("# Index\n", Path::new("/r/wiki/_index.md"), Path::new("/r"));
-        assert!(idx.is_index);
-        assert!(!idx.needs_frontmatter());
-        let src = Page::parse("x\n", Path::new("/r/sources/lit/a/raw.md"), Path::new("/r"));
-        assert!(!src.needs_frontmatter(), "sources/ is raw evidence, not an OKF page");
+    fn footnote_defs_capture_the_target_of_a_link_definition_only() {
+        let p = page("---\ntitle: T\n---\nBody[^a]\n\n[^a]: Plain prose, no link\n");
+        assert_eq!(p.footnote_defs(), vec![("a".to_string(), "Plain prose, no link".to_string(), None)]);
     }
 
     #[test]

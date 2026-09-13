@@ -457,6 +457,36 @@ pub fn bloat(entries: usize) -> Option<Finding> {
     })
 }
 
+/// The `podarcis lint --json` object (`audit.py::to_json_payload`), built from
+/// an already-built `Index` instead of a fresh `wiki_check_links.py` run —
+/// every page's findings are already sitting there, kept fresh by the file
+/// watcher.
+pub fn to_json_payload(index: &super::index::Index) -> serde_json::Value {
+    let mut files = serde_json::Map::new();
+    for entry in &index.entries {
+        if entry.findings.is_empty() {
+            continue;
+        }
+        let issues: Vec<serde_json::Value> = entry
+            .findings
+            .iter()
+            .map(|f| serde_json::json!({"code": f.code, "detail": f.detail}))
+            .collect();
+        files.insert(entry.rel.clone(), serde_json::Value::Array(issues));
+    }
+    for (rel, finding) in &index.dir_findings {
+        let entry = files.entry(rel.clone()).or_insert_with(|| serde_json::Value::Array(vec![]));
+        if let serde_json::Value::Array(arr) = entry {
+            arr.push(serde_json::json!({"code": finding.code, "detail": finding.detail}));
+        }
+    }
+    serde_json::json!({
+        "ok": files.is_empty(),
+        "root": index.root.display().to_string(),
+        "files": files,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

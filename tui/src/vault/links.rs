@@ -16,6 +16,10 @@ pub enum LinkKind {
     Anchor,
     /// `[[wikilink]]` — forbidden by the conventions, reported as a finding.
     Wiki,
+    /// A `[^id]` citation, rendered as `[n]` — not a real link, but reusing
+    /// `DocLink` gets it keyboard navigation, click handling and highlight for
+    /// free. Never produced by `scan_links`, only by the reader.
+    Footnote,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

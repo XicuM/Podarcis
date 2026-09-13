@@ -34,7 +34,7 @@ impl Tree {
     pub fn new(root: &Path, collections: Vec<PathBuf>) -> Self {
         let mut tree = Self {
             root: root.to_path_buf(),
-            expanded: collections.first().cloned().into_iter().collect(),
+            expanded: collections.iter().cloned().collect(),
             collections,
             ..Default::default()
         };
@@ -83,6 +83,25 @@ impl Tree {
         }
     }
 
+    pub fn collection_paths(&self) -> &[PathBuf] {
+        &self.collections
+    }
+
+    /// Inclusive start and exclusive end of the rows that belong to collection `i`.
+    pub fn section_span(&self, i: usize) -> Option<(usize, usize)> {
+        let path = self.collections.get(i)?;
+        let start = self.rows.iter().position(|r| r.path == *path)?;
+        let end = self
+            .rows
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find(|(_, r)| r.is_collection)
+            .map(|(j, _)| j)
+            .unwrap_or(self.rows.len());
+        Some((start, end))
+    }
+
     pub fn selected_row(&self) -> Option<&Row> {
         self.rows.get(self.selected)
     }
@@ -103,25 +122,27 @@ impl Tree {
         self.selected = index.min(self.rows.len().saturating_sub(1));
     }
 
-    /// `l` / `→`: open a directory, or signal that a file should be opened.
+    /// `l` / `→`: expand a directory (and open its index page), or signal
+    /// that a file should be opened.
     pub fn expand(&mut self) -> Option<PathBuf> {
         let row = self.selected_row()?.clone();
         if !row.is_dir {
             return Some(row.path);
         }
         if !row.expanded {
-            self.expanded.insert(row.path);
+            self.expanded.insert(row.path.clone());
             self.rebuild();
         } else {
             self.move_by(1);
         }
-        None
+        Some(row.path)
     }
 
-    /// `h` / `←`: collapse a directory, or jump to the parent.
+    /// `h` / `←`: collapse a directory, or jump to the parent. A collection
+    /// root never collapses — the top level is permanently open.
     pub fn collapse(&mut self) {
         let Some(row) = self.selected_row().cloned() else { return };
-        if row.is_dir && row.expanded {
+        if row.is_dir && row.expanded && !row.is_collection {
             self.expanded.remove(&row.path);
             self.rebuild();
             return;
@@ -133,25 +154,40 @@ impl Tree {
         }
     }
 
+    /// Also returns a directory's path (so it opens its index page) rather
+    /// than only ever signalling files. A collection root never collapses.
     pub fn toggle(&mut self) -> Option<PathBuf> {
         let row = self.selected_row()?.clone();
         if !row.is_dir {
             return Some(row.path);
         }
-        if row.expanded {
+        if row.expanded && !row.is_collection {
             self.expanded.remove(&row.path);
-        } else {
-            self.expanded.insert(row.path);
+        } else if !row.expanded {
+            self.expanded.insert(row.path.clone());
         }
         self.rebuild();
-        None
+        Some(row.path)
     }
 
-    pub fn collapse_all(&mut self) {
-        self.expanded.clear();
-        if let Some(first) = self.collections.first().cloned() {
-            self.expanded.insert(first);
+    /// A double-click's second press: what a single click already toggled, a
+    /// folder is made sure to stay expanded (a page's single click only
+    /// selected it), and the row's path is handed back to be opened — a file
+    /// in the reader, a folder's `_index.md` through `App::open_path`.
+    pub fn open_double(&mut self, i: usize) -> Option<PathBuf> {
+        let row = self.rows.get(i)?.clone();
+        if row.is_dir && !row.expanded {
+            self.expanded.insert(row.path.clone());
+            self.rebuild();
         }
+        Some(row.path)
+    }
+
+    /// Collapses every subdirectory, but the collection roots themselves
+    /// (`wiki`, `workspace`, `sources`) always stay open — they are the
+    /// permanent top level of the tree, not a folder a user closes.
+    pub fn collapse_all(&mut self) {
+        self.expanded = self.collections.iter().cloned().collect();
         self.rebuild();
     }
 
@@ -199,13 +235,13 @@ impl Tree {
     }
 }
 
-/// `_index.md` first, then directories, then files — each alphabetically.
-/// An index page is the entry point to its folder, so it belongs at the top.
+/// Directories first, then files — each alphabetically. `_index.md` /
+/// `index.md` are never listed: selecting the folder itself opens its index
+/// (see `App::open_path`), so the index page has no row of its own.
 fn list_dir(dir: &Path) -> Vec<(PathBuf, bool)> {
     let Ok(read) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut dirs = Vec::new();
     let mut files = Vec::new();
-    let mut index = Vec::new();
     for entry in read.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy().to_string();
@@ -216,34 +252,31 @@ fn list_dir(dir: &Path) -> Vec<(PathBuf, bool)> {
         match entry.file_type() {
             Ok(ft) if ft.is_dir() => dirs.push((name, path)),
             Ok(ft) if ft.is_file() => {
-                if !name.ends_with(".md") {
+                if !name.ends_with(".md") && !name.ends_with(".pdf") && !name.ends_with(".csv") {
                     continue;
                 }
                 if name == "_index.md" || name == "index.md" {
-                    index.push((name, path));
-                } else {
-                    files.push((name, path));
+                    continue;
                 }
+                files.push((name, path));
             }
             _ => {}
         }
     }
     dirs.sort();
     files.sort();
-    index.sort();
-    index
-        .into_iter()
-        .map(|(_, p)| (p, false))
-        .chain(dirs.into_iter().map(|(_, p)| (p, true)))
-        .chain(files.into_iter().map(|(_, p)| (p, false)))
-        .collect()
+    dirs.into_iter().map(|(_, p)| (p, true)).chain(files.into_iter().map(|(_, p)| (p, false))).collect()
 }
 
 /// Underscores read as spaces, and the leading underscore of `_index.md` is
 /// dropped rather than becoming a stray gap before the word.
 fn label_for(path: &Path, is_dir: bool) -> String {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let stem = if is_dir { name.as_ref() } else { name.trim_end_matches(".md") };
+    let stem = if is_dir {
+        name.as_ref()
+    } else {
+        name.trim_end_matches(".md").trim_end_matches(".pdf").trim_end_matches(".csv")
+    };
     stem.trim_start_matches('_').replace('_', " ")
 }
 
@@ -289,34 +322,55 @@ mod tests {
     }
 
     #[test]
-    fn first_collection_starts_open_and_the_rest_closed() {
+    fn section_span_covers_each_collection() {
+        let f = Fixture::new("spans");
+        let tree = f.tree();
+        let (a, b) = tree.section_span(0).unwrap();
+        let (c, d) = tree.section_span(1).unwrap();
+        assert_eq!(tree.rows[a].label, "wiki");
+        assert_eq!(tree.rows[c].label, "workspace");
+        assert_eq!(b, c);
+        assert_eq!(d, tree.rows.len());
+    }
+
+    #[test]
+    fn every_collection_starts_open() {
         let f = Fixture::new("initial");
         let tree = f.tree();
         assert_eq!(
             labels(&tree),
-            vec!["wiki", "  index", "  health", "  alpha", "  zebra", "workspace"]
+            vec!["wiki", "  health", "  alpha", "  zebra", "workspace", "  profile"]
         );
     }
 
     #[test]
-    fn ordering_is_index_then_directories_then_files() {
+    fn index_files_are_never_listed_as_rows() {
         let f = Fixture::new("order");
         let mut tree = f.tree();
-        tree.move_to(2); // health
+        tree.move_to(1); // health
         tree.expand();
         assert_eq!(
             labels(&tree),
             vec![
                 "wiki",
-                "  index",
                 "  health",
-                "    index",
                 "    nutrition",
                 "    caffeine",
                 "  alpha",
                 "  zebra",
                 "workspace",
+                "  profile",
             ]
+        );
+    }
+
+    #[test]
+    fn ordering_is_directories_then_files() {
+        let f = Fixture::new("order-df");
+        let tree = f.tree();
+        assert_eq!(
+            labels(&tree),
+            vec!["wiki", "  health", "  alpha", "  zebra", "workspace", "  profile"]
         );
     }
 
@@ -327,10 +381,39 @@ mod tests {
     }
 
     #[test]
+    fn pdf_sources_are_shown_with_extension_stripped_label() {
+        let dir = std::env::temp_dir().join(format!("podarcis-tree-pdf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sources/literature/smith2024")).unwrap();
+        std::fs::write(dir.join("sources/literature/smith2024/original.pdf"), b"%PDF-1.4").unwrap();
+        let mut tree = Tree::new(&dir, vec![dir.join("sources")]);
+        tree.move_to(1); // literature
+        tree.expand();
+        tree.move_to(2); // smith2024
+        tree.expand();
+        assert!(labels(&tree).iter().any(|l| l.contains("original")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn csv_files_are_shown_with_extension_stripped_label() {
+        let dir = std::env::temp_dir().join(format!("podarcis-tree-csv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("workspace/finance")).unwrap();
+        std::fs::write(dir.join("workspace/finance/quotes.csv"), "symbol,price\nAAPL,232.1\n").unwrap();
+        let mut tree = Tree::new(&dir, vec![dir.join("workspace")]);
+        tree.expand(); // workspace
+        tree.expand(); // finance
+        assert!(tree.rows.iter().any(|r| r.label == "finance"));
+        assert!(tree.rows.iter().any(|r| r.label == "quotes" && r.path.extension().unwrap() == "csv"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn expanding_a_file_returns_it_to_be_opened() {
         let f = Fixture::new("open");
         let mut tree = f.tree();
-        tree.move_to(3); // alpha.md
+        tree.move_to(2); // alpha.md
         assert_eq!(tree.expand(), Some(f.0.join("wiki").join("alpha.md")));
     }
 
@@ -384,21 +467,59 @@ mod tests {
     fn sibling_jumps_stay_at_one_depth() {
         let f = Fixture::new("siblings");
         let mut tree = f.tree();
-        tree.move_to(1); // wiki/_index at depth 1
-        tree.move_sibling(true);
-        assert_eq!(tree.selected_row().unwrap().label, "health");
+        tree.move_to(1); // wiki/health at depth 1
         tree.move_sibling(true);
         assert_eq!(tree.selected_row().unwrap().label, "alpha");
+        tree.move_sibling(true);
+        assert_eq!(tree.selected_row().unwrap().label, "zebra");
         tree.move_sibling(false);
-        assert_eq!(tree.selected_row().unwrap().label, "health");
+        assert_eq!(tree.selected_row().unwrap().label, "alpha");
     }
 
     #[test]
-    fn collapse_all_leaves_only_the_first_collection_open() {
+    fn collapse_all_leaves_every_collection_root_open() {
         let f = Fixture::new("collapse-all");
         let mut tree = f.tree();
         tree.reveal(&f.0.join("wiki/health/nutrition/creatine.md"));
         tree.collapse_all();
-        assert_eq!(labels(&tree), vec!["wiki", "  index", "  health", "  alpha", "  zebra", "workspace"]);
+        assert_eq!(
+            labels(&tree),
+            vec!["wiki", "  health", "  alpha", "  zebra", "workspace", "  profile"]
+        );
+    }
+
+    #[test]
+    fn a_collection_root_never_collapses() {
+        let f = Fixture::new("root-stays-open");
+        let mut tree = f.tree();
+        tree.move_to(0); // wiki
+        tree.collapse();
+        assert!(tree.selected_row().unwrap().expanded);
+        tree.toggle();
+        assert!(tree.selected_row().unwrap().expanded);
+    }
+
+    #[test]
+    fn open_double_keeps_a_folder_expanded_and_handles_back_its_path() {
+        let f = Fixture::new("open-double");
+        let mut tree = f.tree();
+        tree.move_to(1); // health, still collapsed
+        tree.toggle(); // the first press of the double click expands it
+        tree.move_to(1);
+        let path = tree.open_double(1).unwrap();
+        assert!(tree.rows[1].expanded, "the second press must not re-collapse");
+        assert_eq!(path, f.0.join("wiki").join("health"));
+    }
+
+    #[test]
+    fn open_double_reexpands_after_a_single_click_collapsed_it() {
+        let f = Fixture::new("open-double-expand");
+        let mut tree = f.tree();
+        tree.reveal(&f.0.join("wiki/health/caffeine.md")); // health expanded
+        tree.move_to(1);
+        tree.toggle(); // single click collapses it
+        let path = tree.open_double(1).unwrap();
+        assert!(tree.rows[1].expanded);
+        assert_eq!(path, f.0.join("wiki").join("health"));
     }
 }

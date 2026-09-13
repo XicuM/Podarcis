@@ -1,3 +1,4 @@
+pub mod git;
 pub mod index;
 pub mod links;
 pub mod lint;

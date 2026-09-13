@@ -118,8 +118,12 @@ impl Index {
     }
 
     /// Re-read one file in place. Returns true if the index changed shape and
-    /// backlinks had to be rebuilt.
+    /// backlinks had to be rebuilt. Non-markdown files (PDFs, CSVs) are not
+    /// indexed and are ignored.
     pub fn refresh(&mut self, path: &Path) -> bool {
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            return false;
+        }
         let rel = rel_path(path, &self.root);
         let fresh = entry_for(path, &self.root);
         match (self.by_rel.get(&rel).copied(), fresh) {
