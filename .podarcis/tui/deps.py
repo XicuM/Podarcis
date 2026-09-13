@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from podarcis.common import get_config_value
+from podarcis.herdr.layout import pane_env, yazi_flavor_dir
+from podarcis.tui.server import resolved_herdr_dir
 
 
 HERDR_INSTALL = 'https://herdr.dev/install.sh'
@@ -26,6 +28,7 @@ class ResolvedDeps:
     harness: str | None
     pane_env: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    flavor_dir: Path | None = None
 
     @property
     def herdr_missing_message(self) -> str:
@@ -94,7 +97,7 @@ def resolve_file_manager(
     *,
     environ: dict[str, str] | None = None,
 ) -> tuple[str, list[str]] | None:
-    '''yazi preferred, lf fallback. Unflavored.'''
+    '''yazi preferred, lf fallback. Flavor env is applied at pane-run, not here.'''
     env = os.environ if environ is None else environ
     names: list[str] = []
     env_fm = (env.get('PODARCIS_FILE_MANAGER') or '').strip()
@@ -149,12 +152,19 @@ def resolve_deps(wiki_root: Path, *, environ: dict[str, str] | None = None) -> R
         warnings.append(
             'yazi/lf not found; files pane is a shell at the wiki root.'
         )
+    flavor_dir = resolved_herdr_dir(wiki_root)
+    yazi_home = None
+    if fm is not None and fm[0] == 'yazi':
+        cfg = yazi_flavor_dir(flavor_dir)
+        if cfg is not None:
+            yazi_home = str(cfg)
     return ResolvedDeps(
         herdr=resolve_herdr(environ=env),
         editor=resolve_editor(wiki_root, environ=env),
         file_manager=None if fm is None else fm[1],
         file_manager_name=None if fm is None else fm[0],
         harness=resolve_harness(wiki_root, environ=env),
-        pane_env={'PROJECT_ROOT': str(wiki_root)},
+        pane_env=pane_env(wiki_root, yazi_config_home=yazi_home),
         warnings=warnings,
+        flavor_dir=flavor_dir,
     )

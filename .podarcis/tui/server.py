@@ -8,6 +8,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -60,6 +61,45 @@ def ensure_checkout_herdr(wiki_root: Path) -> Path:
     if src.resolve() == dest.resolve():
         return dest
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    return dest
+
+
+def resolved_herdr_dir(wiki_root: Path | None = None) -> Path:
+    '''Checkout ``.podarcis/herdr`` if present, else package data.'''
+    if wiki_root is not None:
+        checkout = Path(wiki_root) / '.podarcis' / 'herdr'
+        if checkout.is_dir() and (
+            (checkout / 'herdr-plugin.toml').is_file()
+            or (checkout / 'session.toml').is_file()
+            or (checkout / 'flavors').is_dir()
+            or (checkout / 'layout.py').is_file()
+        ):
+            return checkout
+    return package_herdr_dir()
+
+
+def plugin_link_dir(root: Path | None = None) -> Path:
+    return (root or session_dir()) / 'plugin'
+
+
+def _toml_basic_string(value: str) -> str:
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def write_linked_plugin(
+    herdr_dir: Path,
+    *,
+    python: str | None = None,
+    dest: Path | None = None,
+) -> Path:
+    '''Copy the manifest into the user session dir, rewriting ``python3`` to ``sys.executable``.'''
+    python = python or sys.executable
+    dest = dest if dest is not None else plugin_link_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+    src = Path(herdr_dir) / 'herdr-plugin.toml'
+    text = src.read_text(encoding='utf-8')
+    text = text.replace('"python3"', _toml_basic_string(python))
+    (dest / 'herdr-plugin.toml').write_text(text, encoding='utf-8')
     return dest
 
 

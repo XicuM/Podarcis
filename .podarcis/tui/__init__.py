@@ -6,3 +6,4 @@ PANE_FILES = 'files'
 PANE_EDIT = 'edit'
 PANE_AGENT = 'agent'
 AGENT_NAME = 'primary'
+PERSONAS = ('researcher', 'synthesizer', 'protocol-architect', 'auditor')

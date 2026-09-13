@@ -30,7 +30,7 @@ from podarcis.repos import (
     sync_repos_full,
     push_repos,
 )
-from podarcis.tui.launch import cmd_wiki
+from podarcis.tui.launch import cmd_wiki, dispatch_wiki
 from podarcis.tui.root import WikiRootError, find_wiki_root_or_none
 
 
@@ -767,7 +767,11 @@ def main() -> None:
     add('interactive', 'Launch interactive TUI menu', cmd_interactive, parent=config_sub)
 
     # ── wiki ──────────────────────────────────────────────────────────────
-    wiki_p = add('wiki', 'Attach a herdr wiki layout (files | edit | agent)', cmd_wiki)
+    wiki_p = add(
+        'wiki',
+        'Attach a herdr wiki layout (files | edit | agent). Subcommands: edit, persona, context',
+        dispatch_wiki,
+    )
     wiki_p.add_argument(
         '--root', default=argparse.SUPPRESS,
         help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml)',
@@ -779,7 +783,10 @@ def main() -> None:
                         help='Recreate the files|edit|agent layout (kills live PTYs)')
     wiki_p.add_argument('--reset-config', action='store_true', dest='reset_config',
                         help='Re-copy the herdr session.toml template')
-    wiki_p.add_argument('path', nargs='?', help='Optional file to open in the edit pane')
+    wiki_p.add_argument(
+        'wiki_rest', nargs=argparse.REMAINDER, help=argparse.SUPPRESS,
+    )
+    wiki_p.set_defaults(path=None, name=None, wiki_rest=[])
 
     # ── lifecycle ─────────────────────────────────────────────────────────
     add('frontend', 'Open the configured frontend tool', cmd_frontend)

@@ -13,8 +13,9 @@ from podarcis.console import console
 from podarcis.herdr.layout import (
     apply_socket_layout,
     create_split_layout,
+    editor_run_argv,
+    files_run_argv,
     find_workspace,
-    is_shell_foreground,
     layout_tree,
     panes_by_label,
     wait_for_shell,
@@ -28,8 +29,11 @@ from podarcis.tui.server import (
     ensure_checkout_herdr,
     ensure_herdr_server,
     ensure_session_config,
+    package_herdr_dir,
+    resolved_herdr_dir,
     session_config,
     session_sock,
+    write_linked_plugin,
 )
 
 
@@ -58,17 +62,32 @@ def _resolve_open_path(path: str, wiki_root: Path) -> Path:
     return (wiki_root / candidate)
 
 
+def _flavor_dir(deps: ResolvedDeps, wiki_root: Path) -> Path:
+    return deps.flavor_dir or resolved_herdr_dir(wiki_root) or package_herdr_dir()
+
+
 def _files_argv(deps: ResolvedDeps, wiki_root: Path) -> list[str] | None:
-    if not deps.file_manager:
-        return None
-    return [*deps.file_manager, str(wiki_root)]
+    return files_run_argv(
+        deps.file_manager, deps.file_manager_name, wiki_root, _flavor_dir(deps, wiki_root),
+    )
 
 
-def _edit_argv(deps: ResolvedDeps, open_path: Path | None) -> list[str]:
-    argv = list(deps.editor or [])
-    if open_path is not None:
-        argv.append(str(open_path))
-    return argv
+def _edit_argv(deps: ResolvedDeps, wiki_root: Path, open_path: Path | None) -> list[str]:
+    return editor_run_argv(
+        list(deps.editor or []), _flavor_dir(deps, wiki_root), open_path=open_path,
+    )
+
+
+def _link_plugin(session: HerdrSession, wiki_root: Path) -> None:
+    herdr_dir = ensure_checkout_herdr(wiki_root)
+    dest = write_linked_plugin(herdr_dir)
+    try:
+        session.cli('plugin', 'link', str(dest))
+    except RuntimeError as exc:
+        msg = str(exc).lower()
+        if 'already' in msg or 'exists' in msg or 'linked' in msg:
+            return
+        console.print(f'[yellow]plugin.link failed: {exc}[/yellow]')
 
 
 def _print_plan(
@@ -96,7 +115,7 @@ def _print_plan(
 
     tree = layout_tree(wiki_root)
     files_argv = _files_argv(deps, wiki_root)
-    edit_argv = _edit_argv(deps, open_path)
+    edit_argv = _edit_argv(deps, wiki_root, open_path)
     agent_argv = [
         deps.herdr or 'herdr', '--session', SESSION_NAME,
         'agent', 'start', AGENT_NAME, '--kind', deps.harness or '?',
@@ -178,18 +197,17 @@ def _start_agent(session: HerdrSession, panes: dict[str, str], harness: str) -> 
     )
 
 
-def _open_path_in_edit(session: HerdrSession, panes: dict[str, str], editor: list[str], path: Path) -> None:
-    edit_id = panes.get(PANE_EDIT)
-    if not edit_id:
-        console.print('[yellow]edit pane not found; open the file from the editor.[/yellow]')
-        return
-    info = session.cli('pane', 'process-info', '--pane', edit_id)
-    if is_shell_foreground(info):
-        session.cli('pane', 'run', edit_id, shlex.join([*editor, str(path)]))
-        return
-    console.print(
-        f'[yellow]edit pane is busy; focus it and open {path} yourself.[/yellow]'
-    )
+def _open_path_in_edit(
+    session: HerdrSession,
+    path: Path,
+    *,
+    editor: list[str],
+    flavor_dir: Path,
+) -> None:
+    from podarcis.tui.actions.edit import open_in_edit_pane
+    err = open_in_edit_pane(session, path, editor=editor, flavor_dir=flavor_dir)
+    if err:
+        console.print(f'[yellow]{err}[/yellow]')
 
 
 def _complete_labels(session: HerdrSession, panes: dict[str, str]) -> dict[str, str]:
@@ -201,6 +219,42 @@ def _complete_labels(session: HerdrSession, panes: dict[str, str]) -> dict[str, 
         elif label in panes and label not in listed:
             session.cli('pane', 'rename', panes[label], label)
     return panes
+
+
+def _rest_after(rest: list[str]) -> list[str]:
+    if rest and rest[0] == '--':
+        return rest[1:]
+    return rest
+
+
+def dispatch_wiki(args: argparse.Namespace) -> int:
+    '''Route ``podarcis wiki {edit,persona,context}`` without a subparser (avoids flag clobber).'''
+    rest = list(getattr(args, 'wiki_rest', None) or [])
+    if rest:
+        head, *tail = rest
+        if head == 'edit':
+            from podarcis.tui.actions.edit import cmd_wiki_edit
+            path_parts = _rest_after(tail)
+            if not path_parts:
+                return _die('wiki edit requires a PATH (podarcis wiki edit -- PATH)')
+            args.path = path_parts[0]
+            return cmd_wiki_edit(args)
+        if head == 'persona':
+            from podarcis.tui.actions.spawn_persona import cmd_wiki_persona
+            name_parts = _rest_after(tail)
+            if not name_parts:
+                return _die('wiki persona requires a NAME (podarcis wiki persona researcher)')
+            args.name = name_parts[0]
+            return cmd_wiki_persona(args)
+        if head == 'context':
+            from podarcis.tui.actions.edit import cmd_wiki_context
+            path_parts = _rest_after(tail)
+            if not path_parts:
+                return _die('wiki context requires a PATH')
+            args.path = path_parts[0]
+            return cmd_wiki_context(args)
+        args.path = head
+    return cmd_wiki(args)
 
 
 def cmd_wiki(args: argparse.Namespace) -> int:
@@ -218,6 +272,9 @@ def cmd_wiki(args: argparse.Namespace) -> int:
 
     deps = resolve_deps(wiki_root)
     open_path = _resolve_open_path(raw_path, wiki_root) if raw_path else None
+    if open_path is not None and not dry_run:
+        from podarcis.tui.context import write_current
+        write_current(wiki_root, open_path)
 
     if do_sync and not dry_run:
         console.print('[bold #29b8db]Synchronizing workspace repositories...[/bold #29b8db]')
@@ -253,15 +310,18 @@ def cmd_wiki(args: argparse.Namespace) -> int:
     env = _herdr_env(wiki_root, cfg)
     session = HerdrSession(deps.herdr, env=env, sock=session_sock())
     files_argv = _files_argv(deps, wiki_root)
-    edit_argv = _edit_argv(deps, open_path)
+    edit_argv = _edit_argv(deps, wiki_root, open_path)
+    _link_plugin(session, wiki_root)
 
     try:
         existing = find_workspace(session.cli)
         if existing and not reset_layout:
             session.cli('workspace', 'focus', existing['workspace_id'])
-            panes = panes_by_label(session.cli)
             if open_path is not None:
-                _open_path_in_edit(session, panes, deps.editor, open_path)
+                _open_path_in_edit(
+                    session, open_path,
+                    editor=deps.editor, flavor_dir=_flavor_dir(deps, wiki_root),
+                )
         else:
             if existing and reset_layout:
                 panes = apply_socket_layout(

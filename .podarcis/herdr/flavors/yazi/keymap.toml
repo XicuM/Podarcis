@@ -1,0 +1,27 @@
+# Bookmarks: w→wiki/, s→sources/, p→workspace/, t→tmp/ (hidden from default listing).
+# g-prefix so we do not clobber yazi search (s) or paste (p).
+
+[[mgr.prepend_keymap]]
+on = [ "g", "w" ]
+run = "cd wiki"
+desc = "Bookmark w → wiki/"
+
+[[mgr.prepend_keymap]]
+on = [ "g", "s" ]
+run = "cd sources"
+desc = "Bookmark s → sources/"
+
+[[mgr.prepend_keymap]]
+on = [ "g", "p" ]
+run = "cd workspace"
+desc = "Bookmark p → workspace/"
+
+[[mgr.prepend_keymap]]
+on = [ "g", "t" ]
+run = "cd tmp"
+desc = "Bookmark t → tmp/"
+
+[[mgr.prepend_keymap]]
+on = [ "<Enter>" ]
+run = "plugin smart-index"
+desc = "Open file in edit pane; directories prefer _index.md"

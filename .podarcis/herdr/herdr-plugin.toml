@@ -1,0 +1,12 @@
+id = "podarcis.wiki"
+name = "Podarcis Wiki"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Wiki layout, search, lint, sync, and persona spawn"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "spawn_persona"
+title = "Spawn persona pane"
+contexts = ["workspace"]
+command = ["python3", "-m", "podarcis.tui.actions.spawn_persona"]
