@@ -79,7 +79,8 @@ def _flavor_dir(deps: ResolvedDeps, wiki_root: Path) -> Path:
 
 def _agents_panel_argv() -> list[str]:
     '''Right pane is the companion list, not the herdr TUI.'''
-    return [sys.executable, '-m', 'podarcis.tui.agents_panel']
+    prog = sys.argv[0] if sys.argv else 'podarcis'
+    return [prog, 'wiki', 'agents']
 
 
 def _files_argv(deps: ResolvedDeps, wiki_root: Path) -> list[str] | None:
@@ -275,6 +276,9 @@ def dispatch_wiki(args: argparse.Namespace) -> int:
                 return _die('wiki context requires a PATH')
             args.path = path_parts[0]
             return cmd_wiki_context(args)
+        if head == 'agents':
+            from podarcis.tui.agents_panel import main as agents_main
+            return agents_main()
         if head == 'search':
             from podarcis.cli import cmd_wiki_search
             search_args = argparse.Namespace()

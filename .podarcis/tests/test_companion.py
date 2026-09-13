@@ -10,8 +10,7 @@ from podarcis.tui.launch import _agents_panel_argv
 
 def test_agents_panel_is_the_right_column():
     argv = _agents_panel_argv()
-    assert argv[-1].endswith('podarcis.tui.agents_panel')
-    assert 'herdr' not in Path(argv[0]).name
+    assert argv[-2:] == ['wiki', 'agents']
 
 
 def test_conversations_from_snapshot(tmp_path):
