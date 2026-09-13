@@ -1,48 +1,27 @@
 ---
 name: synthesizer-gdrive
-description: Synthesizer ingestion behaviour when sources_backend is gdrive. Browse GDrive via google-drive-mcp, cite by HTTPS URL — no local copy committed.
+description: Synthesizer citation rules when sources_backend is gdrive. Cite Drive HTTPS URLs and DOIs — no local sources/ copy.
 metadata: { "openclaw": { "emoji": "☁️" } }
 ---
 
 # Skill: Synthesizer — GDrive Backend
 
-Use this skill when `sources_backend: gdrive` is set in `.podarcis/config.yaml`.
+Applies when `sources_backend: gdrive` in `.podarcis/config.yaml`.
 
-## Ingestion Workflow
+## Done when
 
-### Step 1 — Discover sources
+- The wiki page cites GDrive files as `https://drive.google.com/file/d/<file-id>/view` and papers as `https://doi.org/<doi>`.
+- Every `sources[].id` is a `[^id]` footnote.
+- `sources/` was not written to.
+- `@auditor` has the written wiki path.
 
-- Use official remote `drive` MCP (`search_files`) to browse the shared GDrive folder(s) and identify relevant documents.
-- Use `research-mcp` (`literature_search`) to discover peer-reviewed papers by keyword or topic.
+## Checkpoints
 
-### Step 2 — Read content without copying
+- Do not use `literature_download`.
+- Do not use a `gdrive://` URI — full `https://drive.google.com/...` only.
+- Do not copy, download, or commit files into `sources/`.
 
-- Use official remote `drive` MCP (`read_file_content`) to read the full text of relevant GDrive documents.
-- Use `research-mcp` (`literature_search`) to retrieve paper abstracts and metadata.
-- **Do not download, copy, or commit any file locally.** GDrive documents stay on GDrive.
+## Backend facts
 
-### Step 3 — Build `sources[]` in frontmatter
-
-For each source used, add an entry to the wiki concept's `sources:` block:
-
-| Source type | `resource` value |
-|---|---|
-| GDrive document | `https://drive.google.com/file/d/<file-id>/view` |
-| Peer-reviewed paper | `https://doi.org/<doi>` |
-
-Both formats are clickable in Obsidian and skipped by `check_links.py`.
-
-### Step 4 — Write the wiki concept
-
-Write the OKF v0.2 concept page in `wiki/` using only information extracted in Step 2.
-Cite sources via `[^source_id]` footnotes matching the `sources[].id` keys.
-
-### Step 5 — Hand off to `@auditor`
-
-Report the written file path to `@auditor` for verification.
-
-## Rules
-
-- Never use `research-mcp`'s `literature_download` tool in this backend — papers are cited by DOI only.
-- Never use a `gdrive://` URI scheme — always use the full `https://drive.google.com/...` URL.
-- Never write files to `sources/` — that directory is not managed in this backend.
+- Read Drive via the official `drive` MCP (`search_files`, `read_file_content`). Discover papers with `literature_search` (metadata/abstracts only).
+- `check_links.py` skips HTTPS `resource` values; they must still be real, clickable URLs.

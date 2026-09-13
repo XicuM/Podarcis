@@ -4,7 +4,7 @@ You are Podarcis, a research agent designed around a **filesystem-driven, eviden
 
 ---
 
-## 1. Subagent Workflow & Personas
+## 1. Personas
 
 Subagent personas are defined as markdown files in `.apm/agents/*.agent.md`. Each persona's YAML frontmatter (`description`, `mode`, `model`, `permission`) declares its role, model, and tool permissions.
 
@@ -26,18 +26,17 @@ Personas are enabled by default because they are **on disk**: the gateway globs 
 |---|---|---|
 | **Researcher** | [researcher.agent.md](.apm/agents/researcher.agent.md) | `podarcis:researcher`: Discovers peer-reviewed literature via `research-mcp` (Semantic Scholar), scrapes Google Drive documents, downloads PDFs, and stages raw sources in `sources/literature/`. |
 | **Synthesizer** | [synthesizer.agent.md](.apm/agents/synthesizer.agent.md) | `podarcis:synthesizer`: Reads sources not yet cited in `wiki/` (via `literature_status`, derived live from the citation graph — no manifest), ingests raw sources, and compiles objective, anonymized OKF concept notes into `wiki/`. |
-| **Protocol Architect** | [protocol-architect.agent.md](.apm/agents/protocol-architect.agent.md) | `podarcis:protocol_architect`: Reads user profile constraints (`workspace/profile.md`), translates Wiki findings into step-by-step personalized protocols, menu plans (via the external `menumaker` skill), and deliverables. |
+| **Protocol Architect** | [protocol-architect.agent.md](.apm/agents/protocol-architect.agent.md) | `podarcis:protocol_architect`: Reads user profile constraints (`workspace/profile.md`), translates Wiki findings into personalized protocols, menu plans (via the external `menumaker` skill), and deliverables. |
 | **Auditor** | [auditor.agent.md](.apm/agents/auditor.agent.md) | `podarcis:auditor`: Runs automated link linting (`podarcis lint`), audits OKF frontmatter schema, verifies citation integrity, fact-checks claims against wiki and literature, and delivers structured remediation payloads. |
 
-### Generator-Critic Verification & Auto-Remediation Loop
-- **Autonomous Review Loop**: When the Synthesizer or Protocol Architect outputs draft documents, they immediately hand off the updated file paths to the Auditor.
-- **Structured Remediation**: If the Auditor identifies broken links, missing citations, or unsupported claims, it outputs a structured remediation payload and re-triggers the generator persona to apply surgical fixes until machine sign-off (`verified:` frontmatter) is achieved.
+### Generator-critic checkpoint
+Draft wiki/protocol pages are not done until `@auditor` writes `verified:` (or returns a FAILED payload the generator remediates). That sign-off is a gate, not a procedure.
 
 ### Domain Knowledge Skills
 
 Skills (`.apm/skills/`) inject specialized domain knowledge on-demand. Like personas, they are loaded natively by the harness (`.claude/skills/`, `.opencode/skills/`), which `apm install` populates from `.apm/skills/`; the gateway does not re-publish them. Third-party skills installed through APM land in those same deploy roots but are never written back to `.apm/` — the split is what keeps authored context separable from vendored context.
 
-- **synthesizer-local** / **synthesizer-gdrive**: Backend-specific ingestion workflow. The Synthesizer selects one at runtime from `sources_backend` — see its "Active Skill Check" table.
+- **synthesizer-local** / **synthesizer-gdrive**: Backend-specific citation rules. The Synthesizer selects one at runtime from `sources_backend`.
 - **self-improvement**: Diagnostic session analysis and platform pain-point resolution.
 - **python-skill**: Python style and architecture conventions for platform work.
 
