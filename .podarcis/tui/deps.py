@@ -97,13 +97,13 @@ def resolve_file_manager(
     '''yazi preferred, lf fallback. Unflavored.'''
     env = os.environ if environ is None else environ
     names: list[str] = []
+    env_fm = (env.get('PODARCIS_FILE_MANAGER') or '').strip()
+    if env_fm:
+        names.append(env_fm)
     if wiki_root is not None:
         configured = (get_config_value(wiki_root, 'tui', 'file_manager') or '').strip()
         if configured:
             names.append(configured)
-    env_fm = (env.get('PODARCIS_FILE_MANAGER') or '').strip()
-    if env_fm:
-        names.append(env_fm)
     names.extend(FILE_MANAGERS)
     seen: set[str] = set()
     for name in names:
@@ -120,15 +120,15 @@ def resolve_harness(wiki_root: Path | None = None, *, environ: dict[str, str] | 
     '''Configured harness if on PATH, else first of opencode / claude.'''
     env = os.environ if environ is None else environ
     names: list[str] = []
+    env_h = (env.get('PODARCIS_HARNESS') or '').strip()
+    if env_h:
+        names.append(env_h)
     if wiki_root is not None:
         for keys in (('tui', 'harness'), ('harness',)):
             configured = (get_config_value(wiki_root, *keys) or '').strip()
             if configured:
                 names.append(configured)
                 break
-    env_h = (env.get('PODARCIS_HARNESS') or '').strip()
-    if env_h:
-        names.append(env_h)
     names.extend(HARNESS_FALLBACKS)
     seen: set[str] = set()
     for name in names:

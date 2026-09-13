@@ -768,7 +768,10 @@ def main() -> None:
 
     # ── wiki ──────────────────────────────────────────────────────────────
     wiki_p = add('wiki', 'Attach a herdr wiki layout (files | edit | agent)', cmd_wiki)
-    wiki_p.add_argument('--root', help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml)')
+    wiki_p.add_argument(
+        '--root', default=argparse.SUPPRESS,
+        help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml)',
+    )
     wiki_p.add_argument('--sync', action='store_true', help='Run `podarcis repo sync` before attach')
     wiki_p.add_argument('--dry-run', action='store_true', dest='dry_run',
                         help='Print the launch plan without starting a herdr server')

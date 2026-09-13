@@ -48,11 +48,12 @@ def _proc_name(proc: dict) -> str:
 
 
 def is_shell_foreground(result: dict) -> bool:
+    '''True only with a positive shell signal — empty process lists keep polling.'''
     info = result.get('process_info', result)
     procs = info.get('foreground_processes') or []
-    if not procs:
-        return True
-    return all(_proc_name(p) in SHELL_NAMES for p in procs)
+    if procs:
+        return all(_proc_name(p) in SHELL_NAMES for p in procs)
+    return info.get('shell_pid') is not None
 
 
 def wait_for_shell(cli: Cli, pane_id: str, *, timeout_s: float = 5.0, interval_s: float = 0.1) -> None:
@@ -141,11 +142,39 @@ def create_split_layout(cli: Cli, wiki_root: Path) -> dict[str, str]:
     }
 
 
-def apply_socket_layout(rpc: Callable[[str, dict], dict], workspace_id: str, wiki_root: Path) -> dict[str, str]:
-    '''``layout.apply`` with commands omitted, then read labelled pane ids.'''
+def _tab_id_for_workspace(cli: Cli, workspace_id: str) -> str | None:
+    data = cli('workspace', 'get', workspace_id)
+    ws = data.get('workspace') or data
+    if ws.get('active_tab_id'):
+        return str(ws['active_tab_id'])
+    listed = cli('tab', 'list', '--workspace', workspace_id)
+    for tab in listed.get('tabs') or []:
+        if tab.get('tab_id'):
+            return str(tab['tab_id'])
+    return None
+
+
+def apply_socket_layout(
+    rpc: Callable[[str, dict], dict],
+    workspace_id: str,
+    wiki_root: Path,
+    *,
+    tab_id: str | None = None,
+    cli: Cli | None = None,
+) -> dict[str, str]:
+    '''``layout.apply`` replacing ``tab_id`` (commands omitted), then labelled pane ids.
+
+    Omitting ``tab_id`` would create a new tab and leave the old PTYs alive.
+    '''
+    resolved = (tab_id or '').strip() or None
+    if resolved is None and cli is not None:
+        resolved = _tab_id_for_workspace(cli, workspace_id)
+    if not resolved:
+        raise RuntimeError(f'cannot reset layout: no tab_id for workspace {workspace_id}')
     tree = layout_tree(wiki_root)
     result = rpc('layout.apply', {
         'workspace_id': workspace_id,
+        'tab_id': resolved,
         'tab_label': tree['tab_label'],
         'focus': True,
         'root': tree['root'],

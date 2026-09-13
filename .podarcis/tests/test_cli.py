@@ -170,8 +170,10 @@ def test_config_frontend_obsidian(tmp_path, monkeypatch):
     '''Test configuring frontend to obsidian.'''
     from podarcis import cli
     monkeypatch.setattr(cli, 'ROOT_DIR', tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('PODARCIS_ROOT', raising=False)
 
-    args = Namespace(frontend_name='obsidian')
+    args = Namespace(frontend_name='obsidian', root=None)
     res = cli.cmd_config_frontend(args)
     assert res == 0
     from podarcis.common import get_config_value

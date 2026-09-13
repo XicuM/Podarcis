@@ -311,3 +311,114 @@ def test_ensure_herdr_server_skips_when_sock_exists(tmp_path, monkeypatch):
     proc = ensure_herdr_server('/nonexistent/herdr', sock=sock, config=cfg)
     assert proc is None
     assert called == []
+
+
+def test_parent_root_survives_wiki_subcommand(tmp_path, monkeypatch, capsys):
+    '''``podarcis --root PATH wiki`` must not drop PATH to the wiki subparser default.'''
+    checkout = _checkout(tmp_path / 'wiki')
+    outside = tmp_path / 'home'
+    outside.mkdir()
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    herdr = _exe(bindir / 'herdr')
+    _exe(bindir / 'nvim')
+    _exe(bindir / 'opencode')
+    monkeypatch.setenv('HERDR_BIN', str(herdr))
+    monkeypatch.setenv('PODARCIS_EDITOR', str(bindir / 'nvim'))
+    monkeypatch.setenv('PATH', f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}')
+    monkeypatch.delenv('PODARCIS_ROOT', raising=False)
+    monkeypatch.chdir(outside)
+
+    from podarcis.tui import launch as launch_mod
+    monkeypatch.setattr(launch_mod, 'get_repo_status', _synced)
+
+    from podarcis import cli
+    monkeypatch.setattr('sys.argv', ['podarcis', '--root', str(checkout), 'wiki', '--dry-run'])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert str(checkout) in out
+    assert 'session' in out.lower()
+
+
+def test_apply_socket_layout_passes_tab_id(tmp_path):
+    from podarcis.herdr.layout import apply_socket_layout, layout_tree
+
+    captured: list = []
+
+    def rpc(method, params):
+        captured.append((method, params))
+        return {'type': 'layout_apply', 'layout': {'root': layout_tree(tmp_path)['root']}}
+
+    apply_socket_layout(rpc, 'w1', tmp_path, tab_id='w1:t1')
+    assert captured[0][0] == 'layout.apply'
+    assert captured[0][1]['tab_id'] == 'w1:t1'
+    assert captured[0][1]['workspace_id'] == 'w1'
+
+
+def test_apply_socket_layout_falls_back_to_tab_list(tmp_path):
+    from podarcis.herdr.layout import apply_socket_layout, layout_tree
+
+    captured: list = []
+
+    def rpc(method, params):
+        captured.append((method, params))
+        return {'type': 'layout_apply', 'layout': {'root': layout_tree(tmp_path)['root']}}
+
+    def cli(*args):
+        if args[:2] == ('workspace', 'get'):
+            return {'workspace': {'workspace_id': 'w1'}}
+        if args[:2] == ('tab', 'list'):
+            return {'tabs': [{'tab_id': 'w1:t9'}]}
+        raise AssertionError(args)
+
+    apply_socket_layout(rpc, 'w1', tmp_path, cli=cli)
+    assert captured[0][1]['tab_id'] == 'w1:t9'
+
+
+def test_apply_socket_layout_requires_tab_id(tmp_path):
+    from podarcis.herdr.layout import apply_socket_layout
+
+    with pytest.raises(RuntimeError, match='no tab_id'):
+        apply_socket_layout(lambda m, p: {}, 'w1', tmp_path)
+
+
+def test_is_shell_foreground_requires_positive_signal():
+    from podarcis.herdr.layout import is_shell_foreground
+
+    assert is_shell_foreground({'process_info': {'foreground_processes': []}}) is False
+    assert is_shell_foreground({
+        'process_info': {'foreground_processes': [], 'shell_pid': 42},
+    }) is True
+    assert is_shell_foreground({
+        'foreground_processes': [{'name': 'bash', 'pid': 1}],
+    }) is True
+    assert is_shell_foreground({
+        'process_info': {
+            'shell_pid': 42,
+            'foreground_processes': [{'name': 'nvim', 'pid': 99}],
+        },
+    }) is False
+
+
+def test_env_overrides_config_file_manager_and_harness(tmp_path, monkeypatch):
+    checkout = _checkout(tmp_path / 'wiki')
+    (checkout / '.podarcis' / 'config.yaml').write_text(
+        'frontend: none\ntui:\n  file_manager: lf\n  harness: claude\n',
+        encoding='utf-8',
+    )
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    _exe(bindir / 'yazi')
+    _exe(bindir / 'lf')
+    _exe(bindir / 'opencode')
+    _exe(bindir / 'claude')
+    monkeypatch.setenv('PATH', f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}')
+    monkeypatch.setenv('PODARCIS_FILE_MANAGER', 'yazi')
+    monkeypatch.setenv('PODARCIS_HARNESS', 'opencode')
+
+    from podarcis.tui.deps import resolve_file_manager, resolve_harness
+    fm = resolve_file_manager(checkout)
+    assert fm is not None and fm[0] == 'yazi'
+    assert resolve_harness(checkout) == 'opencode'

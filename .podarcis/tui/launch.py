@@ -264,7 +264,11 @@ def cmd_wiki(args: argparse.Namespace) -> int:
                 _open_path_in_edit(session, panes, deps.editor, open_path)
         else:
             if existing and reset_layout:
-                panes = apply_socket_layout(session.rpc, existing['workspace_id'], wiki_root)
+                panes = apply_socket_layout(
+                    session.rpc, existing['workspace_id'], wiki_root,
+                    tab_id=existing.get('active_tab_id'),
+                    cli=session.cli,
+                )
                 panes = _complete_labels(session, panes)
                 workspace_id = existing['workspace_id']
             else:

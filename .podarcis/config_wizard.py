@@ -101,4 +101,8 @@ def configure_frontend(root: Path, style=None, title=None, description=None) -> 
     if not frontend:
         return
     from podarcis.cli import cmd_config_frontend
-    cmd_config_frontend(Namespace(frontend_name=frontend))
+    from podarcis.tui.root import is_wiki_root
+    cmd_config_frontend(Namespace(
+        frontend_name=frontend,
+        root=str(root) if is_wiki_root(root) else None,
+    ))
