@@ -25,10 +25,8 @@ pub enum AppEvent {
     FsChanged(Vec<PathBuf>),
     /// The background index finished its first full build.
     IndexReady(Box<Index>),
-    /// A background `podarcis …` run finished.
+    /// A background job finished.
     JobDone(crate::actions::JobResult),
-    /// A background job emitted a line of progress.
-    JobLine(u64, String),
     /// The herdr child produced output and the pane needs a repaint.
     PtyOutput,
     /// The herdr child exited.
@@ -63,7 +61,9 @@ impl Events {
             let paths: Vec<PathBuf> = event
                 .paths
                 .into_iter()
-                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
+                .filter(|p| {
+                    matches!(p.extension().and_then(|e| e.to_str()), Some("md") | Some("csv"))
+                })
                 .collect();
             if !paths.is_empty() {
                 let _ = tx.send(AppEvent::FsChanged(paths));

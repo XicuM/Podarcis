@@ -11,16 +11,18 @@ use crate::search::Hit;
 use crate::theme::Theme;
 
 fn popup(frame: &mut Frame, theme: &Theme, area: Rect, title: &str) -> Rect {
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.accent))
-        .title(Span::styled(
-            format!(" {title} "),
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
-        ))
         .style(Style::default().bg(theme.overlay).fg(theme.text))
         .padding(Padding::horizontal(1));
+    if !title.is_empty() {
+        block = block.title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ));
+    }
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
@@ -353,17 +355,15 @@ fn repo_config(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// A right-click context menu, drawn at the popup rectangle the app recorded
-/// when the menu was opened. The title is the row's path so the target is never
-/// ambiguous, and a trailing hint answers the only two questions a context menu
-/// invites: what keys, and how to leave.
+/// when the menu was opened. The items are actions on the row the menu was
+/// opened for; the border is plain so nothing on the screen leaks the path.
 fn menu(frame: &mut Frame, app: &App) {
     let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { return };
     let theme = &app.theme;
     if menu.area.is_empty() {
         return;
     }
-    let title = crate::vault::page::rel_path(&menu.path, &app.cfg.root);
-    let inner = popup(frame, theme, menu.area, &title);
+    let inner = popup(frame, theme, menu.area, "");
     if inner.is_empty() {
         return;
     }

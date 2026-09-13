@@ -4,7 +4,10 @@
 //! just measured — because the pty needs to be resized to the box it is drawn
 //! into and the mouse needs to know what it clicked.
 
+pub mod csv;
+pub mod highlight;
 pub mod markdown;
+pub mod mermaid;
 pub mod overlays;
 pub mod panes;
 
@@ -21,22 +24,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(ratatui::widgets::Block::default().style(app.theme.base()), area);
 
     let [body, status] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(area);
-    let areas = split_body(body, app);
-    app.areas = areas;
+    app.areas = split_body(body, app);
 
     // Sizing the child to the box it is about to be drawn into keeps the two in
     // step even while the terminal is being dragged.
     app.sync_sidebar();
 
-    if !areas.tree.is_empty() {
-        panes::tree(frame, app, areas.tree);
+    if !app.areas.tree.is_empty() {
+        let tree_area = app.areas.tree;
+        panes::tree(frame, app, tree_area);
     }
-    if !areas.doc.is_empty() {
-        panes::document(frame, app, areas.doc);
+    if !app.areas.doc.is_empty() {
+        panes::document(frame, app, app.areas.doc);
     }
-    if !areas.sidebar.is_empty() {
-        panes::sidebar(frame, app, areas.sidebar);
+    if !app.areas.sidebar.is_empty() {
+        panes::sidebar(frame, app, app.areas.sidebar);
     }
+    panes::toggles(frame, app);
     panes::status(frame, app, status);
     overlays::toasts(frame, app, body);
     overlays::draw(frame, app, area);
@@ -58,13 +62,54 @@ fn split_body(body: Rect, app: &App) -> Areas {
     let show_tree = app.show_tree && (!narrow || app.focus == Focus::Tree);
     let show_sidebar = app.show_sidebar && (!narrow || app.focus == Focus::Sidebar);
 
+    let min_doc = 30u16;
+    let min_pane = 12u16;
+    let available = body.width.saturating_sub(min_doc);
+
+    let (tree_w, sidebar_w) = match (show_tree, show_sidebar) {
+        (true, false) => (app.cfg.tree_width.clamp(min_pane, available.max(min_pane)), 0),
+        (false, true) => (0, app.cfg.sidebar_width.clamp(min_pane, available.max(min_pane))),
+        (true, true) => {
+            if available < min_pane * 2 {
+                (min_pane, min_pane)
+            } else if app.cfg.tree_width + app.cfg.sidebar_width <= available {
+                (app.cfg.tree_width.max(min_pane), app.cfg.sidebar_width.max(min_pane))
+            } else {
+                match app.focus {
+                    Focus::Tree => {
+                        let t = app.cfg.tree_width.clamp(min_pane, available.saturating_sub(min_pane));
+                        let s = available.saturating_sub(t).max(min_pane);
+                        (t, s)
+                    }
+                    Focus::Sidebar => {
+                        let s = app.cfg.sidebar_width.clamp(min_pane, available.saturating_sub(min_pane));
+                        let t = available.saturating_sub(s).max(min_pane);
+                        (t, s)
+                    }
+                    _ => {
+                        // Both side panes want more than there is, so split the
+                        // shortfall in proportion to what each asked for.
+                        let sum = app.cfg.tree_width as u32 + app.cfg.sidebar_width as u32;
+                        let t = (app.cfg.tree_width as u32 * available as u32)
+                            .checked_div(sum)
+                            .map_or(available / 2, |width| width as u16);
+                        let t = t.clamp(min_pane, available.saturating_sub(min_pane));
+                        let s = available.saturating_sub(t).max(min_pane);
+                        (t, s)
+                    }
+                }
+            }
+        }
+        (false, false) => (0, 0),
+    };
+
     let mut constraints = Vec::new();
     if show_tree {
-        constraints.push(Constraint::Length(app.cfg.tree_width.min(body.width / 3)));
+        constraints.push(Constraint::Length(tree_w));
     }
-    constraints.push(Constraint::Min(30));
+    constraints.push(Constraint::Min(min_doc));
     if show_sidebar {
-        constraints.push(Constraint::Length(app.cfg.sidebar_width.min(body.width / 2)));
+        constraints.push(Constraint::Length(sidebar_w));
     }
 
     let chunks = Layout::horizontal(constraints).split(body);
@@ -79,8 +124,35 @@ fn split_body(body: Rect, app: &App) -> Areas {
     if show_sidebar {
         areas.sidebar = chunks[next];
     }
+    // Panes share a border column, so the divider is the last column of the
+    // pane on its left. That is the column the pointer has to hit.
+    areas.tree_divider = show_tree.then(|| areas.tree.x + areas.tree.width - 1);
+    areas.sidebar_divider = show_sidebar.then_some(areas.sidebar.x);
+
+    // A collapse/expand handle always sits on whichever border the pointer
+    // would actually see — the pane's own divider when open, or the
+    // document's outer edge when there is no pane left to divide against.
+    let mid = |r: Rect| r.y + r.height / 2;
+    areas.tree_toggle = if show_tree {
+        areas.tree_divider.map(|x| Rect::new(x, mid(areas.tree), 1, 1))
+    } else if !areas.doc.is_empty() {
+        Some(Rect::new(areas.doc.x, mid(areas.doc), 1, 1))
+    } else {
+        None
+    };
+    areas.sidebar_toggle = if show_sidebar {
+        areas.sidebar_divider.map(|x| Rect::new(x, mid(areas.sidebar), 1, 1))
+    } else if !areas.doc.is_empty() {
+        Some(Rect::new(areas.doc.x + areas.doc.width - 1, mid(areas.doc), 1, 1))
+    } else {
+        None
+    };
     areas
 }
+
+/// How close to a divider a click counts as grabbing it. One column is a cruel
+/// target with a mouse; three is comfortable and still unambiguous.
+pub const GRAB: u16 = 1;
 
 /// Centre a box of the given size inside `area`, clamped to fit.
 pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -134,6 +206,32 @@ mod tests {
     }
 
     #[test]
+    fn the_tree_handle_sits_on_its_own_border_when_open_and_on_the_documents_edge_when_closed() {
+        let mut a = app_in("handle-tree");
+        let areas = split_body(Rect::new(0, 0, 160, 40), &a);
+        assert_eq!(areas.tree_toggle.unwrap().x, areas.tree_divider.unwrap());
+
+        a.show_tree = false;
+        let areas = split_body(Rect::new(0, 0, 160, 40), &a);
+        assert_eq!(areas.tree_toggle.unwrap().x, areas.doc.x, "reopens from the document's own left edge");
+    }
+
+    #[test]
+    fn the_sidebar_handle_sits_on_its_own_border_when_open_and_on_the_documents_edge_when_closed() {
+        let mut a = app_in("handle-sidebar");
+        let areas = split_body(Rect::new(0, 0, 160, 40), &a);
+        assert_eq!(areas.sidebar_toggle.unwrap().x, areas.sidebar_divider.unwrap());
+
+        a.show_sidebar = false;
+        let areas = split_body(Rect::new(0, 0, 160, 40), &a);
+        assert_eq!(
+            areas.sidebar_toggle.unwrap().x,
+            areas.doc.x + areas.doc.width - 1,
+            "reopens from the document's own right edge"
+        );
+    }
+
+    #[test]
     fn zoom_gives_the_focused_pane_everything() {
         let mut a = app_in("zoom");
         a.zoom = true;
@@ -149,8 +247,8 @@ mod tests {
         a.cfg.tree_width = 80;
         a.cfg.sidebar_width = 80;
         let areas = split_body(Rect::new(0, 0, 160, 40), &a);
-        assert!(areas.tree.width <= 160 / 3);
-        assert!(areas.doc.width >= 30);
+        assert!(areas.doc.width >= 30, "document keeps at least 30 columns");
+        assert!(areas.tree.width > 160 / 3, "relaxed layout caps allow wider sidebars");
     }
 
     #[test]

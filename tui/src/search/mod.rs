@@ -2,13 +2,14 @@
 //!
 //! * **Files** — fuzzy over titles and paths. Runs on every keystroke.
 //! * **Text** — literal or regex over file contents. Runs on every keystroke.
-//! * **Semantic** — `podarcis wiki search --json`, which is qmd. Explicit only.
+//! * **Semantic** — `qmd query`/`qmd vsearch`, called directly. Explicit only.
 //!
 //! The split exists because the third one is slow: `qmd query` measures around
 //! thirty seconds on a real checkout. Putting it on the typing path would make
 //! the whole app feel broken, so it is a deliberate action with a spinner.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::sinks::UTF8;
@@ -202,7 +203,185 @@ fn hit_for(entry: &Entry, matched: Vec<u32>, score: u32) -> Hit {
     }
 }
 
-/// Parse the JSON `podarcis wiki search --json` prints.
+/// Collections `qmd` is scoped to, and the directories each one covers.
+/// Mirrors `search.py::COLLECTION_DIRS`.
+const COLLECTIONS: [&str; 4] = ["wiki", "protocols", "sources", "all"];
+
+const DEFAULT_LIMIT: usize = 20;
+
+fn run_qmd(root: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("qmd")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .map_err(|err| format!("could not run qmd: {err}"))?;
+    if !out.status.success() {
+        let text = if !out.stderr.is_empty() { &out.stderr } else { &out.stdout };
+        return Err(format!("qmd {} failed: {}", args.join(" "), String::from_utf8_lossy(text).trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Strip a `qmd://` scheme or leading `./`, then make it root-relative.
+/// Mirrors `search.py::_normalize_qmd_path`.
+fn normalize_qmd_path(raw: &str, root: &Path) -> String {
+    let s = raw.trim();
+    let s = s.strip_prefix("qmd://").unwrap_or(s);
+    let s = s.strip_prefix("./").unwrap_or(s);
+    let p = Path::new(s);
+    if p.is_absolute() {
+        p.strip_prefix(root)
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| s.to_string())
+    } else {
+        s.trim_start_matches('/').to_string()
+    }
+}
+
+fn infer_collection(rel: &str) -> &'static str {
+    if rel.starts_with("workspace/protocols/") || rel == "workspace/protocols" {
+        "protocols"
+    } else if rel.starts_with("sources/") {
+        "sources"
+    } else {
+        "wiki"
+    }
+}
+
+/// The `title:` frontmatter field, or `None` if there is none. Mirrors
+/// `search.py::_title_of`, minus the OS-error handling Rust doesn't need.
+fn extract_title(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let head: String = text.chars().take(4000).collect();
+    let body = head.strip_prefix("---")?;
+    let body = body.strip_prefix('\n').unwrap_or(body);
+    let end = body.find("\n---")?;
+    for line in body[..end].lines() {
+        if let Some(rest) = line.strip_prefix("title:") {
+            let v = rest.trim().trim_matches(['\'', '"']);
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn number_after(text: &str, marker: &str) -> Option<u64> {
+    let idx = text.find(marker)?;
+    let digits: String =
+        text[idx + marker.len()..].trim_start().chars().take_while(|c| c.is_ascii_digit() || *c == ',').collect();
+    (!digits.is_empty()).then(|| digits.replace(',', "").parse().unwrap_or(0))
+}
+
+/// A warning for index conditions `qmd` does not report itself. Mirrors
+/// `search.py::parse_index_health`.
+fn parse_index_health(status_text: &str) -> Option<String> {
+    let lower = status_text.to_lowercase();
+    if number_after(&lower, "vectors:") == Some(0) {
+        let pending = number_after(&lower, "pending:").unwrap_or(0);
+        return Some(format!(
+            "QMD index has NO embeddings ({pending} documents pending). Semantic and hybrid \
+             search cannot work — results below are keyword-only. Run `qmd embed`."
+        ));
+    }
+    let idx = lower.find("updated:")?;
+    let rest = lower[idx + "updated:".len()..].trim_start();
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let amount: u64 = digits.parse().ok()?;
+    let unit = rest[digits.len()..].chars().next()?;
+    let days = match unit {
+        'h' => amount as f64 / 24.0,
+        'd' => amount as f64,
+        _ => 0.0,
+    };
+    (days >= 7.0)
+        .then(|| format!("QMD index was last updated {amount}{unit} ago and may not reflect recent edits — run `qmd update`."))
+}
+
+/// Reshape `qmd query`/`qmd vsearch --json` output into the `{path, title,
+/// score, collection, snippet}` shape `parse_semantic` expects. Mirrors
+/// `search.py::_hits_from_qmd_json`.
+fn hits_from_qmd_json(payload: &serde_json::Value, root: &Path, collection: &str, limit: usize) -> Vec<serde_json::Value> {
+    let items: Vec<&serde_json::Value> = match payload {
+        serde_json::Value::Array(a) => a.iter().collect(),
+        serde_json::Value::Object(_) => ["hits", "results", "items"]
+            .iter()
+            .find_map(|k| payload.get(k).and_then(|v| v.as_array()))
+            .map(|a| a.iter().collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+
+    let mut hits = Vec::new();
+    for item in items {
+        let Some(obj) = item.as_object() else { continue };
+        let raw = ["path", "file", "filepath"]
+            .iter()
+            .find_map(|k| obj.get(*k).and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let rel = normalize_qmd_path(raw, root);
+        if rel.is_empty() {
+            continue;
+        }
+        let abs = root.join(&rel);
+        let title = obj
+            .get("title")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| extract_title(&abs))
+            .unwrap_or_else(|| Path::new(&rel).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+        let score = obj.get("score").and_then(|v| v.as_f64());
+        let snippet = ["snippet", "body", "text"]
+            .iter()
+            .find_map(|k| obj.get(*k).and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let snippet = truncate(snippet.trim(), 240);
+        let coll = if collection == "all" { infer_collection(&rel) } else { collection };
+        hits.push(serde_json::json!({
+            "path": rel, "title": title, "score": score, "collection": coll, "snippet": snippet,
+        }));
+        if hits.len() >= limit {
+            break;
+        }
+    }
+    hits
+}
+
+/// Run a semantic search through `qmd` directly and return the same
+/// `{query, collection, method, warning, hits}` shape `parse_semantic` and
+/// `semantic_warning` already know how to read — previously produced by
+/// `podarcis wiki search --json` (`search.py::search`), now built here so the
+/// TUI no longer shells out to the Python engine for it. Runs two `qmd`
+/// invocations (the query, then a quick `status` for the index-health
+/// warning), so callers should run this off the UI thread.
+pub fn semantic_search(root: &Path, query: &str, collection: &str) -> Result<String, String> {
+    let coll = if COLLECTIONS.contains(&collection) { collection } else { "wiki" };
+    let limit = DEFAULT_LIMIT;
+    let limit_s = limit.to_string();
+
+    let mut args = vec!["query", query, "-n", &limit_s];
+    if coll != "all" {
+        args.push("-c");
+        args.push(coll);
+    }
+    args.push("--json");
+
+    let raw = run_qmd(root, &args)?;
+    let payload: serde_json::Value =
+        if raw.trim().is_empty() { serde_json::Value::Array(vec![]) } else { serde_json::from_str(&raw).unwrap_or(serde_json::Value::Array(vec![])) };
+    let hits = hits_from_qmd_json(&payload, root, coll, limit);
+
+    let warning = run_qmd(root, &["status"]).ok().and_then(|text| parse_index_health(&text));
+
+    Ok(serde_json::json!({
+        "query": query, "collection": coll, "method": "hybrid", "warning": warning, "hits": hits,
+    })
+    .to_string())
+}
+
+/// Parse the JSON `search::semantic_search` produces.
 pub fn parse_semantic(value: &serde_json::Value, root: &Path) -> Vec<Hit> {
     value
         .get("hits")
@@ -431,5 +610,50 @@ mod tests {
         assert_eq!(Mode::Semantic.next(), Mode::Files);
         assert!(Mode::Files.is_live());
         assert!(!Mode::Semantic.is_live());
+    }
+
+    #[test]
+    fn normalize_qmd_path_strips_scheme_and_makes_it_relative() {
+        let root = Path::new("/r");
+        assert_eq!(normalize_qmd_path("qmd://wiki/a.md", root), "wiki/a.md");
+        assert_eq!(normalize_qmd_path("./wiki/a.md", root), "wiki/a.md");
+        assert_eq!(normalize_qmd_path("/r/wiki/a.md", root), "wiki/a.md");
+        assert_eq!(normalize_qmd_path("wiki/a.md", root), "wiki/a.md");
+    }
+
+    #[test]
+    fn infer_collection_reads_the_top_level_directory() {
+        assert_eq!(infer_collection("wiki/health/a.md"), "wiki");
+        assert_eq!(infer_collection("workspace/protocols/p.md"), "protocols");
+        assert_eq!(infer_collection("sources/literature/x.md"), "sources");
+    }
+
+    #[test]
+    fn extract_title_reads_frontmatter_falls_back_to_none() {
+        let f = Fixture::new("extract-title");
+        assert_eq!(extract_title(&f.0.join("wiki/health/caffeine.md")), Some("Caffeine".to_string()));
+        assert_eq!(extract_title(&f.0.join("does/not/exist.md")), None);
+    }
+
+    #[test]
+    fn parse_index_health_flags_an_empty_index_and_a_stale_one() {
+        assert!(parse_index_health("Vectors: 0 embedded\nPending: 12 need embedding\n")
+            .unwrap()
+            .contains("NO embeddings"));
+        assert!(parse_index_health("Vectors: 40 embedded\nUpdated: 9d ago\n").unwrap().contains("last updated"));
+        assert!(parse_index_health("Vectors: 40 embedded\nUpdated: 2h ago\n").is_none());
+    }
+
+    #[test]
+    fn hits_from_qmd_json_reshapes_a_bare_array_and_a_wrapped_object() {
+        let root = Path::new("/r");
+        let array = serde_json::json!([{"path": "wiki/a.md", "title": "A", "score": 1.5, "snippet": "hi"}]);
+        let hits = hits_from_qmd_json(&array, root, "wiki", 20);
+        assert_eq!(hits[0]["path"], serde_json::json!("wiki/a.md"));
+        assert_eq!(hits[0]["collection"], serde_json::json!("wiki"));
+
+        let wrapped = serde_json::json!({"hits": [{"path": "./sources/x.md"}]});
+        let hits = hits_from_qmd_json(&wrapped, root, "all", 20);
+        assert_eq!(hits[0]["collection"], serde_json::json!("sources"), "inferred when collection is 'all'");
     }
 }

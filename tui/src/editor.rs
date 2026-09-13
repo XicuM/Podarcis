@@ -7,8 +7,10 @@
 
 use std::path::{Path, PathBuf};
 
-use edtui::{EditorEventHandler, EditorMode, EditorState, Index2, Lines, RowIndex};
+use edtui::{EditorEventHandler, EditorMode, EditorState, Highlight, Index2, Lines, RowIndex};
+use ratatui::style::Style;
 
+use crate::theme::Theme;
 use crate::vault::index::Index;
 use crate::vault::page::Page;
 
@@ -55,19 +57,41 @@ pub struct Editor {
     pub path: PathBuf,
     pub completion: Option<Completion>,
     saved: String,
+    /// The content width the pane last rendered at (pane width minus the
+    /// line-number gutter) — kept in sync by `panes::editor` so wrapped-line
+    /// cursor movement can mirror `EditorView`'s own `wrap(true)` splitting.
+    /// Zero until the first render, which `wrap_starts` treats as "no wrap".
+    pub render_width: usize,
+    /// `(theme signature, text)` the syntax marks in `state.highlights` were
+    /// tokenized from, so `refresh_syntax` can skip the work while neither
+    /// changed — the tokenizer runs only when the buffer actually moved.
+    syntax: Option<(Style, String)>,
 }
 
 impl Editor {
     pub fn open(page: &Page) -> Self {
         let text = std::fs::read_to_string(&page.path).unwrap_or_default();
         let mut state = EditorState::new(Lines::from(text.as_str()));
-        state.mode = EditorMode::Normal;
+        // Modeless. There is no normal mode to escape to and no `i` to
+        // remember: you open a page and type, with readline motions
+        // (ctrl+a/e/f/b, alt+f/b) that every shell already taught you.
+        state.mode = EditorMode::Insert;
         Self {
             state,
-            events: EditorEventHandler::default(),
+            events: EditorEventHandler::emacs_mode(),
             path: page.path.clone(),
             completion: None,
             saved: text,
+            render_width: 0,
+            syntax: None,
+        }
+    }
+
+    /// edtui can still switch itself out of insert mode (a search, say); the
+    /// editor is modeless, so put it back.
+    pub fn keep_modeless(&mut self) {
+        if self.state.mode == EditorMode::Normal {
+            self.state.mode = EditorMode::Insert;
         }
     }
 
@@ -79,8 +103,34 @@ impl Editor {
         self.text() != self.saved
     }
 
-    pub fn mode(&self) -> EditorMode {
-        self.state.mode
+    /// Re-tokenize the buffer into markdown syntax marks, layering each
+    /// styled run as an edtui `Highlight` over the base text. Cheap to call
+    /// every frame: it returns immediately while neither the text nor the
+    /// theme moved, and the marks are recomputed only when one of them did.
+    pub fn refresh_syntax(&mut self, theme: &Theme) {
+        let base = Style::default().fg(theme.text).bg(theme.bg);
+        let text = self.text();
+        if self.syntax.as_ref().is_some_and(|(b, t)| *b == base && t == &text) {
+            return;
+        }
+        let mut marks = Vec::new();
+        for (row, (_, runs)) in self
+            .state
+            .lines
+            .iter()
+            .zip(crate::ui::highlight::markdown_runs(&text, theme, &base))
+            .enumerate()
+        {
+            for r in runs {
+                marks.push(Highlight::new(Index2::new(row, r.start), Index2::new(row, r.end.saturating_sub(1)), r.style));
+            }
+        }
+        self.state.set_highlights(marks);
+        self.syntax = Some((base, text));
+    }
+
+    pub fn cursor_col(&self) -> usize {
+        self.state.cursor.col
     }
 
     /// Write to disk. Trailing whitespace is left alone — this is prose, and a
@@ -112,6 +162,149 @@ impl Editor {
             .get(RowIndex::new(row))
             .map(|chars| chars.iter().collect())
             .unwrap_or_default()
+    }
+
+    fn set_line(&mut self, row: usize, text: &str) {
+        if let Some(line) = self.state.lines.get_mut(RowIndex::new(row)) {
+            *line = text.chars().collect();
+        }
+    }
+
+    /// Insert text at the cursor, leaving the cursor after it.
+    fn insert_at_cursor(&mut self, text: &str) {
+        let (row, col) = (self.state.cursor.row, self.state.cursor.col);
+        let line = self.line_text(row);
+        let chars: Vec<char> = line.chars().collect();
+        let col = col.min(chars.len());
+        let mut next: String = chars[..col].iter().collect();
+        next.push_str(text);
+        next.extend(chars[col..].iter());
+        self.set_line(row, &next);
+        self.state.cursor = Index2::new(row, col + text.chars().count());
+    }
+
+    /// Wrap the word under the cursor in `marker`, or insert an empty pair and
+    /// place the cursor between the halves.
+    pub fn wrap_emphasis(&mut self, marker: &str) {
+        let (row, col) = (self.state.cursor.row, self.state.cursor.col);
+        let chars: Vec<char> = self.line_text(row).chars().collect();
+        let col = col.min(chars.len());
+
+        let is_word = |c: char| !c.is_whitespace();
+        let start = chars[..col].iter().rposition(|c| !is_word(*c)).map(|i| i + 1).unwrap_or(0);
+        let end = col + chars[col..].iter().position(|c| !is_word(*c)).unwrap_or(chars.len() - col);
+
+        if start == end {
+            self.insert_at_cursor(&format!("{marker}{marker}"));
+            self.state.cursor = Index2::new(row, col + marker.chars().count());
+            return;
+        }
+        let word: String = chars[start..end].iter().collect();
+        // Toggling off is what a second press should do.
+        let (replacement, shift) = match word.strip_prefix(marker).and_then(|w| w.strip_suffix(marker)) {
+            Some(inner) if !inner.is_empty() => (inner.to_string(), -(marker.chars().count() as isize)),
+            _ => (format!("{marker}{word}{marker}"), marker.chars().count() as isize),
+        };
+        let mut next: String = chars[..start].iter().collect();
+        next.push_str(&replacement);
+        next.extend(chars[end..].iter());
+        self.set_line(row, &next);
+        self.state.cursor = Index2::new(row, (col as isize + shift).max(0) as usize);
+    }
+
+    /// Insert a link skeleton and park the cursor in the target, where the
+    /// path completion will pick it up.
+    pub fn insert_link(&mut self) {
+        let (row, col) = (self.state.cursor.row, self.state.cursor.col);
+        let chars: Vec<char> = self.line_text(row).chars().collect();
+        let col = col.min(chars.len());
+        let start = chars[..col].iter().rposition(|c| c.is_whitespace()).map(|i| i + 1).unwrap_or(0);
+        let word: String = chars[start..col].iter().collect();
+
+        let mut next: String = chars[..start].iter().collect();
+        next.push_str(&format!("[{word}]("));
+        let cursor = next.chars().count();
+        next.push(')');
+        next.extend(chars[col..].iter());
+        self.set_line(row, &next);
+        self.state.cursor = Index2::new(row, cursor);
+    }
+
+    /// Continue a list or quote on Enter. Returns false when the line is
+    /// ordinary prose and the editor should handle the key itself.
+    pub fn continue_block(&mut self) -> bool {
+        let row = self.state.cursor.row;
+        let line = self.line_text(row);
+        let Some(prefix) = block_prefix(&line) else { return false };
+
+        // An empty item means "stop the list", so clear it instead.
+        if line.trim() == prefix.trim() {
+            self.set_line(row, "");
+            self.state.cursor = Index2::new(row, 0);
+            return true;
+        }
+        let chars: Vec<char> = line.chars().collect();
+        let col = self.state.cursor.col.min(chars.len());
+        let head: String = chars[..col].iter().collect();
+        let tail: String = chars[col..].iter().collect();
+        self.set_line(row, &head);
+        let next = format!("{prefix}{tail}");
+        let cursor = prefix.chars().count();
+        self.state.lines.insert(RowIndex::new(row + 1), next.chars().collect::<Vec<char>>());
+        self.state.cursor = Index2::new(row + 1, cursor);
+        true
+    }
+
+    /// Indent or outdent the current line by two spaces — list nesting.
+    pub fn indent(&mut self, out: bool) {
+        let row = self.state.cursor.row;
+        let line = self.line_text(row);
+        let col = self.state.cursor.col;
+        if out {
+            let trimmed = line.strip_prefix("  ").unwrap_or(&line).to_string();
+            let removed = line.chars().count() - trimmed.chars().count();
+            self.set_line(row, &trimmed);
+            self.state.cursor = Index2::new(row, col.saturating_sub(removed));
+        } else {
+            self.set_line(row, &format!("  {line}"));
+            self.state.cursor = Index2::new(row, col + 2);
+        }
+    }
+
+    /// Arrow-down/up: land on the visual row directly below/above the
+    /// cursor, not the next *logical* line — edtui's own `MoveDown`/`MoveUp`
+    /// only know about logical rows, so a wrapped line makes plain arrows
+    /// skip whatever is still on screen. The two coincide once nothing has
+    /// wrapped, which is why this degrades to the old behavior when
+    /// `render_width` is still zero (nothing rendered yet).
+    pub fn move_visual(&mut self, down: bool) {
+        let width = self.render_width;
+        let row = self.state.cursor.row;
+        let col = self.state.cursor.col;
+        let line: Vec<char> = self.state.lines.get(RowIndex::new(row)).cloned().unwrap_or_default();
+        let starts = wrap_starts(&line, width);
+        let chunk = starts.iter().rposition(|&s| s <= col).unwrap_or(0);
+        let rel = col - starts[chunk];
+
+        if down {
+            if chunk + 1 < starts.len() {
+                let (start, max_rel) = chunk_bounds(&starts, line.len(), chunk + 1);
+                self.state.cursor.col = start + rel.min(max_rel);
+            } else if row + 1 < self.state.lines.len() {
+                let next_line: Vec<char> = self.state.lines.get(RowIndex::new(row + 1)).cloned().unwrap_or_default();
+                let next_starts = wrap_starts(&next_line, width);
+                let (start, max_rel) = chunk_bounds(&next_starts, next_line.len(), 0);
+                self.state.cursor = Index2::new(row + 1, start + rel.min(max_rel));
+            }
+        } else if chunk > 0 {
+            let (start, max_rel) = chunk_bounds(&starts, line.len(), chunk - 1);
+            self.state.cursor.col = start + rel.min(max_rel);
+        } else if row > 0 {
+            let prev_line: Vec<char> = self.state.lines.get(RowIndex::new(row - 1)).cloned().unwrap_or_default();
+            let prev_starts = wrap_starts(&prev_line, width);
+            let (start, max_rel) = chunk_bounds(&prev_starts, prev_line.len(), prev_starts.len() - 1);
+            self.state.cursor = Index2::new(row - 1, start + rel.min(max_rel));
+        }
     }
 
     /// Recompute the completion popup from the text before the cursor.
@@ -173,6 +366,74 @@ impl Editor {
     pub fn dismiss_completion(&mut self) {
         self.completion = None;
     }
+}
+
+/// edtui's `ViewState` default (`panes::editor` never overrides it).
+const TAB_WIDTH: usize = 2;
+
+fn char_display_width(ch: char) -> usize {
+    if ch == '\t' {
+        return TAB_WIDTH;
+    }
+    unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0)
+}
+
+/// The char index each wrapped visual segment of `line` starts at, mirroring
+/// edtui's own char-width-based (not word-based) wrapping exactly — see
+/// `LineWrapper::wrap_line` in the edtui crate. `width == 0` (nothing
+/// rendered yet, or wrap disabled) is one segment covering the whole line.
+fn wrap_starts(line: &[char], width: usize) -> Vec<usize> {
+    if width == 0 {
+        return vec![0];
+    }
+    let mut starts = vec![0];
+    let mut used = 0;
+    for (i, &ch) in line.iter().enumerate() {
+        let w = char_display_width(ch);
+        if used + w > width {
+            starts.push(i);
+            used = 0;
+        }
+        used += w;
+    }
+    starts
+}
+
+/// The `(start, max_rel)` a column may take within segment `idx` of `starts`
+/// and stay in that visual row: `max_rel` is exclusive of the next segment's
+/// start, except for the line's last segment, where one-past-the-end is a
+/// legitimate cursor position (the editor is always in insert mode).
+fn chunk_bounds(starts: &[usize], line_len: usize, idx: usize) -> (usize, usize) {
+    let start = starts[idx];
+    let end = starts.get(idx + 1).copied().unwrap_or(line_len);
+    let is_last = idx + 1 >= starts.len();
+    let max_rel = if is_last { end - start } else { (end - start).saturating_sub(1) };
+    (start, max_rel)
+}
+
+/// The list or quote marker a new line should repeat: `- `, `1. `, `> `,
+/// `- [ ] `, preserving indentation. `None` for ordinary prose.
+fn block_prefix(line: &str) -> Option<String> {
+    let indent: String = line.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+    let rest = &line[indent.len()..];
+
+    for marker in ["- [ ] ", "- [x] ", "* ", "- ", "+ ", "> "] {
+        if rest.starts_with(marker) {
+            // A finished task continues as an unfinished one.
+            let marker = if marker == "- [x] " { "- [ ] " } else { marker };
+            return Some(format!("{indent}{marker}"));
+        }
+    }
+    // `12. ` continues as `13. `.
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    if !digits.is_empty() {
+        if let Some(after) = rest[digits.len()..].strip_prefix(". ") {
+            let _ = after;
+            let n: usize = digits.parse().ok()?;
+            return Some(format!("{indent}{}. ", n + 1));
+        }
+    }
+    None
 }
 
 /// Find an open `[^` or `](` before the cursor with nothing closing it.
@@ -554,10 +815,194 @@ mod tests {
     }
 
     #[test]
+    fn the_editor_is_modeless() {
+        let f = Fixture::new("modeless");
+        let mut editor = Editor::open(&f.page());
+        assert_eq!(editor.state.mode, EditorMode::Insert);
+        editor.state.mode = EditorMode::Normal;
+        editor.keep_modeless();
+        assert_eq!(editor.state.mode, EditorMode::Insert, "there is no mode to fall back to");
+    }
+
+    #[test]
+    fn bold_wraps_the_word_under_the_cursor_and_toggles_off() {
+        let f = Fixture::new("bold");
+        let mut editor = Editor::open(&f.page());
+        let row = editor.state.lines.len() - 1;
+        set_line(&mut editor, row, "make this bold");
+        editor.state.cursor = Index2::new(row, 12);
+
+        editor.wrap_emphasis("**");
+        assert_eq!(editor.line_text(row), "make this **bold**");
+        editor.wrap_emphasis("**");
+        assert_eq!(editor.line_text(row), "make this bold");
+    }
+
+    #[test]
+    fn emphasis_on_whitespace_opens_an_empty_pair_around_the_cursor() {
+        let f = Fixture::new("bold-empty");
+        let mut editor = Editor::open(&f.page());
+        let row = editor.state.lines.len() - 1;
+        set_line(&mut editor, row, "word ");
+        editor.state.cursor = Index2::new(row, 5);
+
+        editor.wrap_emphasis("_");
+        assert_eq!(editor.line_text(row), "word __");
+        assert_eq!(editor.cursor_col(), 6, "the cursor sits between the markers");
+    }
+
+    #[test]
+    fn a_link_wraps_the_preceding_word_and_parks_in_the_target() {
+        let f = Fixture::new("link");
+        let mut editor = Editor::open(&f.page());
+        let row = editor.state.lines.len() - 1;
+        set_line(&mut editor, row, "see Caffeine");
+        editor.state.cursor = Index2::new(row, 12);
+
+        editor.insert_link();
+        assert_eq!(editor.line_text(row), "see [Caffeine]()");
+        assert_eq!(editor.cursor_col(), 15, "inside the parentheses");
+    }
+
+    #[test]
+    fn enter_continues_bullets_numbers_tasks_and_quotes() {
+        let cases = [
+            ("- item", "- "),
+            ("  * nested", "  * "),
+            ("3. third", "4. "),
+            ("- [x] done", "- [ ] "),
+            ("> quoted", "> "),
+        ];
+        for (line, want) in cases {
+            assert_eq!(block_prefix(line).as_deref(), Some(want), "{line:?}");
+        }
+        assert_eq!(block_prefix("ordinary prose"), None);
+        // CommonMark really does read `2024. text` as an ordered list item, and
+        // continuing it is what every markdown editor does.
+        assert_eq!(block_prefix("2024. a list after all").as_deref(), Some("2025. "));
+        assert_eq!(block_prefix("-not a bullet without a space"), None);
+    }
+
+    #[test]
+    fn continuing_a_list_splits_the_line_at_the_cursor() {
+        let f = Fixture::new("continue");
+        let mut editor = Editor::open(&f.page());
+        let row = editor.state.lines.len() - 1;
+        set_line(&mut editor, row, "- alpha beta");
+        editor.state.cursor = Index2::new(row, 8);
+
+        assert!(editor.continue_block());
+        assert_eq!(editor.line_text(row), "- alpha ");
+        assert_eq!(editor.line_text(row + 1), "- beta");
+        assert_eq!(editor.cursor_line(), row + 1);
+        assert_eq!(editor.cursor_col(), 2);
+    }
+
+    #[test]
+    fn an_empty_item_ends_the_list_instead_of_repeating_it() {
+        let f = Fixture::new("end-list");
+        let mut editor = Editor::open(&f.page());
+        let row = editor.state.lines.len() - 1;
+        set_line(&mut editor, row, "- ");
+        editor.state.cursor = Index2::new(row, 2);
+
+        assert!(editor.continue_block());
+        assert_eq!(editor.line_text(row), "");
+        assert_eq!(editor.cursor_col(), 0);
+    }
+
+    #[test]
+    fn prose_is_left_to_the_editor() {
+        let f = Fixture::new("prose");
+        let mut editor = Editor::open(&f.page());
+        let row = editor.state.lines.len() - 1;
+        set_line(&mut editor, row, "just a sentence");
+        editor.state.cursor = Index2::new(row, 4);
+        assert!(!editor.continue_block());
+    }
+
+    #[test]
+    fn indenting_moves_the_cursor_with_the_text() {
+        let f = Fixture::new("indent");
+        let mut editor = Editor::open(&f.page());
+        let row = editor.state.lines.len() - 1;
+        set_line(&mut editor, row, "- item");
+        editor.state.cursor = Index2::new(row, 3);
+
+        editor.indent(false);
+        assert_eq!(editor.line_text(row), "  - item");
+        assert_eq!(editor.cursor_col(), 5);
+
+        editor.indent(true);
+        assert_eq!(editor.line_text(row), "- item");
+        assert_eq!(editor.cursor_col(), 3);
+
+        editor.indent(true);
+        assert_eq!(editor.line_text(row), "- item", "outdenting past zero is a no-op");
+    }
+
+    #[test]
     fn goto_line_is_clamped_to_the_document() {
         let f = Fixture::new("goto");
         let mut editor = Editor::open(&f.page());
         editor.goto_line(9999);
         assert_eq!(editor.cursor_line(), editor.state.lines.len() - 1);
+    }
+
+    #[test]
+    fn arrow_down_lands_on_the_wrapped_segment_below_not_the_next_line() {
+        let f = Fixture::new("wrap-down");
+        let mut editor = Editor::open(&f.page());
+        editor.render_width = 10;
+        let row = editor.state.lines.len() - 1;
+        // Wraps into three segments of width 10: "0123456789" | "abcdefghij" | "Z".
+        set_line(&mut editor, row, "0123456789abcdefghijZ");
+
+        editor.state.cursor = Index2::new(row, 3);
+        editor.move_visual(true);
+        assert_eq!(editor.cursor_line(), row, "still the same logical line");
+        assert_eq!(editor.cursor_col(), 13, "same offset into the next wrapped segment");
+
+        // The last segment is one char wide ("Z"); a larger offset clamps to
+        // its far end (index 21 = one past "Z", the end of the line).
+        editor.state.cursor = Index2::new(row, 13);
+        editor.move_visual(true);
+        assert_eq!(editor.cursor_col(), 21, "clamped to the last (one-char) segment");
+
+        // From that last wrapped segment, down moves to the next logical line.
+        editor.state.lines.insert(RowIndex::new(row + 1), "next line".chars().collect::<Vec<char>>());
+        editor.state.cursor = Index2::new(row, 20);
+        editor.move_visual(true);
+        assert_eq!(editor.cursor_line(), row + 1);
+        assert_eq!(editor.cursor_col(), 0, "same offset (0) into the next line's only segment");
+    }
+
+    #[test]
+    fn arrow_up_from_a_wrapped_segment_mirrors_arrow_down() {
+        let f = Fixture::new("wrap-up");
+        let mut editor = Editor::open(&f.page());
+        editor.render_width = 10;
+        let row = editor.state.lines.len() - 1;
+        set_line(&mut editor, row, "0123456789abcdefghijZ");
+        editor.state.cursor = Index2::new(row, 13);
+
+        editor.move_visual(false);
+        assert_eq!(editor.cursor_line(), row);
+        assert_eq!(editor.cursor_col(), 3);
+    }
+
+    #[test]
+    fn arrow_down_is_unaffected_when_nothing_has_wrapped() {
+        let f = Fixture::new("no-wrap");
+        let mut editor = Editor::open(&f.page());
+        editor.render_width = 0;
+        let row = editor.state.lines.len() - 1;
+        set_line(&mut editor, row, "short");
+        editor.state.lines.insert(RowIndex::new(row + 1), "also short".chars().collect::<Vec<char>>());
+        editor.state.cursor = Index2::new(row, 2);
+
+        editor.move_visual(true);
+        assert_eq!(editor.cursor_line(), row + 1);
+        assert_eq!(editor.cursor_col(), 2);
     }
 }

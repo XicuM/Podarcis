@@ -15,7 +15,6 @@ pub enum Cmd {
     Help,
     Palette,
     Reload,
-    CycleTheme,
 
     // Find
     FindFiles,
@@ -32,6 +31,15 @@ pub enum Cmd {
     ToggleSidebar,
     ToggleInspector,
     ZoomPane,
+    ShrinkPane,
+    Theme,
+    ShrinkInspector,
+    GrowInspector,
+    WidenPane,
+    ShrinkTree,
+    WidenTree,
+    ShrinkSidebar,
+    WidenSidebar,
 
     // Navigation
     Back,
@@ -65,12 +73,18 @@ pub enum Cmd {
     PrevLink,
     FollowLink,
     Outline,
+    Copy,
+    ClearSelection,
 
     // Editing
     Edit,
     Save,
     LeaveEdit,
     LeaveSidebar,
+    Bold,
+    Italic,
+    Link,
+    TogglePreview,
 
     // Engine
     Lint,
@@ -106,8 +120,17 @@ impl Cmd {
                 | Cmd::DocBottom
                 | Cmd::NextLink
                 | Cmd::PrevLink
+                | Cmd::ClearSelection
+                | Cmd::ShrinkInspector
+                | Cmd::GrowInspector
                 | Cmd::LeaveEdit
                 | Cmd::LeaveSidebar
+                // Editing actions no-op without the editor open, and the
+                // palette is not a place to discover that.
+                | Cmd::Bold
+                | Cmd::Italic
+                | Cmd::Link
+                | Cmd::TogglePreview
         )
     }
 }
@@ -137,12 +160,11 @@ pub struct Binding {
 /// would never see it if we claimed it.
 pub const BINDINGS: &[Binding] = &[
     // Session
-    b(&["q"], Cmd::Quit, "quit", "session", Ctx::Global),
     b(&["ctrl+q"], Cmd::Quit, "quit", "session", Ctx::Global),
     b(&["?"], Cmd::Help, "keys", "session", Ctx::Global),
     b(&["ctrl+p", ":"], Cmd::Palette, "command palette", "session", Ctx::Global),
     b(&["R"], Cmd::Reload, "reload from disk", "session", Ctx::Global),
-    b(&["ctrl+t"], Cmd::CycleTheme, "cycle theme", "session", Ctx::Global),
+    b(&["ctrl+t"], Cmd::Theme, "theme", "session", Ctx::Global),
     // Find
     b(&["ctrl+f", "f"], Cmd::FindFiles, "find page", "find", Ctx::Global),
     b(&["/"], Cmd::FindText, "search text", "find", Ctx::Global),
@@ -150,13 +172,17 @@ pub const BINDINGS: &[Binding] = &[
     // Layout
     b(&["1"], Cmd::FocusTree, "focus tree", "layout", Ctx::Global),
     b(&["2"], Cmd::FocusDoc, "focus page", "layout", Ctx::Global),
-    b(&["3"], Cmd::FocusSidebar, "focus herdr", "layout", Ctx::Global),
+    b(&["3"], Cmd::FocusSidebar, "focus agents", "layout", Ctx::Global),
     b(&["tab"], Cmd::CycleFocus, "next pane", "layout", Ctx::Global),
     b(&["backtab"], Cmd::CycleFocusBack, "previous pane", "layout", Ctx::Global),
     b(&["ctrl+b"], Cmd::ToggleTree, "toggle tree", "layout", Ctx::Global),
-    b(&["ctrl+g"], Cmd::ToggleSidebar, "toggle herdr", "layout", Ctx::Global),
+    b(&["ctrl+g"], Cmd::ToggleSidebar, "toggle agents", "layout", Ctx::Global),
     b(&["ctrl+i"], Cmd::ToggleInspector, "toggle inspector", "layout", Ctx::Global),
+    b(&["alt+up"], Cmd::ShrinkInspector, "shorter inspector", "layout", Ctx::Global),
+    b(&["alt+down"], Cmd::GrowInspector, "taller inspector", "layout", Ctx::Global),
     b(&["z"], Cmd::ZoomPane, "zoom pane", "layout", Ctx::Global),
+    b(&["<", "shift+left"], Cmd::ShrinkPane, "shrink pane", "layout", Ctx::Global),
+    b(&[">", "shift+right"], Cmd::WidenPane, "widen pane", "layout", Ctx::Global),
     // Navigation
     b(&["ctrl+o", "["], Cmd::Back, "back", "navigate", Ctx::Global),
     b(&["]"], Cmd::Forward, "forward", "navigate", Ctx::Global),
@@ -174,6 +200,8 @@ pub const BINDINGS: &[Binding] = &[
     b(&["H"], Cmd::TreeCollapseAll, "collapse all", "tree", Ctx::Tree),
     b(&["g g"], Cmd::TreeTop, "first", "tree", Ctx::Tree),
     b(&["G"], Cmd::TreeBottom, "last", "tree", Ctx::Tree),
+    b(&["<", "shift+left"], Cmd::ShrinkTree, "shrink tree", "tree", Ctx::Tree),
+    b(&[">", "shift+right"], Cmd::WidenTree, "widen tree", "tree", Ctx::Tree),
     // Reader
     b(&["j", "down"], Cmd::ScrollDown, "down", "page", Ctx::Doc),
     b(&["k", "up"], Cmd::ScrollUp, "up", "page", Ctx::Doc),
@@ -187,13 +215,22 @@ pub const BINDINGS: &[Binding] = &[
     b(&["h", "left"], Cmd::PrevLink, "previous link", "page", Ctx::Doc),
     b(&["enter", "g d"], Cmd::FollowLink, "follow link", "page", Ctx::Doc),
     b(&["o"], Cmd::Outline, "outline", "page", Ctx::Doc),
-    // Editing
+    b(&["y", "ctrl+c"], Cmd::Copy, "copy text", "page", Ctx::Doc),
+    b(&["esc"], Cmd::ClearSelection, "clear selection", "page", Ctx::Doc),
+    // Editing. The editor is modeless — ordinary typing, readline motions — so
+    // these are the only keys it does not treat as text.
     b(&["e", "i"], Cmd::Edit, "edit page", "edit", Ctx::Doc),
     b(&["ctrl+s"], Cmd::Save, "save", "edit", Ctx::Edit),
-    b(&["ctrl+w"], Cmd::LeaveEdit, "leave editor", "edit", Ctx::Edit),
-    // The single key the sidebar does not forward to herdr. Everything else,
-    // ctrl+space included, belongs to the child.
-    b(&["f12"], Cmd::LeaveSidebar, "leave herdr pane", "layout", Ctx::Sidebar),
+    b(&["esc", "ctrl+w"], Cmd::LeaveEdit, "leave editor", "edit", Ctx::Edit),
+    b(&["ctrl+b"], Cmd::Bold, "bold", "edit", Ctx::Edit),
+    b(&["alt+i"], Cmd::Italic, "italic", "edit", Ctx::Edit),
+    b(&["ctrl+l"], Cmd::Link, "insert link", "edit", Ctx::Edit),
+    b(&["ctrl+r"], Cmd::TogglePreview, "preview while editing", "edit", Ctx::Edit),
+    // Keys the agents pane intercepts before forwarding to the child.
+    // Everything else, ctrl+space included, belongs to the child.
+    b(&["f12"], Cmd::LeaveSidebar, "leave agents pane", "layout", Ctx::Sidebar),
+    b(&["shift+left"], Cmd::ShrinkSidebar, "shrink agents pane", "layout", Ctx::Sidebar),
+    b(&["shift+right"], Cmd::WidenSidebar, "widen agents pane", "layout", Ctx::Sidebar),
     // Engine
     b(&["L"], Cmd::Lint, "run podarcis lint", "engine", Ctx::Global),
     b(&["g s"], Cmd::SyncRepos, "sync repositories", "engine", Ctx::Global),
@@ -298,9 +335,15 @@ pub enum Resolved {
 /// Resolve a key against the table for `ctx`, honouring a pending sequence
 /// prefix. `ctx_of_focus` is the pane-specific context to try before `Global`.
 pub fn resolve(key: &KeyEvent, ctx: Ctx, pending: Option<char>) -> Resolved {
-    // The sidebar is deliberately not layered over Global: while herdr has
-    // focus, only its own escape key is ours.
-    let contexts: &[Ctx] = if ctx == Ctx::Sidebar { &[Ctx::Sidebar] } else { &[ctx, Ctx::Global] };
+    // Two contexts are deliberately *not* layered over Global. While the agents
+    // pane has focus every key belongs to the child, and while the editor is
+    // open every key belongs to the text — otherwise typing `q` into a
+    // paragraph would quit the app.
+    let contexts: &[Ctx] = match ctx {
+        Ctx::Sidebar => &[Ctx::Sidebar],
+        Ctx::Edit => &[Ctx::Edit],
+        _ => &[ctx, Ctx::Global],
+    };
 
     if let Some(prefix) = pending {
         for want in contexts {
@@ -410,9 +453,12 @@ mod tests {
 
     #[test]
     fn a_pane_binding_wins_over_a_global_one() {
-        // `l` is bound in both panes but never globally; `q` is global only.
-        assert_eq!(resolve(&ch('q'), Ctx::Tree, None), Resolved::Run(Cmd::Quit));
-        assert_eq!(resolve(&ch('q'), Ctx::Doc, None), Resolved::Run(Cmd::Quit));
+        // `l` is bound in both panes but never globally; `ctrl+q` is global only.
+        let cq = key(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert_eq!(resolve(&cq, Ctx::Tree, None), Resolved::Run(Cmd::Quit));
+        assert_eq!(resolve(&cq, Ctx::Doc, None), Resolved::Run(Cmd::Quit));
+        assert_eq!(resolve(&ch('q'), Ctx::Tree, None), Resolved::None);
+        assert_eq!(resolve(&ch('q'), Ctx::Doc, None), Resolved::None);
     }
 
     #[test]
@@ -456,9 +502,9 @@ mod tests {
     #[test]
     fn help_merges_aliases_onto_one_row() {
         let rows = help_rows();
-        let quit: Vec<&String> = rows.iter().filter(|(_, _, t)| *t == "quit").map(|(_, k, _)| k).collect();
-        assert_eq!(quit.len(), 1, "aliases must share a row");
-        assert!(quit[0].contains('q') && quit[0].contains("ctrl+q"));
+        let back: Vec<&String> = rows.iter().filter(|(_, _, t)| *t == "back").map(|(_, k, _)| k).collect();
+        assert_eq!(back.len(), 1, "aliases must share a row");
+        assert!(back[0].contains("ctrl+o") && back[0].contains('['));
     }
 
     #[test]
@@ -476,11 +522,43 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_handles_resize_keys() {
+        assert_eq!(
+            resolve(&key(KeyCode::Left, KeyModifiers::SHIFT), Ctx::Sidebar, None),
+            Resolved::Run(Cmd::ShrinkSidebar)
+        );
+        assert_eq!(
+            resolve(&key(KeyCode::Right, KeyModifiers::SHIFT), Ctx::Sidebar, None),
+            Resolved::Run(Cmd::WidenSidebar)
+        );
+    }
+
+    #[test]
+    fn global_resize_keys_are_bound() {
+        assert_eq!(
+            resolve(&ch('<'), Ctx::Global, None),
+            Resolved::Run(Cmd::ShrinkPane)
+        );
+        assert_eq!(
+            resolve(&ch('>'), Ctx::Global, None),
+            Resolved::Run(Cmd::WidenPane)
+        );
+        assert_eq!(
+            resolve(&key(KeyCode::Left, KeyModifiers::SHIFT), Ctx::Global, None),
+            Resolved::Run(Cmd::ShrinkPane)
+        );
+        assert_eq!(
+            resolve(&key(KeyCode::Right, KeyModifiers::SHIFT), Ctx::Global, None),
+            Resolved::Run(Cmd::WidenPane)
+        );
+    }
+
+    #[test]
     fn movement_is_kept_out_of_the_palette() {
         assert!(!Cmd::ScrollDown.palette_visible());
         assert!(!Cmd::TreeDown.palette_visible());
         assert!(Cmd::Lint.palette_visible());
-        assert!(Cmd::CycleTheme.palette_visible());
+        assert!(Cmd::Reload.palette_visible());
     }
 
     #[test]
@@ -489,6 +567,23 @@ mod tests {
         assert_eq!(
             resolve(&key(KeyCode::Char('s'), KeyModifiers::CONTROL), Ctx::Edit, None),
             Resolved::Run(Cmd::Save)
+        );
+    }
+
+    #[test]
+    fn the_editor_swallows_every_key_that_is_not_its_own() {
+        // The bug this guards against: `q` is a global quit, and typing it into
+        // a paragraph must not end the session.
+        for c in ['q', 'j', 'e', 'S', 'R', 'z', '/', '?', ':'] {
+            assert_eq!(resolve(&ch(c), Ctx::Edit, None), Resolved::None, "{c:?} must be text");
+        }
+        assert_eq!(
+            resolve(&key(KeyCode::Esc, KeyModifiers::NONE), Ctx::Edit, None),
+            Resolved::Run(Cmd::LeaveEdit)
+        );
+        assert_eq!(
+            resolve(&key(KeyCode::Char('b'), KeyModifiers::CONTROL), Ctx::Edit, None),
+            Resolved::Run(Cmd::Bold)
         );
     }
 }
