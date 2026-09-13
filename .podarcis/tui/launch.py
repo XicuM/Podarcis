@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import sys
 from pathlib import Path
 
 from rich.table import Table
@@ -23,6 +24,8 @@ from podarcis.herdr.layout import (
 from podarcis.repos import get_repo_status, sync_repos_full
 from podarcis.tui import AGENT_NAME, PANE_AGENT, PANE_EDIT, PANE_FILES, SESSION_NAME
 from podarcis.tui.deps import ResolvedDeps, resolve_deps
+from podarcis.tui.keys import merge_overlay_keys, overlay_key_blocks, parse_key_blocks
+from podarcis.tui.metadata import report_repo_metadata
 from podarcis.tui.root import WikiRootError, find_wiki_root
 from podarcis.tui.server import (
     HerdrSession,
@@ -154,6 +157,20 @@ def _print_plan(
             ab,
         )
     console.print(repos)
+    live_cfg = session_config()
+    live_blocks = parse_key_blocks(live_cfg.read_text(encoding='utf-8')) if live_cfg.is_file() else []
+    bound = {b.get('key'): b for b in live_blocks if b.get('key')}
+    console.print('[bold]Overlay keys[/bold]')
+    for spec in overlay_key_blocks(python_bin=sys.executable or 'python3'):
+        live = bound.get(spec['key'])
+        if live:
+            console.print(
+                f"  {spec['key']}: {live.get('type') or ''}  {live.get('command') or ''}"
+            )
+        else:
+            console.print(
+                f"  {spec['key']} (will merge): {spec['type']}  {spec['command']}"
+            )
     for warning in deps.warnings:
         console.print(f'[yellow]{warning}[/yellow]')
 
@@ -253,6 +270,45 @@ def dispatch_wiki(args: argparse.Namespace) -> int:
                 return _die('wiki context requires a PATH')
             args.path = path_parts[0]
             return cmd_wiki_context(args)
+        if head == 'search':
+            from podarcis.cli import cmd_wiki_search
+            search_args = argparse.Namespace()
+            rest_q = _rest_after(tail)
+            search_args.query = rest_q
+            search_args.json = '--json' in rest_q
+            search_args.collection = 'wiki'
+            search_args.method = 'hybrid'
+            search_args.limit = 20
+            search_args.no_rerank = False
+            search_args.root = getattr(args, 'root', None)
+            # pull flags out of remainder
+            query_tokens = []
+            i = 0
+            while i < len(rest_q):
+                tok = rest_q[i]
+                if tok == '--json':
+                    search_args.json = True
+                elif tok == '--no-rerank':
+                    search_args.no_rerank = True
+                elif tok == '--collection' and i + 1 < len(rest_q):
+                    i += 1
+                    search_args.collection = rest_q[i]
+                elif tok == '--method' and i + 1 < len(rest_q):
+                    i += 1
+                    search_args.method = rest_q[i]
+                elif tok == '--limit' and i + 1 < len(rest_q):
+                    i += 1
+                    search_args.limit = int(rest_q[i])
+                elif tok == '--root' and i + 1 < len(rest_q):
+                    i += 1
+                    search_args.root = rest_q[i]
+                else:
+                    query_tokens.append(tok)
+                i += 1
+            search_args.query = query_tokens
+            if not search_args.query:
+                return _die('wiki search requires a QUERY')
+            return cmd_wiki_search(search_args)
         path_parts = _rest_after(rest)
         args.path = path_parts[0] if path_parts else None
     return cmd_wiki(args)
@@ -302,6 +358,7 @@ def cmd_wiki(args: argparse.Namespace) -> int:
     _debug(wiki_root, f'wiki_root={wiki_root} herdr={deps.herdr} harness={deps.harness}')
 
     cfg = ensure_session_config(reset=reset_config)
+    merge_overlay_keys(cfg)
     ensure_checkout_herdr(wiki_root)
     try:
         ensure_herdr_server(deps.herdr, sock=session_sock(), config=cfg)
@@ -344,6 +401,11 @@ def cmd_wiki(args: argparse.Namespace) -> int:
             _debug(wiki_root, f'panes={panes}')
     except RuntimeError as exc:
         return _die(str(exc))
+
+    try:
+        report_repo_metadata(wiki_root, session)
+    except Exception as exc:
+        _debug(wiki_root, f'metadata: {exc}')
 
     try:
         os.execvpe(deps.herdr, [deps.herdr, '--session', SESSION_NAME], env)

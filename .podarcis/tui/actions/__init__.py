@@ -1,1 +1,1 @@
-'''herdr plugin actions. Commands are ``python3 -m podarcis.tui.actions.*``.'''
+'''herdr popup / action modules. Commands are ``python3 -m podarcis.tui.actions.*``.'''

@@ -31,7 +31,7 @@ from podarcis.repos import (
     push_repos,
 )
 from podarcis.tui.launch import cmd_wiki, dispatch_wiki
-from podarcis.tui.root import WikiRootError, find_wiki_root_or_none
+from podarcis.tui.root import WikiRootError, find_wiki_root, find_wiki_root_or_none
 
 
 def _get_python_bin() -> str:
@@ -290,9 +290,32 @@ def cmd_repo_push(args: argparse.Namespace) -> int:
     '''Push local commits to the configured remotes.'''
     console.print('[bold #29b8db]Pushing local workspace changes to remotes...[/bold #29b8db]\n')
     _print_repo_results(
-        push_repos(ROOT_DIR, auto_commit=args.commit, message=args.message),
+        push_repos(
+            ROOT_DIR,
+            auto_commit=args.commit,
+            message=args.message,
+            audit=getattr(args, 'audit', False),
+        ),
         {'ok': '[green]✓[/green]', 'skipped': '[dim]—[/dim]'},
     )
+    return 0
+
+
+def cmd_repo_commit(args: argparse.Namespace) -> int:
+    '''Lint-gated per-repo commit. Does not push and does not flatten repos.'''
+    from podarcis.audit import audit_and_commit
+    root = find_wiki_root_or_none(explicit=getattr(args, 'root', None)) or ROOT_DIR
+    result = audit_and_commit(root, args.message)
+    if not result.get('ok'):
+        console.print('[bold red]Audit gate failed; nothing committed.[/bold red]')
+        if result.get('message'):
+            console.print(result['message'])
+        return 1
+    committed = result.get('committed') or []
+    if committed:
+        console.print('[bold green]✓ Committed[/bold green] ' + ', '.join(committed))
+    else:
+        console.print(result.get('message') or 'nothing to commit')
     return 0
 
 
@@ -422,11 +445,92 @@ def cmd_test(args: argparse.Namespace) -> int:
 
 
 def cmd_lint(args: argparse.Namespace) -> int:
-    '''Run markdown link checker.'''
-    check_links = ROOT_DIR / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
-    py_bin = _get_python_bin()
-    targets = args.remaining_args if args.remaining_args else [str(ROOT_DIR)]
-    return subprocess.run([py_bin, str(check_links)] + targets).returncode
+    '''Run markdown link checker. ``--json`` is structured; human text stays default.'''
+    from podarcis.audit import run_lint
+    extra = list(getattr(args, 'remaining_args', None) or [])
+    as_json = bool(getattr(args, 'json', False) or '--json' in extra)
+    fix = bool(getattr(args, 'fix', False) or '--fix' in extra)
+    extra = [a for a in extra if a not in ('--json', '--fix')]
+    root = find_wiki_root_or_none(explicit=getattr(args, 'root', None)) or ROOT_DIR
+    target = extra[0] if extra else str(root)
+    return run_lint(root, target, as_json=as_json, fix=fix)
+
+
+def cmd_wiki_search(args: argparse.Namespace) -> int:
+    '''Structured wiki search. Default collection is wiki.'''
+    from podarcis.tui.search import search
+    try:
+        wiki_root = find_wiki_root(explicit=getattr(args, 'root', None))
+    except WikiRootError as exc:
+        console.print(f'[bold red]Error:[/bold red] {exc.message}')
+        return 1
+    query = args.query if isinstance(args.query, str) else ' '.join(args.query)
+    result = search(
+        wiki_root, query,
+        collection=getattr(args, 'collection', 'wiki') or 'wiki',
+        method=getattr(args, 'method', 'hybrid') or 'hybrid',
+        limit=getattr(args, 'limit', 20) or 20,
+        no_rerank=bool(getattr(args, 'no_rerank', False)),
+    )
+    if getattr(args, 'json', False):
+        print(json.dumps(result, indent=2))
+        return 0
+    if result.get('warning'):
+        console.print(f'[yellow]{result["warning"]}[/yellow]')
+    hits = result.get('hits') or []
+    if not hits:
+        console.print(f'[yellow]No hits for {query!r} in {result.get("collection")}.[/yellow]')
+        return 0
+    for hit in hits:
+        score = hit.get('score')
+        score_s = f'{score:.2f}' if isinstance(score, (int, float)) else '--'
+        console.print(f'[bold]{score_s}[/bold]  {hit.get("title")}  [dim]{hit.get("path")}[/dim]')
+        if hit.get('snippet'):
+            console.print(f'   {hit["snippet"]}')
+    return 0
+
+
+def _dispatch_wiki(args: argparse.Namespace) -> int:
+    '''``podarcis wiki search QUERY`` shares the wiki parser with launch ``[path]``.'''
+    if getattr(args, 'path', None) == 'edit':
+        rest = list(getattr(args, 'search_args', None) or [])
+        if rest and rest[0] == '--':
+            rest = rest[1:]
+        if not rest:
+            console.print('[bold red]Error:[/bold red] usage: podarcis wiki edit -- PATH')
+            return 1
+        from podarcis.tui.open_edit import cmd_wiki_edit
+        try:
+            return cmd_wiki_edit(rest[0], root=getattr(args, 'root', None))
+        except WikiRootError as exc:
+            console.print(f'[bold red]Error:[/bold red] {exc.message}')
+            return 1
+    if getattr(args, 'path', None) == 'search':
+        rest = list(getattr(args, 'search_args', None) or [])
+        search_p = argparse.ArgumentParser(prog='podarcis wiki search')
+        search_p.add_argument('query', nargs='+', help='Search query')
+        search_p.add_argument('--json', action='store_true', help='Output structured hits as JSON')
+        search_p.add_argument(
+            '--collection', default='wiki',
+            choices=['wiki', 'protocols', 'sources', 'all'],
+            help='Collection to search (default: wiki)',
+        )
+        search_p.add_argument(
+            '--method', default='hybrid',
+            choices=['hybrid', 'semantic', 'keyword'],
+            help='Search strategy (default: hybrid)',
+        )
+        search_p.add_argument('--limit', type=int, default=20, help='Maximum hits')
+        search_p.add_argument('--no-rerank', action='store_true', dest='no_rerank')
+        search_p.add_argument('--root', default=argparse.SUPPRESS, help='Podarcis checkout root')
+        try:
+            ns = search_p.parse_args(rest)
+        except SystemExit as exc:
+            return int(exc.code or 1)
+        if not getattr(ns, 'root', None) and getattr(args, 'root', None):
+            ns.root = args.root
+        return cmd_wiki_search(ns)
+    return cmd_wiki(args)
 
 
 def cmd_diagnose(args: argparse.Namespace) -> int:
@@ -748,7 +852,14 @@ def main() -> None:
     rp = add('push', 'Push local commits to remotes for workspace repositories',
              cmd_repo_push, parent=repo_sub)
     rp.add_argument('--commit', '-c', action='store_true', help='Commit uncommitted local changes before pushing')
+    rp.add_argument(
+        '--audit', action='store_true',
+        help='Lint-gate: with --commit, lint then commit; without, lint and refuse a dirty/failing tree, then push existing commits',
+    )
     rp.add_argument('--message', '-m', default='chore: sync workspace changes', help='Commit message')
+    rc = add('commit', 'Lint-gated per-repo commit of dirty workspace repositories',
+             cmd_repo_commit, parent=repo_sub)
+    rc.add_argument('-m', '--message', default='chore: wiki commit', help='Commit message')
 
     # ── config ────────────────────────────────────────────────────────────
     config_p = add('config', 'Configure components and repositories', cmd_interactive)
@@ -769,7 +880,7 @@ def main() -> None:
     # ── wiki ──────────────────────────────────────────────────────────────
     wiki_p = add(
         'wiki',
-        'Attach a herdr wiki layout (files | edit | agent). Subcommands: edit, persona, context',
+        'Attach a herdr wiki layout (files | edit | agent). Subcommands: edit, persona, context, search',
         dispatch_wiki,
     )
     wiki_p.add_argument(
@@ -798,7 +909,10 @@ def main() -> None:
     un.add_argument('--dry-run', action='store_true', dest='dry_run', help='Preview without removing anything')
     un.add_argument('--purge', action='store_true', help='Also remove .podarcis/config.yaml')
     add('test', 'Run pytest suite', cmd_test).add_argument('remaining_args', nargs=argparse.REMAINDER)
-    add('lint', 'Run link integrity check', cmd_lint).add_argument('remaining_args', nargs=argparse.REMAINDER)
+    lint_p = add('lint', 'Run link integrity check', cmd_lint)
+    lint_p.add_argument('--json', action='store_true', help='Output findings as JSON')
+    lint_p.add_argument('--fix', action='store_true', help='Apply safe auto-fixes')
+    lint_p.add_argument('remaining_args', nargs=argparse.REMAINDER)
 
     # ── diagnose ──────────────────────────────────────────────────────────
     diag = add('diagnose', 'Display current platform pain points and logged issues', cmd_diagnose)

@@ -378,12 +378,41 @@ def sync_repos_full(root: Path | str | None = None) -> dict:
     return results
 
 
-def push_repos(root: Path | str | None = None, auto_commit: bool = False, message: str = "chore: sync workspace changes") -> dict:
-    '''Push local changes across all configured Git workspace repositories.'''
+def push_repos(
+    root: Path | str | None = None,
+    auto_commit: bool = False,
+    message: str = "chore: sync workspace changes",
+    audit: bool = False,
+) -> dict:
+    '''Push local changes across all configured Git workspace repositories.
+
+    ``audit=True`` with ``auto_commit=True`` lint-gates via ``audit_and_commit``.
+    ``audit=True`` alone lint-checks and refuses if the tree fails; it does
+    not commit. Default ``audit=False`` preserves the unguarded CLI path.
+    '''
     if root is None:
         root_path = Path(__file__).resolve().parent.parent
     else:
         root_path = Path(root)
+
+    if audit:
+        from podarcis.audit import audit_and_commit, audit_gate
+        if auto_commit:
+            gate = audit_and_commit(root_path, message)
+            if not gate.get('ok'):
+                detail = gate.get('message') or 'audit failed'
+                return {
+                    name: {'status': 'error', 'message': detail}
+                    for name in get_repo_names(root_path)
+                }
+            auto_commit = False
+        else:
+            ok, detail = audit_gate(root_path)
+            if not ok:
+                return {
+                    name: {'status': 'error', 'message': detail or 'audit failed'}
+                    for name in get_repo_names(root_path)
+                }
 
     config = load_repos_config(root_path)
     results = {}

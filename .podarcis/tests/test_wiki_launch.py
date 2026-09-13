@@ -252,14 +252,22 @@ def test_frontends_map_has_no_herdr_sentinel():
     assert FRONTENDS['none'] is None
 
 
-def test_session_template_has_no_overlay_keys():
+def test_session_template_has_overlay_keys():
     from podarcis.tui.server import session_template
     text = session_template().read_text(encoding='utf-8')
-    assert '[[keys.command]]' not in text
     assert 'prefix = "ctrl+space"' in text
     assert 'sidebar_start_collapsed = false' in text
     assert 'allow_nested = false' in text
     assert 'onboarding = false' in text
+    assert '[[keys.command]]' in text
+    assert 'key = "prefix+/"' in text
+    assert 'podarcis.tui.actions.search_overlay' in text
+    assert 'key = "prefix+shift+l"' in text
+    assert 'podarcis.tui.actions.lint_overlay' in text
+    assert 'key = "prefix+shift+s"' in text
+    assert 'key = "prefix+shift+c"' in text
+    assert 'podarcis.tui.actions.commit' in text
+    assert 'key = "prefix+c"' not in text
 
 
 def test_ensure_herdr_server_polls_sock(tmp_path):
