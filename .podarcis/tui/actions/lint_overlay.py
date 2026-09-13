@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.util
-import subprocess
 import sys
 
 from podarcis.audit import lint
+from podarcis.tui.open_edit import open_page
 from podarcis.tui.root import WikiRootError, find_wiki_root
 from podarcis.tui.session import in_wiki_session
 
@@ -50,13 +49,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f'  {issue.get("code")}: {issue.get("detail")}')
         print()
     chosen = _pick_path(list(files))
-    if chosen and importlib.util.find_spec('podarcis.tui.actions.edit') is not None:
-        subprocess.run(
-            [sys.executable, '-m', 'podarcis.tui.actions.edit', '--', str(wiki_root / chosen)],
-            check=False,
-        )
-    elif chosen:
-        print(wiki_root / chosen)
+    if chosen:
+        open_page(wiki_root, chosen)
     return 1
 
 

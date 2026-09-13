@@ -1,3 +1,4 @@
+# Bundled fallback of .agents/mcp/wiki/check_links.py for pip installs.
 import json
 import os
 import re

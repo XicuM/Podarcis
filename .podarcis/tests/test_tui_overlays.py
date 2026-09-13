@@ -418,3 +418,183 @@ def test_in_wiki_session_socket_path():
     assert in_wiki_session(environ={
         'HERDR_SOCKET_PATH': '/home/u/.config/herdr/sessions/vscode/herdr.sock',
     }) is False
+
+
+def test_parse_key_blocks_reads_command():
+    from podarcis.tui.keys import parse_key_blocks
+    blocks = parse_key_blocks(
+        '[[keys.command]]\nkey = "prefix+/"\ntype = "popup"\n'
+        'command = "/opt/venv/bin/python -m podarcis.tui.actions.search_overlay"\n'
+    )
+    assert blocks[0]['key'] == 'prefix+/'
+    assert blocks[0]['command'] == '/opt/venv/bin/python -m podarcis.tui.actions.search_overlay'
+
+
+def test_rewrite_stock_python_on_first_copy(tmp_path):
+    from podarcis.tui.keys import merge_overlay_keys, rewrite_stock_python
+    from podarcis.tui.server import session_template
+    dest = tmp_path / 'config.toml'
+    dest.write_text(session_template().read_text(encoding='utf-8'), encoding='utf-8')
+    assert 'python3 -m podarcis.tui.' in dest.read_text(encoding='utf-8')
+    added = merge_overlay_keys(dest, python_bin='/opt/venv/bin/python', plugin_linked=False)
+    assert added == []
+    text = dest.read_text(encoding='utf-8')
+    assert 'python3 -m podarcis.tui.' not in text
+    assert '/opt/venv/bin/python -m podarcis.tui.actions.search_overlay' in text
+    assert rewrite_stock_python(dest, python_bin='/opt/venv/bin/python') == 0
+
+
+def test_wiki_search_cli_joins_query_words(tmp_path, monkeypatch, capsys):
+    checkout = _checkout(tmp_path / 'proj')
+    page = checkout / 'wiki' / 'caffeine.md'
+    page.parent.mkdir(parents=True)
+    page.write_text(OKF + 'Caffeine adenosine receptors\n', encoding='utf-8')
+    monkeypatch.chdir(checkout)
+    monkeypatch.delenv('PODARCIS_ROOT', raising=False)
+    monkeypatch.delenv('ENABLE_QMD', raising=False)
+    from podarcis import cli
+    monkeypatch.setattr(
+        'sys.argv',
+        ['podarcis', 'wiki', 'search', 'caffeine', 'adenosine', '--json'],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data['query'] == 'caffeine adenosine'
+    assert data['hits']
+
+
+def test_lint_json_without_checkout_to_json_payload(tmp_path):
+    checkout = _checkout(tmp_path / 'proj')
+    script = checkout / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        'def run_audit(target_path, do_fix=False):\n'
+        '    return {target_path + "/wiki/x.md": {"broken_links": [("a.md", "missing")]}}\n',
+        encoding='utf-8',
+    )
+    from podarcis.audit import lint
+    payload = lint(checkout)
+    assert payload['ok'] is False
+    issues = next(iter(payload['files'].values()))
+    assert any(i['code'] == 'broken_link' for i in issues)
+
+
+def test_push_repos_audit_without_commit_does_not_commit(tmp_path, monkeypatch):
+    checkout = _checkout(tmp_path / 'proj')
+    commits: list = []
+    monkeypatch.setattr(
+        'podarcis.audit.audit_gate',
+        lambda root: (True, 'Audit passed.'),
+    )
+    monkeypatch.setattr(
+        'podarcis.audit.audit_and_commit',
+        lambda root, msg: commits.append(msg) or {'ok': True, 'committed': ['wiki']},
+    )
+    from podarcis.repos import push_repos
+    push_repos(checkout, auto_commit=False, audit=True, message='x')
+    assert commits == []
+
+
+def test_audit_and_commit_reports_failed_git_commit(tmp_path, monkeypatch):
+    checkout = _checkout(tmp_path / 'proj')
+    wiki = _git_repo(checkout / 'wiki')
+    _commit_seed(wiki, 'ok.md', OKF + 'clean\n')
+    (wiki / 'new.md').write_text(OKF + 'dirty\n', encoding='utf-8')
+    monkeypatch.setattr('podarcis.audit.audit_gate', lambda root: (True, 'ok'))
+    real_run = subprocess.run
+
+    def fake_run(cmd, *a, **kw):
+        if list(cmd)[:2] == ['git', 'commit']:
+            return subprocess.CompletedProcess(cmd, 1, stdout='', stderr='identity missing')
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr('podarcis.audit.subprocess.run', fake_run)
+    from podarcis.audit import audit_and_commit
+    result = audit_and_commit(checkout, 'chore: no')
+    assert result['ok'] is False
+    assert result['committed'] == []
+    assert 'identity missing' in (result.get('message') or '')
+
+
+def test_cmd_wiki_reports_metadata():
+    from podarcis.tui import launch
+    src = inspect.getsource(launch.cmd_wiki)
+    assert 'report_repo_metadata' in src
+    assert 'layout.apply' not in src
+
+
+def test_search_overlay_cycles_collections():
+    from podarcis.tui.actions.search_overlay import COLLECTIONS, _next_collection
+    nxt = _next_collection('wiki')
+    assert nxt in COLLECTIONS and nxt != 'wiki'
+    assert _next_collection(COLLECTIONS[-1]) == COLLECTIONS[0]
+
+
+def test_open_page_targets_edit_pane(tmp_path, monkeypatch):
+    checkout = _checkout(tmp_path / 'proj')
+    page = checkout / 'wiki' / 'caffeine.md'
+    page.parent.mkdir(parents=True)
+    page.write_text(OKF + 'body\n', encoding='utf-8')
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('HERDR_SESSION', 'podarcis')
+    monkeypatch.setenv('HERDR_BIN', '/bin/herdr')
+    captured: list = []
+
+    class _Session:
+        def cli(self, *args):
+            captured.append(args)
+            if args[:2] == ('pane', 'list'):
+                return {'panes': [{'label': 'edit', 'pane_id': 'p-edit'}]}
+            if args[:2] == ('pane', 'process-info'):
+                return {'process_info': {'foreground_processes': [{'name': 'bash'}]}}
+            return {}
+
+    monkeypatch.setattr('podarcis.tui.open_edit.HerdrSession', lambda *a, **k: _Session())
+    monkeypatch.setattr(
+        'podarcis.tui.open_edit.resolve_deps',
+        lambda root: type('D', (), {'editor': ['nvim']})(),
+    )
+    from podarcis.tui.open_edit import open_page
+    rc = open_page(checkout, 'wiki/caffeine.md')
+    assert rc == 0
+    assert any(a[:2] == ('pane', 'run') and 'p-edit' in a for a in captured)
+
+
+def test_dry_run_prints_live_key_commands(tmp_path, monkeypatch, capsys):
+    checkout = _checkout(tmp_path / 'proj')
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    live = tmp_path / 'home' / '.config' / 'herdr' / 'sessions' / 'podarcis' / 'config.toml'
+    live.parent.mkdir(parents=True)
+    live.write_text(
+        '[[keys.command]]\nkey = "prefix+/"\ntype = "popup"\n'
+        'command = "/opt/venv/bin/python -m podarcis.tui.actions.search_overlay"\n',
+        encoding='utf-8',
+    )
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    for name in ('herdr', 'nvim', 'opencode'):
+        p = bindir / name
+        p.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+        p.chmod(p.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv('HERDR_BIN', str(bindir / 'herdr'))
+    monkeypatch.setenv('PODARCIS_EDITOR', str(bindir / 'nvim'))
+    monkeypatch.setenv('PATH', f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}')
+    monkeypatch.chdir(checkout)
+    from podarcis.tui import launch as launch_mod
+    monkeypatch.setattr(launch_mod, 'get_repo_status', lambda root=None: [
+        {'repo': n, 'status': 'synced', 'branch': 'master', 'changes': 0,
+         'ahead': 0, 'behind': 0, 'type': 'git', 'url': 'local'}
+        for n in ('sources', 'wiki', 'workspace')
+    ])
+    monkeypatch.setattr(launch_mod, 'session_config', lambda: live)
+    from podarcis.tui.launch import cmd_wiki
+    rc = cmd_wiki(Namespace(
+        root=str(checkout), dry_run=True, sync=False, reset_layout=False,
+        reset_config=False, path=None,
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert '/opt/venv/bin/python -m podarcis.tui.actions.search_overlay' in out
+    assert 'prefix+/ (will merge)' not in out

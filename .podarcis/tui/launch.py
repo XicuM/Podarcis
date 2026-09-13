@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import sys
 from pathlib import Path
 
 from rich.table import Table
@@ -23,7 +24,8 @@ from podarcis.herdr.layout import (
 from podarcis.repos import get_repo_status, sync_repos_full
 from podarcis.tui import AGENT_NAME, PANE_AGENT, PANE_EDIT, PANE_FILES, SESSION_NAME
 from podarcis.tui.deps import ResolvedDeps, resolve_deps
-from podarcis.tui.keys import merge_overlay_keys, overlay_key_blocks, present_keys
+from podarcis.tui.keys import merge_overlay_keys, overlay_key_blocks, parse_key_blocks
+from podarcis.tui.metadata import report_repo_metadata
 from podarcis.tui.root import WikiRootError, find_wiki_root
 from podarcis.tui.server import (
     HerdrSession,
@@ -155,16 +157,20 @@ def _print_plan(
             ab,
         )
     console.print(repos)
-    keys_table = Table(title='Overlay keys', border_style='cyan')
-    keys_table.add_column('key', style='bold white')
-    keys_table.add_column('type')
-    keys_table.add_column('command', overflow='fold')
     live_cfg = session_config()
-    bound = present_keys(live_cfg.read_text(encoding='utf-8')) if live_cfg.is_file() else set()
-    for spec in overlay_key_blocks(python_bin='python3'):
-        mark = spec['key'] if spec['key'] in bound else spec['key'] + ' (will merge)'
-        keys_table.add_row(mark, spec['type'], spec['command'])
-    console.print(keys_table)
+    live_blocks = parse_key_blocks(live_cfg.read_text(encoding='utf-8')) if live_cfg.is_file() else []
+    bound = {b.get('key'): b for b in live_blocks if b.get('key')}
+    console.print('[bold]Overlay keys[/bold]')
+    for spec in overlay_key_blocks(python_bin=sys.executable or 'python3'):
+        live = bound.get(spec['key'])
+        if live:
+            console.print(
+                f"  {spec['key']}: {live.get('type') or ''}  {live.get('command') or ''}"
+            )
+        else:
+            console.print(
+                f"  {spec['key']} (will merge): {spec['type']}  {spec['command']}"
+            )
     for warning in deps.warnings:
         console.print(f'[yellow]{warning}[/yellow]')
 
@@ -395,6 +401,11 @@ def cmd_wiki(args: argparse.Namespace) -> int:
             _debug(wiki_root, f'panes={panes}')
     except RuntimeError as exc:
         return _die(str(exc))
+
+    try:
+        report_repo_metadata(wiki_root, session)
+    except Exception as exc:
+        _debug(wiki_root, f'metadata: {exc}')
 
     try:
         os.execvpe(deps.herdr, [deps.herdr, '--session', SESSION_NAME], env)

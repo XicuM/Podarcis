@@ -492,10 +492,23 @@ def cmd_wiki_search(args: argparse.Namespace) -> int:
 
 def _dispatch_wiki(args: argparse.Namespace) -> int:
     '''``podarcis wiki search QUERY`` shares the wiki parser with launch ``[path]``.'''
+    if getattr(args, 'path', None) == 'edit':
+        rest = list(getattr(args, 'search_args', None) or [])
+        if rest and rest[0] == '--':
+            rest = rest[1:]
+        if not rest:
+            console.print('[bold red]Error:[/bold red] usage: podarcis wiki edit -- PATH')
+            return 1
+        from podarcis.tui.open_edit import cmd_wiki_edit
+        try:
+            return cmd_wiki_edit(rest[0], root=getattr(args, 'root', None))
+        except WikiRootError as exc:
+            console.print(f'[bold red]Error:[/bold red] {exc.message}')
+            return 1
     if getattr(args, 'path', None) == 'search':
         rest = list(getattr(args, 'search_args', None) or [])
         search_p = argparse.ArgumentParser(prog='podarcis wiki search')
-        search_p.add_argument('query', help='Search query')
+        search_p.add_argument('query', nargs='+', help='Search query')
         search_p.add_argument('--json', action='store_true', help='Output structured hits as JSON')
         search_p.add_argument(
             '--collection', default='wiki',
@@ -839,7 +852,10 @@ def main() -> None:
     rp = add('push', 'Push local commits to remotes for workspace repositories',
              cmd_repo_push, parent=repo_sub)
     rp.add_argument('--commit', '-c', action='store_true', help='Commit uncommitted local changes before pushing')
-    rp.add_argument('--audit', action='store_true', help='Lint-gate before committing (use with --commit)')
+    rp.add_argument(
+        '--audit', action='store_true',
+        help='Lint-gate: with --commit, lint then commit; without, lint and refuse a dirty/failing tree, then push existing commits',
+    )
     rp.add_argument('--message', '-m', default='chore: sync workspace changes', help='Commit message')
     rc = add('commit', 'Lint-gated per-repo commit of dirty workspace repositories',
              cmd_repo_commit, parent=repo_sub)

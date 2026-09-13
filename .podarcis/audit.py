@@ -12,6 +12,8 @@ from pathlib import Path
 from podarcis.repos import get_repo_names
 from podarcis.tui.root import is_wiki_root
 
+MAX_WORDS = 1500
+
 
 def python_bin() -> str:
     '''Interpreter that can import this package. Never checkout ``.venv/bin/python``.'''
@@ -20,7 +22,16 @@ def python_bin() -> str:
     return shutil.which('python3') or 'python3'
 
 
+def bundled_check_links() -> Path:
+    return Path(__file__).resolve().parent / 'wiki_check_links.py'
+
+
 def check_links_path(root: Path | str | None = None) -> Path:
+    '''Prefer the checkout copy (run_audit), then engine tree, then package data.
+
+    JSON mapping lives in this module so an older checkout script without
+    ``to_json_payload`` still works for ``podarcis lint --json``.
+    '''
     if root is not None:
         local = Path(root) / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
         if local.is_file():
@@ -29,6 +40,9 @@ def check_links_path(root: Path | str | None = None) -> Path:
     engine = ROOT_DIR / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
     if engine.is_file():
         return engine
+    bundled = bundled_check_links()
+    if bundled.is_file():
+        return bundled
     raise FileNotFoundError('check_links.py not found')
 
 
@@ -46,6 +60,54 @@ def lint_json_path(root: Path) -> Path:
     return Path(root) / 'tmp' / 'tui' / 'lint.json'
 
 
+def file_issues(path: str, res: dict, *, max_words: int = MAX_WORDS) -> list[dict]:
+    '''Map one ``run_audit`` result to ``{code, detail}`` records.'''
+    issues: list[dict] = []
+    if res.get('bloated_directory'):
+        issues.append({'code': 'bloated_directory', 'detail': str(res['bloated_directory'])})
+    parts = Path(path).as_posix().split('/')
+    if 'wiki' in parts or 'user' in parts:
+        if res.get('word_count', 0) > max_words:
+            issues.append({'code': 'page_length', 'detail': str(res['word_count'])})
+    for err in res.get('yaml_errors') or []:
+        issues.append({'code': 'yaml_error', 'detail': str(err)})
+    for item in res.get('broken_links') or []:
+        if isinstance(item, (tuple, list)) and item:
+            link = item[0]
+            target = item[1] if len(item) > 1 else ''
+            detail = f'{link} -> {target}' if target else str(link)
+        else:
+            detail = str(item)
+        issues.append({'code': 'broken_link', 'detail': detail})
+    for ref in res.get('missing_footnotes') or []:
+        issues.append({'code': 'missing_footnote', 'detail': str(ref)})
+    for ref in res.get('unused_footnotes') or []:
+        issues.append({'code': 'unused_footnote', 'detail': str(ref)})
+    for ref in res.get('unmatched_sources') or []:
+        issues.append({'code': 'unmatched_source', 'detail': str(ref)})
+    for ref in res.get('positional_footnotes') or []:
+        issues.append({'code': 'positional_footnote', 'detail': str(ref)})
+    for item in res.get('missing_frontmatter') or []:
+        issues.append({'code': 'missing_frontmatter', 'detail': str(item)})
+    return issues
+
+
+def to_json_payload(audit_results: dict, root: str, *, max_words: int = MAX_WORDS) -> dict:
+    '''``podarcis lint --json`` object: path → list of ``{code, detail}``.'''
+    root_path = Path(root).resolve()
+    files: dict[str, list[dict]] = {}
+    for path, res in (audit_results or {}).items():
+        issues = file_issues(str(path), res, max_words=max_words)
+        if not issues:
+            continue
+        try:
+            rel = Path(path).resolve().relative_to(root_path).as_posix()
+        except ValueError:
+            rel = str(path)
+        files[rel] = issues
+    return {'ok': not files, 'root': str(root_path), 'files': files}
+
+
 def write_lint_json(root: Path, payload: dict) -> Path | None:
     if not is_wiki_root(root):
         return None
@@ -61,7 +123,8 @@ def lint(root: Path | str, path: str | Path | None = None, *, fix: bool = False)
     target = Path(path).resolve() if path else root_path
     mod = load_check_links(root_path)
     results = mod.run_audit(str(target), do_fix=fix)
-    payload = mod.to_json_payload(results, str(root_path))
+    max_words = int(getattr(mod, 'MAX_WORDS', MAX_WORDS) or MAX_WORDS)
+    payload = to_json_payload(results, str(root_path), max_words=max_words)
     write_lint_json(root_path, payload)
     return payload
 
@@ -97,20 +160,33 @@ def dirty_repos(root: Path | str) -> list[Path]:
     return found
 
 
-def commit_repos(repos: list[Path], message: str) -> list[str]:
-    '''Per-repo ``git add``; never flatten workspace into wiki or add at engine root.'''
+def _commit_repos(repos: list[Path], message: str) -> tuple[list[str], str]:
     done: list[str] = []
+    errors: list[str] = []
     for repo in repos:
         repo = Path(repo).resolve()
         if not (repo / '.git').is_dir():
             continue
-        subprocess.run(['git', 'add', '-A'], cwd=repo, capture_output=True, text=True, check=False)
+        added = subprocess.run(
+            ['git', 'add', '-A'], cwd=repo, capture_output=True, text=True, check=False,
+        )
+        if added.returncode != 0:
+            errors.append(f'{repo.name} add: {(added.stderr or added.stdout).strip()}')
+            continue
         proc = subprocess.run(
             ['git', 'commit', '-m', message],
             cwd=repo, capture_output=True, text=True, check=False,
         )
         if proc.returncode == 0:
             done.append(repo.name)
+        else:
+            errors.append(f'{repo.name}: {(proc.stderr or proc.stdout).strip()}')
+    return done, '\n'.join(errors)
+
+
+def commit_repos(repos: list[Path], message: str) -> list[str]:
+    '''Per-repo ``git add``; never flatten workspace into wiki or add at engine root.'''
+    done, _err = _commit_repos(repos, message)
     return done
 
 
@@ -123,7 +199,13 @@ def audit_and_commit(root: Path | str, message: str) -> dict:
     dirty = dirty_repos(root_path)
     if not dirty:
         return {'ok': True, 'committed': [], 'message': 'nothing to commit'}
-    committed = commit_repos(dirty, message)
+    committed, err = _commit_repos(dirty, message)
+    if len(committed) < len(dirty):
+        return {
+            'ok': False,
+            'committed': committed,
+            'message': err or 'commit failed',
+        }
     return {'ok': True, 'committed': committed, 'message': 'committed ' + ', '.join(committed)}
 
 

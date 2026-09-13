@@ -13,6 +13,10 @@ COMMIT_MODULE = 'podarcis.tui.actions.commit'
 SYNC_ACTION = 'podarcis.wiki.sync'
 
 _KEY_RE = re.compile(r'(?m)^\s*key\s*=\s*["\']([^"\']+)["\']')
+_STOCK_PYTHON_RE = re.compile(
+    r'(command\s*=\s*")python3( -m podarcis\.tui\.)'
+)
+_ASSIGN_RE = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$')
 
 
 def plugin_manifest() -> Path | None:
@@ -95,6 +99,57 @@ def present_keys(text: str) -> set[str]:
     return set(_KEY_RE.findall(text or ''))
 
 
+def _unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+        return value[1:-1]
+    return value
+
+
+def parse_key_blocks(text: str) -> list[dict]:
+    '''Parse live ``[[keys.command]]`` tables into dicts.'''
+    blocks: list[dict] = []
+    current: dict | None = None
+    for raw in (text or '').splitlines():
+        line = raw.strip()
+        if line == '[[keys.command]]':
+            if current:
+                blocks.append(current)
+            current = {}
+            continue
+        if current is None:
+            continue
+        if line.startswith('[') and not line.startswith('[['):
+            blocks.append(current)
+            current = None
+            continue
+        m = _ASSIGN_RE.match(line)
+        if not m:
+            continue
+        current[m.group(1)] = _unquote(m.group(2))
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def rewrite_stock_python(dest: Path, python_bin: str | None = None) -> int:
+    '''Rewrite template ``python3 -m podarcis.tui.`` tokens to ``python_bin``.
+
+    Custom commands are left alone. Idempotent when the live file already
+    points at this interpreter.
+    '''
+    py = python_bin or sys.executable or 'python3'
+    path = Path(dest)
+    if not path.is_file() or py == 'python3':
+        return 0
+    text = path.read_text(encoding='utf-8')
+    escaped = py.replace('\\', '\\\\').replace('"', '\\"')
+    new, n = _STOCK_PYTHON_RE.subn(rf'\1{escaped}\2', text)
+    if n:
+        path.write_text(new, encoding='utf-8')
+    return n
+
+
 def merge_overlay_keys(
     dest: Path,
     *,
@@ -115,9 +170,9 @@ def merge_overlay_keys(
         chunks.append(format_key_block(spec))
         added.append(spec['key'])
         existing.add(spec['key'])
-    if not chunks:
-        return []
-    body = text.rstrip()
-    extra = '\n\n' + '\n\n'.join(chunks) + '\n'
-    path.write_text((body + extra) if body else extra.lstrip(), encoding='utf-8')
+    if chunks:
+        body = text.rstrip()
+        extra = '\n\n' + '\n\n'.join(chunks) + '\n'
+        path.write_text((body + extra) if body else extra.lstrip(), encoding='utf-8')
+    rewrite_stock_python(path, python_bin=py)
     return added
