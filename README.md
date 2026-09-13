@@ -31,7 +31,7 @@ graph TD
 ```text
 ├── .apm/                    # Authored agent context, in APM package layout
 │   ├── agents/              # Subagent personas (*.agent.md — researcher, synthesizer, …)
-│   └── skills/              # Domain knowledge (self-improvement, python-skill, synthesizer-*)
+│   └── skills/              # Domain knowledge (self-improvement, synthesizer-*)
 ├── .agents/                 # MCP servers and scheduled jobs
 │   ├── mcp/                 # MCP servers (wiki, research, diagnostics)
 │   └── jobs/                # Scheduled job definitions (systemd user timers)

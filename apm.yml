@@ -13,13 +13,16 @@ targets:
 # Pinned. apm.lock.yaml already records resolved commits, so an install
 # reproduces either way; pinning here is what stops `main` moving under the
 # declaration itself. Bump deliberately with `apm update`.
-# overleaf-suggest publishes no tags, so it pins by commit.
+# overleaf-suggest and python-skill publish no tags, so they pin by commit.
 dependencies:
   apm:
     - git: https://github.com/XicuM/market-skill.git#v1.0.0
     - git: https://github.com/XicuM/menumaker.git#v1.0.0
     - git: ssh://git@gitlab-internal.bsc.es/esantigo/overleaf-suggest.git#21d3be3efd86f5686d289ca8df1672920a30b770
       type: gitlab
+    - git: https://gist.github.com/XicuM/fd156640d27c82e90e0e4e57ae34588b.git
+      ref: 60d874473c55456affc9c99b75df9e8bcb16548d
+      alias: python-skill
   mcp: []
 
 # APM deploys skill files; it does not manage language runtimes. Each package

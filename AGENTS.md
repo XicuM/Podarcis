@@ -38,11 +38,10 @@ Skills (`.apm/skills/`) inject specialized domain knowledge on-demand. Like pers
 
 - **synthesizer-local** / **synthesizer-gdrive**: Backend-specific citation rules. The Synthesizer selects one at runtime from `sources_backend`.
 - **self-improvement**: Diagnostic session analysis and platform pain-point resolution.
-- **python-skill**: Python style and architecture conventions for platform work.
 
 ### External Context (APM)
 
-Context this repo does **not** author — a colleague's skill, an extracted tool — is declared in `apm.yml` and installed with `apm install` ([Agent Package Manager](https://microsoft.github.io/apm/)). APM resolves each dependency from git into `apm_modules/`, records the exact commit in `apm.lock.yaml`, and deploys it into every harness root named by `targets:`. Never vendor a copy by hand: a tracked copy of someone else's repo has no upstream and drifts silently.
+Context this repo does **not** author — a colleague's skill, an extracted tool — is declared in `apm.yml` and installed with `apm install` ([Agent Package Manager](https://microsoft.github.io/apm/)). APM resolves each dependency from git into `apm_modules/`, records the exact commit in `apm.lock.yaml`, and deploys it into every harness root named by `targets:`. Never vendor a copy by hand: a tracked copy of someone else's repo has no upstream and drifts silently. `python-skill` is one of these: a gist (`https://gist.github.com/XicuM/fd156640d27c82e90e0e4e57ae34588b.git`), not a file under `.apm/skills/`.
 
 `.apm/` is what this repo authors; `.claude/` and `.opencode/` are generated and gitignored. APM refuses to deploy through a symlinked target root, which is why those are real directories rather than symlinks into `.agents/`.
 
