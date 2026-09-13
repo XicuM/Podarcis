@@ -26,7 +26,7 @@ ACCENT = '#29b8db'
 LEFT_W, COL_GAP, RIGHT_W = 26, 4, 38
 INNER_W = LEFT_W + COL_GAP + RIGHT_W
 
-_FRONTEND_DISPLAY = {'vscode': 'VSCode', 'obsidian': 'Obsidian'}
+_FRONTEND_DISPLAY = {'vscode': 'VSCode', 'obsidian': 'Obsidian', 'herdr': 'herdr'}
 
 
 def _pad(text: str, width: int) -> str:

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 FRONTENDS = {'vscode': 'code', 'obsidian': 'obsidian', 'none': None}
+FRONTEND_NAMES = ('vscode', 'obsidian', 'herdr', 'none')
 
 from podarcis import PODARCIS_DIR, ROOT_DIR
 from podarcis.common import get_config_value, load_version_info, set_config_value
@@ -29,6 +30,8 @@ from podarcis.repos import (
     sync_repos_full,
     push_repos,
 )
+from podarcis.tui.launch import cmd_wiki
+from podarcis.tui.root import WikiRootError, find_wiki_root_or_none
 
 
 def _get_python_bin() -> str:
@@ -307,11 +310,27 @@ def _ensure_vscode_config(root: Path) -> None:
 
 
 def cmd_config_frontend(args: argparse.Namespace) -> int:
-    '''Set the frontend tool.'''
+    '''Set the frontend tool. ``herdr`` is written only to a wiki-root config.'''
     name = args.frontend_name.lower()
-    set_config_value(ROOT_DIR, name, 'frontend')
+    try:
+        wiki_root = find_wiki_root_or_none(explicit=getattr(args, 'root', None))
+    except WikiRootError as exc:
+        console.print(f'[bold red]Error:[/bold red] {exc.message}')
+        return 1
+    if name == 'herdr':
+        if wiki_root is None:
+            console.print(
+                '[bold red]Error:[/bold red] not a Podarcis checkout '
+                '(no AGENTS.md + .podarcis/config.yaml). Pass --root.'
+            )
+            return 1
+        set_config_value(wiki_root, name, 'frontend')
+        console.print(f'[bold green]✓ Frontend set to {name}.[/bold green]')
+        return 0
+    cfg_root = wiki_root if wiki_root is not None else ROOT_DIR
+    set_config_value(cfg_root, name, 'frontend')
     if name == 'vscode':
-        _ensure_vscode_config(ROOT_DIR)
+        _ensure_vscode_config(cfg_root)
     if name == 'none':
         console.print('[bold yellow]✓ Frontend set to none.[/bold yellow] Opening a frontend will be skipped.')
     else:
@@ -320,13 +339,27 @@ def cmd_config_frontend(args: argparse.Namespace) -> int:
 
 
 def cmd_frontend(args: argparse.Namespace) -> int:
-    '''Open the configured frontend.'''
+    '''Open the configured frontend. ``herdr`` attaches the wiki layout.'''
+    try:
+        wiki_root = find_wiki_root_or_none(explicit=getattr(args, 'root', None))
+    except WikiRootError as exc:
+        console.print(f'[bold red]Error:[/bold red] {exc.message}')
+        return 1
+    cfg_root = wiki_root if wiki_root is not None else ROOT_DIR
+    frontend = (get_config_value(cfg_root, 'frontend', default='none') or 'none').lower()
+    if frontend == 'herdr':
+        if wiki_root is None:
+            console.print(
+                '[bold red]Error:[/bold red] not a Podarcis checkout '
+                '(no AGENTS.md + .podarcis/config.yaml). Pass --root.'
+            )
+            return 1
+        return cmd_wiki(args)
     from podarcis.banner import display_project_banner
-    display_project_banner(ROOT_DIR)
-    frontend = get_config_value(ROOT_DIR, 'frontend', default='none')
+    display_project_banner(cfg_root)
     if frontend == 'none':
         return 0
-    return cmd_open_tool()
+    return cmd_open_tool(cfg_root)
 
 
 def cmd_interactive(args: argparse.Namespace) -> int:
@@ -611,13 +644,14 @@ def cmd_job_logs(args: argparse.Namespace) -> int:
     ).returncode
 
 
-def cmd_open_tool() -> int:
-    '''Open the configured frontend tool at the current directory.'''
-    name = get_config_value(ROOT_DIR, 'frontend', default='vscode')
-    cwd = str(ROOT_DIR)
+def cmd_open_tool(root: Path | None = None) -> int:
+    '''Open the configured frontend tool at the checkout root.'''
+    root = root if root is not None else ROOT_DIR
+    name = get_config_value(root, 'frontend', default='vscode')
+    cwd = str(root)
 
     if name.lower() == 'vscode':
-        _ensure_vscode_config(ROOT_DIR)
+        _ensure_vscode_config(root)
 
     command = FRONTENDS.get(name.lower(), name)
     if not command:
@@ -661,6 +695,7 @@ def main() -> None:
         version=f'podarcis {load_version_info(ROOT_DIR)[0]}',
     )
     parser.add_argument('-i', '--interactive', action='store_true', help='Launch interactive TUI menu')
+    parser.add_argument('--root', help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml)')
     parser.set_defaults(func=cmd_frontend)
 
     sub = parser.add_subparsers(dest='subcommand', title='Subcommands', help='Action to perform')
@@ -725,11 +760,26 @@ def main() -> None:
             .add_argument('name', help='Tool module name (skills and personas are not toggleable)')
     add_repo_config(config_sub)
     add_repo_config(repo_sub)
-    add('frontend', 'Set the frontend tool (vscode, obsidian, none)',
+    add('frontend', 'Set the frontend tool (vscode, obsidian, herdr, none)',
         cmd_config_frontend, parent=config_sub) \
-        .add_argument('frontend_name', choices=list(FRONTENDS),
-                      metavar='{vscode,obsidian,none}', help='Frontend name')
+        .add_argument('frontend_name', choices=FRONTEND_NAMES,
+                      metavar='{vscode,obsidian,herdr,none}', help='Frontend name')
     add('interactive', 'Launch interactive TUI menu', cmd_interactive, parent=config_sub)
+
+    # ── wiki ──────────────────────────────────────────────────────────────
+    wiki_p = add('wiki', 'Attach a herdr wiki layout (files | edit | agent)', cmd_wiki)
+    wiki_p.add_argument(
+        '--root', default=argparse.SUPPRESS,
+        help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml)',
+    )
+    wiki_p.add_argument('--sync', action='store_true', help='Run `podarcis repo sync` before attach')
+    wiki_p.add_argument('--dry-run', action='store_true', dest='dry_run',
+                        help='Print the launch plan without starting a herdr server')
+    wiki_p.add_argument('--reset-layout', action='store_true', dest='reset_layout',
+                        help='Recreate the files|edit|agent layout (kills live PTYs)')
+    wiki_p.add_argument('--reset-config', action='store_true', dest='reset_config',
+                        help='Re-copy the herdr session.toml template')
+    wiki_p.add_argument('path', nargs='?', help='Optional file to open in the edit pane')
 
     # ── lifecycle ─────────────────────────────────────────────────────────
     add('frontend', 'Open the configured frontend tool', cmd_frontend)

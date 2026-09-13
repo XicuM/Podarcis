@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "podarcis"
-version = "10.1.2"
+version = "10.2.1"
 description = "Podarcis Open Knowledge Format (OKF v0.2) research agent engine and CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,6 +30,9 @@ podarcis-mcp = "podarcis.gateway.server:main"
 
 [tool.setuptools.package-dir]
 podarcis = ".podarcis"
+
+[tool.setuptools.package-data]
+podarcis = ["herdr/**"]
 
 [tool.pytest.ini_options]
 norecursedirs = [".git", ".venv", ".obsidian", "__pycache__", "node_modules"]
