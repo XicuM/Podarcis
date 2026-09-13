@@ -1,10 +1,11 @@
-'''``podarcis wiki``: preflight, daemonize herdr, apply labelled layout, exec the client.'''
+'''``podarcis wiki``: tmux files | editor | herdr-agents. herdr is the right pane only.'''
 
 from __future__ import annotations
 
 import argparse
 import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -28,7 +29,6 @@ from podarcis.tui.keys import merge_overlay_keys, overlay_key_blocks, parse_key_
 from podarcis.tui.metadata import report_repo_metadata
 from podarcis.tui.root import WikiRootError, find_wiki_root
 from podarcis.tui.server import (
-    HerdrSession,
     ensure_checkout_herdr,
     ensure_herdr_server,
     ensure_session_config,
@@ -36,7 +36,14 @@ from podarcis.tui.server import (
     resolved_herdr_dir,
     session_config,
     session_sock,
-    write_linked_plugin,
+)
+from podarcis.tui.tmux_layout import (
+    TMUX_SESSION,
+    attach as tmux_attach,
+    create_session as tmux_create,
+    has_session as tmux_has_session,
+    kill_session as tmux_kill,
+    resolve_tmux,
 )
 
 
@@ -103,9 +110,10 @@ def _print_plan(
     reset_layout: bool,
 ) -> None:
     console.print('[bold #29b8db]podarcis wiki --dry-run[/bold #29b8db]\n')
+    tmux = resolve_tmux()
     console.print(f'  wiki root : {wiki_root}')
-    console.print(f'  session   : {SESSION_NAME}')
-    console.print(f'  herdr     : {deps.herdr or "(missing)"}')
+    console.print(f'  compositor: tmux ({tmux or "missing"}) session {TMUX_SESSION}')
+    console.print(f'  herdr     : {deps.herdr or "(missing)"}  (right pane only, session {SESSION_NAME})')
     console.print(f'  editor    : {shlex.join(deps.editor) if deps.editor else "(missing)"}')
     console.print(f'  files     : {deps.file_manager_name or "shell"}')
     console.print(f'  harness   : {deps.harness or "(missing)"}')
@@ -116,29 +124,18 @@ def _print_plan(
     if reset_layout:
         console.print('  layout    : would apply labelled shells (--reset-layout)')
 
-    tree = layout_tree(wiki_root)
     files_argv = _files_argv(deps, wiki_root)
     edit_argv = _edit_argv(deps, wiki_root, open_path)
-    agent_argv = [
-        deps.herdr or 'herdr', '--session', SESSION_NAME,
-        'agent', 'start', AGENT_NAME, '--kind', deps.harness or '?',
-        '--pane', '<agent-id>',
-    ]
-
-    table = Table(title='Intended layout', border_style='cyan', expand=True)
-    table.add_column('label', style='bold white', no_wrap=True)
-    table.add_column('argv', overflow='fold')
-    table.add_column('env', style='dim', overflow='fold')
+    herdr_argv = [deps.herdr or 'herdr', '--session', SESSION_NAME]
     env_s = ' '.join(f'{k}={v}' for k, v in deps.pane_env.items())
-    table.add_row(
-        PANE_FILES,
-        shlex.join(files_argv) if files_argv else '(shell)',
-        env_s,
-    )
-    table.add_row(PANE_EDIT, shlex.join(edit_argv) if edit_argv else '(missing editor)', env_s)
-    table.add_row(PANE_AGENT, shlex.join(agent_argv), env_s)
-    console.print(table)
-    console.print(f'  [dim]layout tree tab_label={tree["tab_label"]} ratio={tree["root"]["ratio"]}[/dim]')
+    console.print('Intended tmux columns (files | editor | herdr-agents):')
+    console.print(f'  files  : {shlex.join(files_argv) if files_argv else "(shell at wiki root)"}')
+    console.print(f'  editor : {shlex.join(edit_argv) if edit_argv else "(missing editor)"}')
+    console.print(f'  herdr  : {shlex.join(herdr_argv)}')
+    if env_s:
+        console.print(f'  env    : {env_s}')
+    if reset_layout:
+        console.print('  layout : would kill and recreate the tmux session (--reset-layout)')
 
     repos = Table(title='Workspace repositories', border_style='cyan')
     repos.add_column('Repo', style='bold white')
@@ -176,6 +173,8 @@ def _print_plan(
 
 
 def _preflight(wiki_root: Path, deps: ResolvedDeps, statuses: list[dict]) -> str | None:
+    if not resolve_tmux():
+        return 'tmux not found on PATH (needed as the files|editor|herdr compositor).'
     if not deps.herdr:
         return deps.herdr_missing_message
     if not deps.editor:
@@ -315,7 +314,7 @@ def dispatch_wiki(args: argparse.Namespace) -> int:
 
 
 def cmd_wiki(args: argparse.Namespace) -> int:
-    '''Attach herdr session ``podarcis`` with a files | edit | agent layout.'''
+    '''Open files | editor | herdr-agents in tmux. herdr is not the outer UI.'''
     try:
         wiki_root = find_wiki_root(explicit=getattr(args, 'root', None))
     except WikiRootError as exc:
@@ -355,7 +354,9 @@ def cmd_wiki(args: argparse.Namespace) -> int:
         console.print(f'[yellow]{warning}[/yellow]')
 
     assert deps.herdr and deps.editor and deps.harness
-    _debug(wiki_root, f'wiki_root={wiki_root} herdr={deps.herdr} harness={deps.harness}')
+    tmux = resolve_tmux()
+    assert tmux
+    _debug(wiki_root, f'wiki_root={wiki_root} tmux={tmux} herdr={deps.herdr}')
 
     cfg = ensure_session_config(reset=reset_config)
     merge_overlay_keys(cfg)
@@ -366,49 +367,38 @@ def cmd_wiki(args: argparse.Namespace) -> int:
         return _die(str(exc))
 
     env = _herdr_env(wiki_root, cfg)
-    session = HerdrSession(deps.herdr, env=env, sock=session_sock())
+    flavor = _flavor_dir(deps, wiki_root)
+    if deps.file_manager_name == 'yazi':
+        from podarcis.herdr.layout import yazi_flavor_dir
+        cfg_home = yazi_flavor_dir(flavor)
+        if cfg_home is not None:
+            env['YAZI_CONFIG_HOME'] = str(cfg_home)
     files_argv = _files_argv(deps, wiki_root)
     edit_argv = _edit_argv(deps, wiki_root, open_path)
-    _link_plugin(session, wiki_root)
+    herdr_argv = [deps.herdr, '--session', SESSION_NAME]
+
+    if reset_layout and tmux_has_session(tmux):
+        tmux_kill(tmux)
 
     try:
-        existing = find_workspace(session.cli)
-        if existing and not reset_layout:
-            session.cli('workspace', 'focus', existing['workspace_id'])
-            if open_path is not None:
-                _open_path_in_edit(
-                    session, open_path,
-                    editor=deps.editor, flavor_dir=_flavor_dir(deps, wiki_root),
-                )
-        else:
-            if existing and reset_layout:
-                panes = apply_socket_layout(
-                    session.rpc, existing['workspace_id'], wiki_root,
-                    tab_id=existing.get('active_tab_id'),
-                    cli=session.cli,
-                )
-                panes = _complete_labels(session, panes)
-                workspace_id = existing['workspace_id']
-            else:
-                panes = create_split_layout(session.cli, wiki_root)
-                workspace_id = panes['workspace']
-            for label in (PANE_FILES, PANE_EDIT, PANE_AGENT):
-                if label not in panes:
-                    return _die(f'layout is missing pane labelled {label}')
-            _run_occupants(session, panes, files_argv, edit_argv)
-            _start_agent(session, panes, deps.harness)
-            session.cli('workspace', 'focus', workspace_id)
-            _debug(wiki_root, f'panes={panes}')
-    except RuntimeError as exc:
+        if not tmux_has_session(tmux):
+            tmux_create(
+                tmux, wiki_root,
+                files_argv=files_argv,
+                edit_argv=edit_argv,
+                herdr_argv=herdr_argv,
+                environ=env,
+            )
+        elif open_path is not None:
+            from podarcis.tui.actions.edit import open_in_tmux_edit
+            err = open_in_tmux_edit(tmux, open_path, editor=deps.editor)
+            if err:
+                console.print(f'[yellow]{err}[/yellow]')
+    except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
         return _die(str(exc))
 
     try:
-        report_repo_metadata(wiki_root, session)
-    except Exception as exc:
-        _debug(wiki_root, f'metadata: {exc}')
-
-    try:
-        os.execvpe(deps.herdr, [deps.herdr, '--session', SESSION_NAME], env)
+        tmux_attach(tmux, env)
     except OSError as exc:
-        return _die(f'execvp {deps.herdr} failed: {exc}')
-    return _die(f'execvp {deps.herdr} failed')
+        return _die(f'execvp tmux failed: {exc}')
+    return _die('execvp tmux failed')

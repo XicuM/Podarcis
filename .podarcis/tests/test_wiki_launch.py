@@ -94,6 +94,7 @@ def test_dry_run_resolution(tmp_path, monkeypatch, capsys):
     _exe(bindir / 'nvim')
     _exe(bindir / 'opencode')
     _exe(bindir / 'yazi')
+    _exe(bindir / 'tmux')
     monkeypatch.setenv('HERDR_BIN', str(herdr))
     monkeypatch.setenv('PODARCIS_EDITOR', str(bindir / 'nvim'))
     monkeypatch.setenv('PATH', f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}')
@@ -110,12 +111,14 @@ def test_dry_run_resolution(tmp_path, monkeypatch, capsys):
     assert str(checkout) in out
     assert 'session' in out.lower()
     assert 'podarcis' in out
+    assert 'tmux' in out
     assert 'files' in out
     assert 'edit' in out
-    assert 'agent' in out
+    assert 'agent' in out or 'herdr' in out
     assert 'yazi' in out
     assert 'nvim' in out
     assert 'opencode' in out
+    assert 'right pane' in out.lower() or 'compositor' in out.lower()
 
 
 def test_missing_herdr_via_herdr_bin(tmp_path, monkeypatch, capsys):
@@ -150,6 +153,7 @@ def test_dry_run_does_not_start_server(tmp_path, monkeypatch):
     herdr = _exe(bindir / 'herdr')
     _exe(bindir / 'nvim')
     _exe(bindir / 'opencode')
+    _exe(bindir / 'tmux')
     monkeypatch.setenv('HERDR_BIN', str(herdr))
     monkeypatch.setenv('PODARCIS_EDITOR', str(bindir / 'nvim'))
     monkeypatch.setenv('PATH', f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}')
@@ -331,6 +335,7 @@ def test_parent_root_survives_wiki_subcommand(tmp_path, monkeypatch, capsys):
     herdr = _exe(bindir / 'herdr')
     _exe(bindir / 'nvim')
     _exe(bindir / 'opencode')
+    _exe(bindir / 'tmux')
     monkeypatch.setenv('HERDR_BIN', str(herdr))
     monkeypatch.setenv('PODARCIS_EDITOR', str(bindir / 'nvim'))
     monkeypatch.setenv('PATH', f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}')

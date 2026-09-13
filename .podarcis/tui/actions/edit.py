@@ -23,6 +23,7 @@ from podarcis.tui.deps import resolve_deps
 from podarcis.tui.root import WikiRootError, find_wiki_root
 from podarcis.tui.server import HerdrSession, package_herdr_dir, session_sock
 from podarcis.tui.session import in_wiki_session
+from podarcis.tui.tmux_layout import resolve_tmux, send_to_edit, has_session as tmux_has_session
 
 
 def vim_escape(path: str) -> str:
@@ -49,6 +50,23 @@ def resolve_edit_path(path: str, wiki_root: Path) -> Path:
         return cwd_hit.resolve()
     hit = wiki_root / candidate
     return hit.resolve() if hit.exists() else hit
+
+
+def open_in_tmux_edit(tmux: str, path: Path, *, editor: list[str]) -> str | None:
+    '''Open ``path`` in the center tmux pane (nvim/helix/shell).'''
+    name = Path(editor[0]).name.lstrip('-').lower() if editor else ''
+    target = str(path)
+    try:
+        if name in ('nvim', 'nvim.exe', 'vi', 'vim'):
+            send_to_edit(tmux, ['Escape', f':e {vim_escape(target)}', 'Enter'])
+            return None
+        if name in ('helix', 'hx'):
+            send_to_edit(tmux, ['Escape', f':open {helix_escape(target)}', 'Enter'])
+            return None
+        send_to_edit(tmux, [shlex.join([*editor, target]), 'Enter'])
+        return None
+    except Exception as exc:
+        return str(exc)
 
 
 def open_in_edit_pane(
@@ -99,25 +117,28 @@ def cmd_wiki_edit(args: argparse.Namespace) -> int:
     write_current(wiki_root, path)
 
     deps = resolve_deps(wiki_root)
-    if not deps.herdr:
-        console.print(f'[bold red]Error:[/bold red] {deps.herdr_missing_message}')
-        return 1
-    if not session_sock().exists():
-        console.print(
-            '[bold red]Error:[/bold red] herdr session podarcis is not running; '
-            'launch `podarcis wiki` first.'
-        )
-        return 1
     if not deps.editor:
         console.print('[bold red]Error:[/bold red] no editor found.')
         return 1
-
-    env = os.environ.copy()
-    env['HERDR_SESSION'] = SESSION_NAME
-    env['PROJECT_ROOT'] = str(wiki_root)
-    session = HerdrSession(deps.herdr, env=env, sock=session_sock())
-    flavor = deps.flavor_dir or package_herdr_dir()
-    err = open_in_edit_pane(session, path, editor=deps.editor, flavor_dir=flavor)
+    tmux = resolve_tmux()
+    if tmux and tmux_has_session(tmux):
+        err = open_in_tmux_edit(tmux, path, editor=deps.editor)
+    else:
+        if not deps.herdr:
+            console.print(f'[bold red]Error:[/bold red] {deps.herdr_missing_message}')
+            return 1
+        if not session_sock().exists():
+            console.print(
+                '[bold red]Error:[/bold red] wiki tmux session is not running; '
+                'launch `podarcis wiki` first.'
+            )
+            return 1
+        env = os.environ.copy()
+        env['HERDR_SESSION'] = SESSION_NAME
+        env['PROJECT_ROOT'] = str(wiki_root)
+        session = HerdrSession(deps.herdr, env=env, sock=session_sock())
+        flavor = deps.flavor_dir or package_herdr_dir()
+        err = open_in_edit_pane(session, path, editor=deps.editor, flavor_dir=flavor)
     if err:
         console.print(f'[yellow]{err}[/yellow]')
         return 1

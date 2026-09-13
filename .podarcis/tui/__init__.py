@@ -1,4 +1,4 @@
-'''Wiki TUI launcher: attach herdr session ``podarcis``.'''
+'''Wiki TUI: tmux columns files | editor | herdr (agents only).'''
 
 SESSION_NAME = 'podarcis'
 WORKSPACE_LABEL = 'podarcis'
