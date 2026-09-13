@@ -6,6 +6,7 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
@@ -20,13 +21,17 @@ const SCROLLBACK: usize = 2000;
 
 pub struct Pane {
     parser: Arc<Mutex<vt100::Parser>>,
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
-    size: (u16, u16),
+    size: Arc<Mutex<(u16, u16)>>,
     /// Set once the child has exited, so the pane can say so instead of
     /// rendering a frozen screen.
     exited: Arc<Mutex<bool>>,
+    /// True while the child has DECSET 1016 (SGR pixels) enabled.
+    pixel_mouse: Arc<AtomicBool>,
+    /// Stops the tab-label sync thread when the pane is dropped.
+    label_sync: Arc<AtomicBool>,
 }
 
 impl Pane {
@@ -39,7 +44,16 @@ impl Pane {
         // (non-existent) socket; it must connect to the real herdr server.
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
-        Self::spawn_command(cmd, rows, cols, tx)
+        // Clear multiplexer nesting variables as done in herdr-companion
+        cmd.env_remove("HERDR_ENV");
+        cmd.env_remove("HERDR_PANE_ID");
+        cmd.env_remove("HERDR_TAB_ID");
+        if let Some(cfg_path) = super::config::session_dir().map(|d| d.join("config.toml")) {
+            if cfg_path.exists() {
+                cmd.env("HERDR_CONFIG_PATH", cfg_path);
+            }
+        }
+        Self::spawn_command(cmd, rows, cols, tx, Some(cwd))
     }
 
     pub fn spawn_command(
@@ -47,26 +61,35 @@ impl Pane {
         rows: u16,
         cols: u16,
         tx: Sender<AppEvent>,
+        label_cwd: Option<&Path>,
     ) -> Result<Self> {
         let rows = rows.max(1);
         let cols = cols.max(1);
         let pty = NativePtySystem::default()
-            .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .openpty(pty_size(rows, cols))
             .context("opening a pty for the herdr pane")?;
 
         let child = pty.slave.spawn_command(cmd).context("spawning herdr")?;
         drop(pty.slave);
 
-        let writer = pty.master.take_writer().context("taking the pty writer")?;
+        let writer = Arc::new(Mutex::new(
+            pty.master.take_writer().context("taking the pty writer")?,
+        ));
         let mut reader = pty.master.try_clone_reader().context("cloning the pty reader")?;
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
         let exited = Arc::new(Mutex::new(false));
+        let pixel_mouse = Arc::new(AtomicBool::new(false));
+        let size = Arc::new(Mutex::new((rows, cols)));
 
         {
             let parser = Arc::clone(&parser);
             let exited = Arc::clone(&exited);
+            let writer = Arc::clone(&writer);
+            let pixel_mouse = Arc::clone(&pixel_mouse);
+            let size = Arc::clone(&size);
             std::thread::spawn(move || {
                 let mut buf = [0u8; 8192];
+                let mut carry = Vec::new();
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
@@ -74,6 +97,8 @@ impl Pane {
                             if let Ok(mut parser) = parser.lock() {
                                 parser.process(&buf[..n]);
                             }
+                            let dims = size.lock().map(|g| *g).unwrap_or((1, 1));
+                            reply_child_queries(&buf[..n], &mut carry, &writer, dims, &pixel_mouse);
                             if tx.send(AppEvent::PtyOutput).is_err() {
                                 return;
                             }
@@ -87,18 +112,33 @@ impl Pane {
             });
         }
 
-        Ok(Self { parser, writer, master: pty.master, child, size: (rows, cols), exited })
+        let label_sync = match label_cwd {
+            Some(cwd) => super::labels::spawn(cwd),
+            None => Arc::new(AtomicBool::new(false)),
+        };
+
+        Ok(Self {
+            parser,
+            writer,
+            master: pty.master,
+            child,
+            size,
+            exited,
+            pixel_mouse,
+            label_sync,
+        })
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let (rows, cols) = (rows.max(1), cols.max(1));
-        if self.size == (rows, cols) {
+        let current = self.size.lock().map(|g| *g).unwrap_or((0, 0));
+        if current == (rows, cols) {
             return;
         }
-        self.size = (rows, cols);
-        let _ = self
-            .master
-            .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+        if let Ok(mut size) = self.size.lock() {
+            *size = (rows, cols);
+        }
+        let _ = self.master.resize(pty_size(rows, cols));
         if let Ok(mut parser) = self.parser.lock() {
             parser.screen_mut().set_size(rows, cols);
         }
@@ -108,8 +148,14 @@ impl Pane {
         if bytes.is_empty() {
             return;
         }
-        let _ = self.writer.write_all(bytes);
-        let _ = self.writer.flush();
+        if let Ok(mut writer) = self.writer.lock() {
+            let _ = writer.write_all(bytes);
+            let _ = writer.flush();
+        }
+    }
+
+    pub fn pixel_mouse(&self) -> bool {
+        self.pixel_mouse.load(Ordering::Relaxed)
     }
 
     pub fn is_alive(&self) -> bool {
@@ -132,13 +178,97 @@ impl Pane {
 
 impl Drop for Pane {
     fn drop(&mut self) {
+        self.label_sync.store(true, Ordering::Relaxed);
         // The pane is a child, not a daemon: closing the app closes it.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
-fn herdr_binary() -> String {
+fn pty_size(rows: u16, cols: u16) -> PtySize {
+    let (cw, ch) = super::keys::PTY_CELL_PX;
+    PtySize {
+        rows,
+        cols,
+        pixel_width: cols.saturating_mul(cw),
+        pixel_height: rows.saturating_mul(ch),
+    }
+}
+
+fn write_pty(writer: &Mutex<Box<dyn Write + Send>>, bytes: &[u8]) {
+    if let Ok(mut writer) = writer.lock() {
+        let _ = writer.write_all(bytes);
+        let _ = writer.flush();
+    }
+}
+
+/// Answer each host query once (and drop it from the buffer).
+///
+/// A leftover `\x1b[16t` in the carry would otherwise be answered on every
+/// subsequent PTY read, flooding herdr's stdin and making the pane unusable.
+fn reply_child_queries(
+    chunk: &[u8],
+    carry: &mut Vec<u8>,
+    writer: &Mutex<Box<dyn Write + Send>>,
+    size: (u16, u16),
+    pixel_mouse: &AtomicBool,
+) {
+    note_mouse_mode(chunk, pixel_mouse);
+    carry.extend_from_slice(chunk);
+
+    let mut i = 0;
+    while i < carry.len() {
+        if carry[i] != 0x1b {
+            i += 1;
+            continue;
+        }
+        if let Some((consumed, reply)) = query_reply_at(&carry[i..], size) {
+            write_pty(writer, &reply);
+            carry.drain(i..i + consumed);
+            continue;
+        }
+        i += 1;
+    }
+    if carry.len() > 64 {
+        let keep = 64;
+        carry.drain(..carry.len() - keep);
+    }
+}
+
+fn query_reply_at(buf: &[u8], size: (u16, u16)) -> Option<(usize, Vec<u8>)> {
+    let (cw, ch) = super::keys::PTY_CELL_PX;
+    let (rows, cols) = size;
+    let win_h = u32::from(rows).saturating_mul(u32::from(ch));
+    let win_w = u32::from(cols).saturating_mul(u32::from(cw));
+    if buf.starts_with(b"\x1b[16t") {
+        return Some((5, format!("\x1b[6;{ch};{cw}t").into_bytes()));
+    }
+    if buf.starts_with(b"\x1b[14t") {
+        return Some((5, format!("\x1b[4;{win_h};{win_w}t").into_bytes()));
+    }
+    if buf.starts_with(b"\x1b[18t") {
+        return Some((5, format!("\x1b[8;{rows};{cols}t").into_bytes()));
+    }
+    // RESET: we forward cell-coordinate SGR. Claiming SET (1016) makes herdr
+    // interpret those reports as pixels and every click lands in the first cell.
+    if buf.starts_with(b"\x1b[?1016$p") {
+        return Some((8, b"\x1b[?1016;2$y".to_vec()));
+    }
+    None
+}
+
+fn note_mouse_mode(buf: &[u8], pixel_mouse: &AtomicBool) {
+    // Combined DECSET/DECRST: look for 1016 followed by h or l in a CSI ?.
+    let text = String::from_utf8_lossy(buf);
+    if text.contains("1016h") {
+        pixel_mouse.store(true, Ordering::Relaxed);
+    }
+    if text.contains("1016l") {
+        pixel_mouse.store(false, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn herdr_binary() -> String {
     std::env::var("PODARCIS_HERDR").unwrap_or_else(|_| "herdr".to_string())
 }
 
@@ -168,9 +298,14 @@ pub fn reload_config(flavor: Flavor) {
         return;
     }
     let binary = herdr_binary();
+    let config_path = super::config::session_dir().map(|d| d.join("config.toml"));
     std::thread::spawn(move || {
-        let _ = std::process::Command::new(binary)
-            .args(["--session", super::config::SESSION, "server", "reload-config"])
+        let mut cmd = std::process::Command::new(binary);
+        cmd.args(["--session", super::config::SESSION, "server", "reload-config"]);
+        if let Some(path) = config_path {
+            cmd.env("HERDR_CONFIG_PATH", path);
+        }
+        let _ = cmd
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -187,7 +322,7 @@ mod tests {
         let mut cmd = CommandBuilder::new("/bin/sh");
         cmd.args(["-c", script]);
         cmd.env("TERM", "xterm-256color");
-        (Pane::spawn_command(cmd, 10, 40, tx).unwrap(), rx)
+        (Pane::spawn_command(cmd, 10, 40, tx, None).unwrap(), rx)
     }
 
     fn wait_for(rx: &std::sync::mpsc::Receiver<AppEvent>, want_exit: bool) {
@@ -261,10 +396,32 @@ mod tests {
     }
 
     #[test]
+    fn decset_1016_turns_pixel_mouse_on() {
+        let flag = AtomicBool::new(false);
+        note_mouse_mode(b"\x1b[?1000;1002;1006;1016h", &flag);
+        assert!(flag.load(Ordering::Relaxed));
+        note_mouse_mode(b"\x1b[?1016l", &flag);
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn pixel_mouse_decrqm_is_answered_reset_so_clicks_stay_in_cells() {
+        let (len, reply) = query_reply_at(b"\x1b[?1016$p extra", (24, 80)).unwrap();
+        assert_eq!(len, 8);
+        assert_eq!(reply, b"\x1b[?1016;2$y");
+    }
+
+    #[test]
+    fn host_queries_are_consumed_so_they_are_not_answered_twice() {
+        let (len, _) = query_reply_at(b"\x1b[16t\x1b[16t", (24, 80)).unwrap();
+        assert_eq!(len, 5, "only the first query is consumed");
+    }
+
+    #[test]
     fn a_missing_binary_is_an_error_not_a_panic() {
         let (tx, _rx) = std::sync::mpsc::channel();
         let cmd = CommandBuilder::new("/nonexistent/herdr-binary");
-        assert!(Pane::spawn_command(cmd, 10, 40, tx).is_err());
+        assert!(Pane::spawn_command(cmd, 10, 40, tx, None).is_err());
     }
 
     #[test]

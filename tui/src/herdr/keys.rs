@@ -5,7 +5,9 @@
 //! wrong is how embedded panes end up feeling "almost right" — arrows that
 //! insert letters, a Ctrl-C that does nothing.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 /// Encode a key event as the bytes a terminal would send.
 ///
@@ -119,6 +121,74 @@ fn encode_function(n: u8, m: KeyModifiers) -> Vec<u8> {
     }
 }
 
+/// Cell size advertised on the herdr PTY when the host ioctl has no pixels.
+/// Herdr's SGR-pixels mode (1016) interprets reports in these units.
+pub const PTY_CELL_PX: (u16, u16) = (8, 16);
+
+/// Encode a mouse event in SGR (1006) format for the child PTY.
+/// `col` and `row` are 1-based cell coordinates within the child's screen.
+/// When `pixel` is set, they are converted to 1-based pixel coordinates (DEC 1016).
+pub fn encode_mouse(mouse: &MouseEvent, col: u16, row: u16, pixel: Option<(u16, u16)>) -> Vec<u8> {
+    let m = mouse.modifiers;
+    let mut modifier_bits = 0u8;
+    if m.contains(KeyModifiers::SHIFT) {
+        modifier_bits |= 4;
+    }
+    if m.contains(KeyModifiers::ALT) {
+        modifier_bits |= 8;
+    }
+    if m.contains(KeyModifiers::CONTROL) {
+        modifier_bits |= 16;
+    }
+
+    let (base, release) = match mouse.kind {
+        MouseEventKind::Down(btn) => {
+            let b = match btn {
+                MouseButton::Left => 0,
+                MouseButton::Middle => 1,
+                MouseButton::Right => 2,
+            };
+            (b, false)
+        }
+        MouseEventKind::Up(btn) => {
+            let b = match btn {
+                MouseButton::Left => 0,
+                MouseButton::Middle => 1,
+                MouseButton::Right => 2,
+            };
+            (b, true)
+        }
+        MouseEventKind::Drag(btn) => {
+            let b = match btn {
+                MouseButton::Left => 0,
+                MouseButton::Middle => 1,
+                MouseButton::Right => 2,
+            };
+            (b + 32, false)
+        }
+        MouseEventKind::ScrollDown => (65, false),
+        MouseEventKind::ScrollUp => (64, false),
+        MouseEventKind::ScrollLeft => (66, false),
+        MouseEventKind::ScrollRight => (67, false),
+        MouseEventKind::Moved => (35, false),
+    };
+
+    let (col, row) = if let Some((cw, ch)) = pixel {
+        let cw = u32::from(cw.max(1));
+        let ch = u32::from(ch.max(1));
+        (
+            u32::from(col.saturating_sub(1)) * cw + 1,
+            u32::from(row.saturating_sub(1)) * ch + 1,
+        )
+    } else {
+        (u32::from(col), u32::from(row))
+    };
+
+    let code = base + modifier_bits;
+    let suffix = if release { 'm' } else { 'M' };
+    format!("\x1b[<{code};{col};{row}{suffix}").into_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +294,90 @@ mod tests {
     fn unknown_keys_send_nothing_rather_than_garbage() {
         assert!(key(KeyCode::CapsLock, NONE).is_empty());
         assert!(key(KeyCode::F(25), NONE).is_empty());
+    }
+
+    #[test]
+    fn mouse_left_click_encodes_sgr_press_and_release() {
+        let down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 11,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(encode_mouse(&down, 11, 1, None), b"\x1b[<0;11;1M");
+
+        let up = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 11,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(encode_mouse(&up, 11, 1, None), b"\x1b[<0;11;1m");
+    }
+
+    #[test]
+    fn mouse_right_click_and_modifiers() {
+        let right_down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 5,
+            row: 10,
+            modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        };
+        // Right button (2) + Shift (4) + Ctrl (16) = 22
+        assert_eq!(encode_mouse(&right_down, 5, 10, None), b"\x1b[<22;5;10M");
+    }
+
+    #[test]
+    fn mouse_scroll_and_drag() {
+        let scroll_up = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 20,
+            row: 15,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(encode_mouse(&scroll_up, 20, 15, None), b"\x1b[<64;20;15M");
+
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 20,
+            row: 15,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(encode_mouse(&scroll_down, 20, 15, None), b"\x1b[<65;20;15M");
+
+        let drag = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 8,
+            row: 12,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Left button (0) + 32 = 32
+        assert_eq!(encode_mouse(&drag, 8, 12, None), b"\x1b[<32;8;12M");
+    }
+
+    #[test]
+    fn mouse_pixel_mode_scales_cells_to_pty_pixels() {
+        let down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        // cell (3,2) with 8×16 cells → pixel (17, 17)
+        assert_eq!(
+            encode_mouse(&down, 3, 2, Some(PTY_CELL_PX)),
+            b"\x1b[<0;17;17M"
+        );
+    }
+
+    #[test]
+    fn mouse_motion_encodes_sgr_any_event() {
+        let moved = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 4,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(encode_mouse(&moved, 4, 5, None), b"\x1b[<35;4;5M");
     }
 }

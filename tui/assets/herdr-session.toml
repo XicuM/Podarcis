@@ -73,8 +73,6 @@ previous_workspace = ["prefix+shift+p", "alt+up"]
 next_workspace = ["prefix+shift+n", "alt+down"]
 
 [ui]
-accent = "blue"
-
 # tmux drew single-line dividers between adjacent panes and no outer frame
 pane_gaps = false
 pane_outer_borders = false
@@ -91,10 +89,10 @@ prompt_new_tab_name = false
 # set -g mouse on
 mouse_capture = true
 
-# status-right had the zoom flag followed by #h
-tab_bar_right = [{ type = "zoom" }, { type = "hostname" }]
+# status-right had the zoom flag followed by #h; the hostname badge is hidden
+tab_bar_right = [{ type = "zoom" }]
 
-window_title = "{hostname}: {workspace}"
+window_title = "{workspace}"
 agent_panel_sort = "spaces"
 status_indicators = "dots"
 

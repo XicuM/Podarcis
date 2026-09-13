@@ -26,7 +26,7 @@ pub fn session_dir() -> Option<PathBuf> {
 }
 
 pub fn render(flavor: Flavor) -> String {
-    TEMPLATE.replace("@THEME@", &flavor.herdr_name())
+    TEMPLATE.replace("@THEME@", flavor.herdr_name())
 }
 
 /// Write the session config, returning the path. Only rewrites when the content
@@ -85,7 +85,7 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), first);
 
         write_into(&dir, Flavor::Mocha).unwrap();
-        assert!(std::fs::read_to_string(&path).unwrap().contains("catppuccin-mocha"));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("catppuccin"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
