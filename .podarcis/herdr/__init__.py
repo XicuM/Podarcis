@@ -1,1 +1,1 @@
-'''herdr session template, layout recipe, and (later) flavors.'''
+'''herdr session template, layout recipe, plugin, and flavors.'''

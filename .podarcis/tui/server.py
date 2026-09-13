@@ -8,6 +8,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -49,17 +50,74 @@ def ensure_session_config(*, reset: bool = False, dest: Path | None = None) -> P
     return path
 
 
+def _merge_missing_herdr(src: Path, dest: Path) -> None:
+    '''Copy files that exist in package data but not in a stale checkout tree.'''
+    dest.mkdir(parents=True, exist_ok=True)
+    for item in src.iterdir():
+        if item.name in ('__pycache__',) or item.suffix == '.pyc':
+            continue
+        target = dest / item.name
+        if item.is_dir():
+            _merge_missing_herdr(item, target)
+        elif not target.exists():
+            shutil.copy2(item, target)
+
+
+def herdr_dir_has_flavors(path: Path) -> bool:
+    return (path / 'flavors' / 'yazi' / 'yazi.toml').is_file() or (
+        path / 'flavors' / 'nvim' / 'wiki.lua'
+    ).is_file()
+
+
 def ensure_checkout_herdr(wiki_root: Path) -> Path:
-    '''Copy package ``herdr/**`` into ``$WIKI_ROOT/.podarcis/herdr`` if that dir is missing.'''
+    '''Copy package ``herdr/**`` into ``$WIKI_ROOT/.podarcis/herdr`` if missing files.'''
     dest = Path(wiki_root) / '.podarcis' / 'herdr'
-    if dest.is_dir():
-        return dest
     src = package_herdr_dir()
     if not src.is_dir():
-        return src
+        return dest if dest.is_dir() else src
     if src.resolve() == dest.resolve():
         return dest
-    shutil.copytree(src, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    if not dest.is_dir():
+        shutil.copytree(src, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        return dest
+    _merge_missing_herdr(src, dest)
+    return dest
+
+
+def resolved_herdr_dir(wiki_root: Path | None = None) -> Path:
+    '''Checkout flavors if present, else package data (PR1 trees lack flavors).'''
+    pkg = package_herdr_dir()
+    if wiki_root is not None:
+        checkout = Path(wiki_root) / '.podarcis' / 'herdr'
+        if herdr_dir_has_flavors(checkout):
+            return checkout
+    return pkg
+
+
+def plugin_link_dir(root: Path | None = None) -> Path:
+    return (root or session_dir()) / 'plugin'
+
+
+def _toml_basic_string(value: str) -> str:
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def write_linked_plugin(
+    herdr_dir: Path,
+    *,
+    python: str | None = None,
+    dest: Path | None = None,
+) -> Path:
+    '''Copy the manifest into the user session dir, rewriting ``python3`` to ``sys.executable``.'''
+    python = python or sys.executable
+    dest = dest if dest is not None else plugin_link_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+    src = Path(herdr_dir) / 'herdr-plugin.toml'
+    if not src.is_file():
+        src = package_herdr_dir() / 'herdr-plugin.toml'
+    text = src.read_text(encoding='utf-8')
+    text = text.replace('"python3"', _toml_basic_string(python))
+    (dest / 'herdr-plugin.toml').write_text(text, encoding='utf-8')
     return dest
 
 

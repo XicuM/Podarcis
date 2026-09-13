@@ -1,0 +1,22 @@
+# YAZI_CONFIG_HOME points at this directory (the one that contains yazi.toml).
+# Start at the wiki root (launcher argv); never flatten wiki/sources/workspace.
+
+[mgr]
+sort_by = "natural"
+sort_dir_first = true
+linemode = "lint"
+show_hidden = false
+title_format = "podarcis: {cwd}"
+
+[opener]
+wiki-edit = [
+  { run = 'podarcis wiki edit -- "$@"', orphan = true, desc = "Open in wiki edit pane" },
+]
+
+[open]
+rules = [
+  { name = "*.md", use = "wiki-edit" },
+  { mime = "text/*", use = "wiki-edit" },
+  { mime = "application/json", use = "wiki-edit" },
+  { name = "*", use = "wiki-edit" },
+]

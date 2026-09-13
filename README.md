@@ -107,6 +107,8 @@ First `podarcis` run after install downloads the GGUF models (EmbeddingGemma-300
 | `podarcis test` | Run test suite across all MCP servers and skills |
 | `podarcis lint` | Run link integrity check across wiki markdown files |
 | `podarcis wiki` | Attach a herdr wiki layout (files \| edit \| agent) at the checkout root |
+| `podarcis wiki edit -- PATH` | Open PATH in the labelled edit pane and write `tmp/tui/current.json` |
+| `podarcis wiki persona NAME` | Spawn a persona pane (researcher, synthesizer, protocol-architect, auditor) |
 
 ### 5. Subagent Quick Reference
 
