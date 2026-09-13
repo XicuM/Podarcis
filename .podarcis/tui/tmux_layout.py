@@ -2,6 +2,11 @@
 
 tmux is the compositor. herdr is only the right pane (agent multiplexer),
 not the outer UI.
+
+Pane indexes are never used: user configs often set pane-base-index 1, so
+``session:window.0`` fails with ``can't find pane: 0``. Commands are the
+pane process (new-session/split-window shell-command). Later targeting uses
+``#{pane_id}`` sorted by ``#{pane_left}``.
 '''
 
 from __future__ import annotations
@@ -14,9 +19,10 @@ from pathlib import Path
 
 TMUX_SESSION = 'podarcis-wiki'
 WINDOW = 'wiki'
-PANE_FILES = 0
-PANE_EDIT = 1
-PANE_AGENT = 2
+ENV_KEYS = (
+    'PROJECT_ROOT', 'HERDR_SESSION', 'HERDR_CONFIG_PATH',
+    'YAZI_CONFIG_HOME', 'PATH',
+)
 
 
 def resolve_tmux(*, environ: dict[str, str] | None = None) -> str | None:
@@ -30,8 +36,8 @@ def resolve_tmux(*, environ: dict[str, str] | None = None) -> str | None:
     return shutil.which('tmux')
 
 
-def pane_target(index: int) -> str:
-    return f'{TMUX_SESSION}:{WINDOW}.{index}'
+def window_target() -> str:
+    return f'{TMUX_SESSION}:{WINDOW}'
 
 
 def has_session(tmux: str) -> bool:
@@ -51,18 +57,39 @@ def kill_session(tmux: str) -> None:
     )
 
 
-def _send_command(tmux: str, pane: int, argv: list[str]) -> None:
-    subprocess.run(
-        [tmux, 'send-keys', '-t', pane_target(pane), shlex.join(argv), 'C-m'],
+def panes_left_to_right(tmux: str) -> list[str]:
+    '''Unique pane ids (``%N``) from left to right. Independent of pane-base-index.'''
+    r = subprocess.run(
+        [tmux, 'list-panes', '-t', window_target(), '-F', '#{pane_left} #{pane_id}'],
+        capture_output=True,
+        text=True,
         check=True,
     )
+    rows: list[tuple[int, str]] = []
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        rows.append((int(parts[0]), parts[1]))
+    rows.sort()
+    return [pid for _, pid in rows]
 
 
-def _setenv(tmux: str, key: str, value: str) -> None:
-    subprocess.run(
-        [tmux, 'set-environment', '-t', TMUX_SESSION, key, value],
-        check=True,
-    )
+def pane_count(tmux: str) -> int:
+    if not has_session(tmux):
+        return 0
+    try:
+        return len(panes_left_to_right(tmux))
+    except subprocess.CalledProcessError:
+        return 0
+
+
+def _env_flags(environ: dict[str, str]) -> list[str]:
+    flags: list[str] = []
+    for key in ENV_KEYS:
+        if key in environ:
+            flags.extend(['-e', f'{key}={environ[key]}'])
+    return flags
 
 
 def create_session(
@@ -75,64 +102,51 @@ def create_session(
     environ: dict[str, str],
 ) -> None:
     '''Create a detached 3-pane session. Left files, center editor, right herdr.'''
-    subprocess.run(
-        [
-            tmux, 'new-session', '-d',
-            '-s', TMUX_SESSION,
-            '-n', WINDOW,
-            '-c', str(wiki_root),
-        ],
-        check=True,
-        env=environ,
-    )
-    for key in (
-        'PROJECT_ROOT', 'HERDR_SESSION', 'HERDR_CONFIG_PATH',
-        'YAZI_CONFIG_HOME', 'PATH',
-    ):
-        if key in environ:
-            _setenv(tmux, key, environ[key])
-
-    if files_argv:
-        _send_command(tmux, PANE_FILES, files_argv)
-
-    subprocess.run(
-        [
-            tmux, 'split-window', '-h',
-            '-t', pane_target(PANE_FILES),
-            '-c', str(wiki_root),
-        ],
-        check=True,
-        env=environ,
-    )
-    _send_command(tmux, PANE_EDIT, edit_argv)
-
-    subprocess.run(
-        [
-            tmux, 'split-window', '-h',
-            '-t', pane_target(PANE_EDIT),
-            '-c', str(wiki_root),
-        ],
-        check=True,
-        env=environ,
-    )
-    _send_command(tmux, PANE_AGENT, herdr_argv)
-
-    subprocess.run(
-        [tmux, 'select-layout', '-t', f'{TMUX_SESSION}:{WINDOW}', 'even-horizontal'],
-        check=True,
-    )
-    subprocess.run(
-        [tmux, 'resize-pane', '-t', pane_target(PANE_FILES), '-x', '22%'],
-        check=True,
-    )
-    subprocess.run(
-        [tmux, 'resize-pane', '-t', pane_target(PANE_AGENT), '-x', '32%'],
-        check=True,
-    )
-    subprocess.run(
-        [tmux, 'select-pane', '-t', pane_target(PANE_EDIT)],
-        check=True,
-    )
+    cwd = str(wiki_root)
+    flags = _env_flags(environ)
+    files_cmd = shlex.join(files_argv) if files_argv else (environ.get('SHELL') or '/bin/bash')
+    wt = window_target()
+    try:
+        subprocess.run(
+            [
+                tmux, 'new-session', '-d',
+                '-s', TMUX_SESSION, '-n', WINDOW, '-c', cwd,
+                *flags,
+                files_cmd,
+            ],
+            check=True,
+            env=environ,
+        )
+        subprocess.run(
+            [
+                tmux, 'split-window', '-h', '-t', wt, '-c', cwd,
+                *flags,
+                shlex.join(edit_argv),
+            ],
+            check=True,
+            env=environ,
+        )
+        subprocess.run(
+            [
+                tmux, 'split-window', '-h', '-t', wt, '-c', cwd,
+                *flags,
+                shlex.join(herdr_argv),
+            ],
+            check=True,
+            env=environ,
+        )
+        subprocess.run(
+            [tmux, 'select-layout', '-t', wt, 'even-horizontal'],
+            check=True,
+        )
+        ids = panes_left_to_right(tmux)
+        if len(ids) >= 3:
+            subprocess.run([tmux, 'resize-pane', '-t', ids[0], '-x', '22%'], check=True)
+            subprocess.run([tmux, 'resize-pane', '-t', ids[2], '-x', '32%'], check=True)
+            subprocess.run([tmux, 'select-pane', '-t', ids[1]], check=True)
+    except Exception:
+        kill_session(tmux)
+        raise
 
 
 def attach(tmux: str, environ: dict[str, str]) -> None:
@@ -141,7 +155,10 @@ def attach(tmux: str, environ: dict[str, str]) -> None:
 
 def send_to_edit(tmux: str, keys: list[str]) -> None:
     '''Send key names to the center editor pane (`Escape`, `Enter`, literals).'''
+    ids = panes_left_to_right(tmux)
+    if len(ids) < 2:
+        raise RuntimeError('wiki tmux session has no editor pane')
     subprocess.run(
-        [tmux, 'send-keys', '-t', pane_target(PANE_EDIT), *keys],
+        [tmux, 'send-keys', '-t', ids[1], *keys],
         check=True,
     )

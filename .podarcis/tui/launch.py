@@ -43,6 +43,7 @@ from podarcis.tui.tmux_layout import (
     create_session as tmux_create,
     has_session as tmux_has_session,
     kill_session as tmux_kill,
+    pane_count as tmux_pane_count,
     resolve_tmux,
 )
 
@@ -377,7 +378,7 @@ def cmd_wiki(args: argparse.Namespace) -> int:
     edit_argv = _edit_argv(deps, wiki_root, open_path)
     herdr_argv = [deps.herdr, '--session', SESSION_NAME]
 
-    if reset_layout and tmux_has_session(tmux):
+    if tmux_has_session(tmux) and (reset_layout or tmux_pane_count(tmux) != 3):
         tmux_kill(tmux)
 
     try:
