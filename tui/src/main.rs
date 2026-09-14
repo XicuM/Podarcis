@@ -44,7 +44,7 @@ fn main() -> Result<()> {
     if args.check {
         println!("root: {}", root.display());
         println!("theme: {}", cfg.flavor.as_str());
-        println!("qmd: {}", cfg.qmd_enabled);
+        println!("qmd: {}", cfg.qmd_off_reason.unwrap_or("enabled"));
         println!("herdr: {}", if podarcis::herdr::pty::available() { "found" } else { "missing" });
         for (label, path) in cfg.collections() {
             println!("{label}: {}", path.display());
@@ -94,7 +94,36 @@ fn main() -> Result<()> {
     let mut terminal = enter()?;
     let result = run(&mut terminal, &mut app, &events);
     leave(&mut terminal)?;
+    // A clean restart replaces the process image entirely — `leave()` has
+    // already restored the terminal, so the fresh `main()` entry into
+    // `enter()` sees a clean slate.
+    if app.restart {
+        exec_replace();
+    }
     result
+}
+
+/// Replace the current process with a fresh copy of itself so a restart keeps
+/// ownership of the terminal (foreground process group).
+fn exec_replace() -> ! {
+    use std::os::unix::ffi::OsStringExt;
+    let exe = std::env::current_exe().expect("cannot resolve current binary");
+    let c_exe = std::ffi::CString::new(exe.into_os_string().into_vec())
+        .expect("binary path contains NUL");
+    let c_args: Vec<std::ffi::CString> = std::env::args_os()
+        .map(|a| std::ffi::CString::new(a.into_vec()).expect("argument contains NUL"))
+        .collect();
+    // execv requires argv to be NULL-terminated; it also takes ownership of
+    // the pointers but not the CStrings, so they must outlive the call.
+    let mut c_ptrs: Vec<*const std::ffi::c_char> = c_args.iter().map(|a| a.as_ptr()).collect();
+    c_ptrs.push(std::ptr::null());
+    // SAFETY: execv replaces the process image; it never returns on success.
+    unsafe {
+        libc::execv(c_exe.as_ptr(), c_ptrs.as_ptr());
+    }
+    // execv failed — the only remaining option is to abort, but a visible
+    // panic is friendlier than silence.
+    panic!("restart failed: {}", std::io::Error::last_os_error());
 }
 
 fn findings_json(findings: &[podarcis::vault::lint::Finding]) -> serde_json::Value {

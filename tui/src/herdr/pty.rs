@@ -35,8 +35,11 @@ pub struct Pane {
 }
 
 impl Pane {
-    /// Spawn `herdr --session podarcis` in `cwd`.
-    pub fn spawn(cwd: &Path, rows: u16, cols: u16, tx: Sender<AppEvent>) -> Result<Self> {
+    /// Spawn `herdr --session podarcis` in `cwd`, ensuring the project workspace exists and is focused.
+    pub fn spawn(project_name: &str, cwd: &Path, rows: u16, cols: u16, tx: Sender<AppEvent>) -> Result<Self> {
+        // Ensure the workspace exists and is focused if server is running
+        let _ = super::space::ensure_project_space(project_name, cwd);
+
         let mut cmd = CommandBuilder::new(herdr_binary());
         cmd.args(["--session", super::config::SESSION]);
         cmd.cwd(cwd);
@@ -53,7 +56,25 @@ impl Pane {
                 cmd.env("HERDR_CONFIG_PATH", cfg_path);
             }
         }
-        Self::spawn_command(cmd, rows, cols, tx, Some(cwd))
+
+        let pane = Self::spawn_command(cmd, rows, cols, tx, Some(cwd))?;
+
+        // In case the Herdr server was just started by spawn_command, ensure the workspace is named & focused
+        let p_name = project_name.to_string();
+        let p_cwd = cwd.to_path_buf();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let _ = super::space::ensure_project_space(&p_name, &p_cwd);
+        });
+
+        Ok(pane)
+    }
+
+    /// Switch Herdr workspace focus to `name`, and update tab label sync for `cwd`.
+    pub fn switch_project(&mut self, name: &str, cwd: &Path) {
+        let _ = super::space::ensure_project_space(name, cwd);
+        self.label_sync.store(true, Ordering::Relaxed);
+        self.label_sync = super::labels::spawn(cwd);
     }
 
     pub fn spawn_command(

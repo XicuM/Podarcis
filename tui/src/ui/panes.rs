@@ -1,7 +1,7 @@
 //! The three panes and the status line.
 
 use edtui::{EditorStatusLine, EditorTheme, EditorView, LineNumbers};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
@@ -851,6 +851,20 @@ fn wrap_biblio(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
 /// in once it has been. Each glyph points the way the pane would travel:
 /// outward, into the pane, to collapse it; inward, into the document, to
 /// pull a collapsed one back.
+/// The narrow-terminal tab strip standing in for the side-by-side panes.
+pub fn tab_bar(frame: &mut Frame, app: &App) {
+    for (focus, label, rect) in &app.areas.tab_bar {
+        let focused = *focus == app.focus;
+        let style = if focused {
+            Style::default().fg(app.theme.bg).bg(app.theme.accent).add_modifier(Modifier::BOLD)
+        } else {
+            app.theme.faint_style()
+        };
+        let text = format!("{label:^width$}", width = rect.width as usize);
+        frame.render_widget(Paragraph::new(Span::styled(text, style)), *rect);
+    }
+}
+
 pub fn toggles(frame: &mut Frame, app: &App) {
     let style = Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD);
     if let Some(rect) = app.areas.tree_toggle {
@@ -871,7 +885,13 @@ pub fn toggles(frame: &mut Frame, app: &App) {
 
 pub fn sidebar(frame: &mut Frame, app: &App, area: Rect) {
     let focused = app.focus == Focus::Sidebar;
-    let block = pane(&app.theme, "agents", focused);
+    let mut block = pane(&app.theme, "agents", focused);
+    if focused && area.width >= 28 {
+        block = block.title(
+            Line::from(Span::styled(" alt+tab to unfocus ", app.theme.dim()))
+                .alignment(Alignment::Right),
+        );
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.is_empty() {
@@ -907,14 +927,14 @@ pub fn status(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
     let mut left: Vec<Span> = Vec::new();
 
-    // The editor is modeless, so there is no mode to report — only whether you
-    // are reading or writing.
-    let (mode, mode_style) = match app.open.as_ref().and_then(|o| o.editor.as_ref()) {
-        Some(editor) if editor.dirty() => ("EDIT ⏺", Style::default().fg(theme.bg).bg(theme.warn)),
-        Some(_) => ("EDIT", Style::default().fg(theme.bg).bg(theme.ok)),
-        None => ("READ", Style::default().fg(theme.bg).bg(theme.accent)),
+    // When editing, show the active edit state (green or amber if dirty).
+    // In reading mode, render the project selector badge instead of "READ".
+    let (badge_text, badge_style) = match app.open.as_ref().and_then(|o| o.editor.as_ref()) {
+        Some(editor) if editor.dirty() => (" EDIT ⏺ ".to_string(), Style::default().fg(theme.bg).bg(theme.warn)),
+        Some(_) => (" EDIT ".to_string(), Style::default().fg(theme.bg).bg(theme.ok)),
+        None => (format!(" {} ▾ ", app.project_name), Style::default().fg(theme.bg).bg(theme.accent)),
     };
-    left.push(Span::styled(format!(" {mode} "), mode_style.add_modifier(Modifier::BOLD)));
+    left.push(Span::styled(badge_text, badge_style.add_modifier(Modifier::BOLD)));
 
     if let Some(prefix) = app.pending {
         left.push(Span::styled(format!(" {prefix}…"), Style::default().fg(theme.literal)));
@@ -1030,8 +1050,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    static INSP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     fn open_doc(body: &str) -> Open {
-        let dir = std::env::temp_dir().join(format!("podarcis-insp-{}", std::process::id()));
+        let count = INSP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("podarcis-insp-{}-{count}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("wiki")).unwrap();
         let path = dir.join("wiki/a.md");
@@ -1101,5 +1124,41 @@ mod tests {
         for row in rows.iter().skip(1) {
             assert!(row.starts_with("    "), "continuations hang 4 under the mark: {:?}", row);
         }
+    }
+
+    #[test]
+    fn status_bar_renders_project_selector_instead_of_read() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        use crate::config::Config;
+
+        let count = INSP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("podarcis-status-{}-{count}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".podarcis")).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "").unwrap();
+        std::fs::write(dir.join(".podarcis/config.yaml"), "").unwrap();
+
+        let cfg = Config::load(&dir);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut app = App::new(cfg, tx);
+        app.project_name = "test-project".to_string();
+
+        let backend = TestBackend::new(80, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                status(f, &app, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = (0..buffer.area.width)
+            .map(|x| buffer[(x, 0)].symbol().to_string())
+            .collect();
+
+        assert!(content.contains("test-project ▾"), "status has project selector: {content}");
+        assert!(!content.contains("READ"), "status does not contain READ: {content}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -20,9 +20,15 @@ class WikiRootError(SystemExit):
 
 
 def is_wiki_root(path: Path) -> bool:
-    '''A checkout is both AGENTS.md and .podarcis/config.yaml, not the engine package.'''
+    '''A project/checkout has either AGENTS.md + .podarcis/config.yaml, podarcis.yaml, or wiki/ + workspace/.'''
     root = Path(path)
-    return (root / 'AGENTS.md').is_file() and (root / '.podarcis' / 'config.yaml').is_file()
+    if (root / 'AGENTS.md').is_file() and (root / '.podarcis' / 'config.yaml').is_file():
+        return True
+    if (root / 'podarcis.yaml').is_file():
+        return True
+    if (root / 'wiki').is_dir() and (root / 'workspace').is_dir():
+        return True
+    return False
 
 
 def find_wiki_root(
@@ -31,9 +37,9 @@ def find_wiki_root(
     cwd: Path | None = None,
     environ: dict[str, str] | None = None,
 ) -> Path:
-    '''Resolve the wiki checkout.
+    '''Resolve the wiki checkout or active project root.
 
-    Order: ``--root`` / ``$PODARCIS_ROOT`` / walk ``cwd`` and parents.
+    Order: ``--root`` / ``$PODARCIS_ROOT`` / walk ``cwd`` and parents / global active project.
     An explicit or env path that is not a checkout is an error (no walk fallback).
     '''
     env = os.environ if environ is None else environ
@@ -41,19 +47,33 @@ def find_wiki_root(
     if explicit is not None and str(explicit).strip():
         path = Path(explicit).expanduser().resolve()
         if not is_wiki_root(path):
+            # Check if explicit is a registered project name
+            from podarcis.project import list_projects
+            projects = list_projects()
+            name_str = str(explicit).strip()
+            if name_str in projects and projects[name_str].get('path'):
+                p_path = Path(projects[name_str]['path']).resolve()
+                if is_wiki_root(p_path):
+                    return p_path
             raise WikiRootError(
                 f'not a Podarcis checkout at {path} '
-                f'(no AGENTS.md + .podarcis/config.yaml). Pass --root.'
+                f'(no AGENTS.md + .podarcis/config.yaml or podarcis.yaml). Pass --root.'
             )
         return path
 
-    env_root = (env.get('PODARCIS_ROOT') or '').strip()
+    env_root = (env.get('PODARCIS_ROOT') or env.get('PODARCIS_PROJECT') or env.get('PROJECT_ROOT') or '').strip()
     if env_root:
         path = Path(env_root).expanduser().resolve()
         if not is_wiki_root(path):
+            from podarcis.project import list_projects
+            projects = list_projects()
+            if env_root in projects and projects[env_root].get('path'):
+                p_path = Path(projects[env_root]['path']).resolve()
+                if is_wiki_root(p_path):
+                    return p_path
             raise WikiRootError(
                 f'not a Podarcis checkout at {path} '
-                f'(no AGENTS.md + .podarcis/config.yaml). Pass --root.'
+                f'(no AGENTS.md + .podarcis/config.yaml or podarcis.yaml). Pass --root.'
             )
         return path
 
@@ -62,6 +82,15 @@ def find_wiki_root(
     for candidate in (start, *start.parents):
         if is_wiki_root(candidate):
             return candidate
+
+    # Fallback to global active project if configured
+    try:
+        from podarcis.project import resolve_project
+        proj = resolve_project(cwd=cwd, environ=environ)
+        if proj.exists() and is_wiki_root(proj.root):
+            return proj.root
+    except Exception:
+        pass
 
     raise WikiRootError()
 

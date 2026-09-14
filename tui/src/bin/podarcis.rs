@@ -32,7 +32,10 @@ struct Cli {
     /// Launch the interactive configuration menu.
     #[arg(short, long)]
     interactive: bool,
-    /// Podarcis checkout root (AGENTS.md + .podarcis/config.yaml).
+    /// Target project name or directory path.
+    #[arg(short, long)]
+    project: Option<String>,
+    /// Podarcis checkout root (AGENTS.md + .podarcis/config.yaml or podarcis.yaml).
     #[arg(long)]
     root: Option<PathBuf>,
     #[command(subcommand)]
@@ -41,6 +44,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
+    /// Manage research projects (workspaces with wiki, workspace, and sources).
+    Project {
+        #[command(subcommand)]
+        action: Option<ProjectAction>,
+    },
     /// Display status of MCP tool modules, skills, agents, jobs, and repos.
     Status {
         /// Output status as JSON.
@@ -209,6 +217,72 @@ struct RepoCfgArgs {
 }
 
 #[derive(Subcommand, Debug)]
+enum ProjectAction {
+    /// List all registered research projects.
+    List {
+        #[arg(short, long)]
+        json: bool,
+    },
+    /// Display the currently active project.
+    Current,
+    /// Switch the active project.
+    Switch {
+        name: String,
+    },
+    /// Create a new project workspace.
+    New(ProjectNewArgs),
+    /// Register an existing directory as a project.
+    Add(ProjectAddArgs),
+    /// Unregister a project.
+    Remove {
+        name: String,
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Migrate the current checkout's wiki/workspace/sources to ~/.local/share/podarcis/projects/<name>.
+    Migrate {
+        #[arg(default_value = "default")]
+        name: String,
+    },
+}
+
+#[derive(Args, Debug)]
+struct ProjectNewArgs {
+    /// Project name.
+    name: String,
+    /// Optional directory path (defaults to ~/.local/share/podarcis/projects/<name>).
+    #[arg(long)]
+    path: Option<PathBuf>,
+    /// Project description.
+    #[arg(long, default_value = "")]
+    description: String,
+    /// Remote Git URL for wiki.
+    #[arg(long, default_value = "")]
+    wiki_remote: String,
+    /// Remote Git URL for workspace.
+    #[arg(long, default_value = "")]
+    workspace_remote: String,
+    /// Remote Git URL for sources.
+    #[arg(long, default_value = "")]
+    sources_remote: String,
+    /// Sources backend: local or gdrive.
+    #[arg(long, default_value = "local")]
+    sources_backend: String,
+}
+
+#[derive(Args, Debug)]
+struct ProjectAddArgs {
+    /// Directory path of the existing project.
+    path: PathBuf,
+    /// Optional project name (defaults to directory name).
+    #[arg(long)]
+    name: Option<String>,
+    /// Project description.
+    #[arg(long, default_value = "")]
+    description: String,
+}
+
+#[derive(Subcommand, Debug)]
 enum WikiAction {
     /// Open the wiki frontend, optionally at a page.
     Open {
@@ -248,6 +322,16 @@ fn run(cli: Cli) -> Result<i32> {
 
     match cli.command {
         None => open_frontend(&root),
+        Some(Cmd::Project { action }) => match action {
+            None | Some(ProjectAction::List { json: false }) => cmd_project_list(false),
+            Some(ProjectAction::List { json: true }) => cmd_project_list(true),
+            Some(ProjectAction::Current) => cmd_project_current(),
+            Some(ProjectAction::Switch { name }) => cmd_project_switch(&name),
+            Some(ProjectAction::New(args)) => cmd_project_new(args),
+            Some(ProjectAction::Add(args)) => cmd_project_add(args),
+            Some(ProjectAction::Remove { name, purge }) => cmd_project_remove(&name, purge),
+            Some(ProjectAction::Migrate { name }) => cmd_project_migrate(&root, &name),
+        },
         Some(Cmd::Status { json }) => cmd_status(&root, json),
         Some(Cmd::Config { action }) => match action {
             None | Some(ConfigAction::Interactive) => exec_python_cli(&root, &["interactive"]),
@@ -310,7 +394,17 @@ fn pass_through(root: &Path, subcommand: &str, rest: &[String]) -> Result<i32> {
 
 fn find_root(cli: &Cli) -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
+    let explicit = cli.project.as_deref().or(cli.root.as_ref().and_then(|p| p.to_str()));
+    let env_proj = std::env::var("PODARCIS_PROJECT").ok();
     let env_root = std::env::var("PODARCIS_ROOT").ok();
+    let env = env_proj.as_deref().or(env_root.as_deref());
+
+    let reg = podarcis::project::ProjectRegistry::load();
+    if let Ok(proj) = reg.resolve(explicit, &cwd, env) {
+        if proj.exists() {
+            return Ok(proj.root);
+        }
+    }
     config::find_root(cli.root.as_deref(), &cwd, env_root.as_deref())
 }
 
@@ -321,6 +415,21 @@ fn which(bin: &str) -> Option<PathBuf> {
 }
 
 fn python_bin(root: &Path) -> String {
+    if let Ok(val) = std::env::var("PODARCIS_PYTHON") {
+        if !val.trim().is_empty() && Path::new(&val).is_file() {
+            return val;
+        }
+    }
+    if let Ok(venv) = std::env::var("VIRTUAL_ENV") {
+        let candidate = Path::new(&venv).join("bin").join("python");
+        if candidate.is_file() {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+    let app_venv = podarcis::project::xdg_data_dir().join("venv").join("bin").join("python");
+    if app_venv.is_file() {
+        return app_venv.to_string_lossy().into_owned();
+    }
     let venv = root.join(".venv").join("bin").join("python");
     if venv.is_file() {
         venv.to_string_lossy().into_owned()
@@ -339,6 +448,192 @@ fn exec_python_cli<S: AsRef<str>>(root: &Path, args: &[S]) -> Result<i32> {
     cmd.args(["-m", "podarcis.cli"]).args(args.iter().map(AsRef::as_ref));
     let status = cmd.status()?;
     Ok(status.code().unwrap_or(1))
+}
+
+// ----------------------------------------------------------------- project
+
+fn cmd_project_list(as_json: bool) -> Result<i32> {
+    let reg = podarcis::project::ProjectRegistry::load();
+    if as_json {
+        let mut list = Vec::new();
+        let mut names: Vec<&String> = reg.projects.keys().collect();
+        names.sort();
+        for name in names {
+            let entry = &reg.projects[name];
+            list.push(json!({
+                "name": name,
+                "path": entry.path.to_string_lossy(),
+                "description": entry.description,
+                "active": *name == reg.active,
+                "exists": entry.path.is_dir(),
+            }));
+        }
+        println!("{}", serde_json::to_string_pretty(&list)?);
+        return Ok(0);
+    }
+
+    println!("Podarcis Research Projects:\n");
+    let mut names: Vec<&String> = reg.projects.keys().collect();
+    names.sort();
+    if names.is_empty() {
+        println!("  No projects registered yet.");
+    } else {
+        for name in names {
+            let entry = &reg.projects[name];
+            let is_active = *name == reg.active;
+            let mark = if is_active { "*" } else { " " };
+            let status = if entry.path.is_dir() { "ready" } else { "missing" };
+            println!(
+                "  {mark} {:<16} [{status:<7}]  {:<35}  {}",
+                name,
+                entry.path.display(),
+                entry.description
+            );
+        }
+    }
+    println!("\nActive project:     {}", reg.active);
+    println!("Projects directory: {}\n", podarcis::project::projects_dir().display());
+    Ok(0)
+}
+
+fn cmd_project_current() -> Result<i32> {
+    let reg = podarcis::project::ProjectRegistry::load();
+    if let Some(entry) = reg.projects.get(&reg.active) {
+        println!("{} ({})", reg.active, entry.path.display());
+    } else {
+        println!("{} (path not registered)", reg.active);
+    }
+    Ok(0)
+}
+
+fn cmd_project_switch(name: &str) -> Result<i32> {
+    let mut reg = podarcis::project::ProjectRegistry::load();
+    let Some(entry) = reg.projects.get(name).cloned() else {
+        eprintln!("Error: project \"{name}\" is not registered. Run `podarcis project list` to see available projects.");
+        return Ok(1);
+    };
+    reg.active = name.to_string();
+    reg.save()?;
+    let _ = podarcis::herdr::space::ensure_project_space(name, &entry.path);
+    println!("✓ Switched active project to \"{name}\".");
+    Ok(0)
+}
+
+fn cmd_project_new(args: ProjectNewArgs) -> Result<i32> {
+    let proj = podarcis::project::create_project(
+        &args.name,
+        args.path.as_deref(),
+        &args.description,
+        &args.wiki_remote,
+        &args.workspace_remote,
+        &args.sources_remote,
+        &args.sources_backend,
+    )?;
+    let _ = podarcis::herdr::space::create_workspace_if_server_running(&proj.name, &proj.root);
+    println!("✓ Initialized project \"{}\" at {}", proj.name, proj.root.display());
+    println!("  • wiki:      {}", proj.wiki().display());
+    println!("  • workspace: {}", proj.workspace().display());
+    println!("  • sources:   {}", proj.sources().display());
+    println!("  • config:    {}", proj.config_path().display());
+    Ok(0)
+}
+
+fn cmd_project_add(args: ProjectAddArgs) -> Result<i32> {
+    let path = args.path.canonicalize().unwrap_or(args.path);
+    if !path.is_dir() {
+        eprintln!("Error: directory does not exist: {}", path.display());
+        return Ok(1);
+    }
+    let name = args.name.unwrap_or_else(|| path.file_name().unwrap_or_default().to_string_lossy().to_string());
+    let mut reg = podarcis::project::ProjectRegistry::load();
+    reg.projects.insert(
+        name.clone(),
+        podarcis::project::ProjectEntry {
+            path: path.clone(),
+            description: args.description,
+        },
+    );
+    if reg.active.is_empty() || reg.active == "default" {
+        reg.active = name.clone();
+    }
+    reg.save()?;
+    let _ = podarcis::herdr::space::create_workspace_if_server_running(&name, &path);
+    println!("✓ Registered project \"{name}\" at {}", path.display());
+    Ok(0)
+}
+
+fn cmd_project_remove(name: &str, purge: bool) -> Result<i32> {
+    let mut reg = podarcis::project::ProjectRegistry::load();
+    let Some(entry) = reg.projects.remove(name) else {
+        eprintln!("Error: project \"{name}\" not found in registry.");
+        return Ok(1);
+    };
+    if reg.active == name {
+        reg.active = reg.projects.keys().next().cloned().unwrap_or_else(|| "default".to_string());
+    }
+    reg.save()?;
+    if let Ok(workspaces) = podarcis::herdr::space::list_workspaces() {
+        if let Some(ws) = workspaces.iter().find(|w| w.label == name) {
+            let _ = podarcis::herdr::space::close_workspace(&ws.id);
+        }
+    }
+    if purge && entry.path.is_dir() {
+        std::fs::remove_dir_all(&entry.path)?;
+        println!("✓ Removed project \"{name}\" and deleted {}", entry.path.display());
+    } else {
+        println!("✓ Unregistered project \"{name}\" (files kept at {})", entry.path.display());
+    }
+    Ok(0)
+}
+
+fn cmd_project_migrate(root: &Path, name: &str) -> Result<i32> {
+    println!("Migrating workspace ({}) to project \"{name}\" in XDG user folder...", root.display());
+    let target = podarcis::project::projects_dir().join(name);
+    std::fs::create_dir_all(&target)?;
+
+    for folder in &["wiki", "workspace", "sources"] {
+        let src = root.join(folder);
+        let dst = target.join(folder);
+        if src.is_dir() && !dst.exists() {
+            println!("  Moving {} → {}", src.display(), dst.display());
+            if let Err(_) = std::fs::rename(&src, &dst) {
+                copy_dir_all(&src, &dst)?;
+                let _ = std::fs::remove_dir_all(&src);
+            }
+        }
+    }
+
+    let src_cfg = root.join(".podarcis").join("config.yaml");
+    if src_cfg.is_file() {
+        let _ = std::fs::copy(&src_cfg, target.join("podarcis.yaml"));
+    }
+
+    let mut reg = podarcis::project::ProjectRegistry::load();
+    reg.active = name.to_string();
+    reg.projects.insert(
+        name.to_string(),
+        podarcis::project::ProjectEntry {
+            path: target.clone(),
+            description: "Migrated workspace".to_string(),
+        },
+    );
+    reg.save()?;
+    println!("✓ Migration complete. Project \"{name}\" is now active at {}", target.display());
+    Ok(0)
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------ status

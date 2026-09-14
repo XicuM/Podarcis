@@ -18,7 +18,7 @@ from mcp.server.fastmcp import FastMCP
 # ── Path bootstrap ────────────────────────────────────────────────────────────
 
 def _find_root() -> Path:
-    env = os.environ.get("PROJECT_ROOT")
+    env = os.environ.get("PROJECT_ROOT") or os.environ.get("PODARCIS_PROJECT") or os.environ.get("PODARCIS_ROOT")
     if env:
         return Path(env).resolve()
     for parent in Path(__file__).resolve().parents:

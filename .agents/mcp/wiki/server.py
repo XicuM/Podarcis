@@ -20,7 +20,7 @@ from mcp.server.fastmcp import FastMCP
 # ── Path bootstrap ────────────────────────────────────────────────────────────
 
 def _find_root() -> Path:
-    env = os.environ.get("PROJECT_ROOT")
+    env = os.environ.get("PROJECT_ROOT") or os.environ.get("PODARCIS_PROJECT") or os.environ.get("PODARCIS_ROOT")
     if env:
         return Path(env).resolve()
     for parent in Path(__file__).resolve().parents:
@@ -55,34 +55,48 @@ mcp = FastMCP(
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _is_qmd_enabled_in_config() -> bool:
-    """Read engines.qmd from .podarcis/config.yaml."""
+QMD_ABSENT = (
+    "semantic search needs the 'qmd' binary on PATH — install it, "
+    "or set engines.qmd: true in .podarcis/config.yaml."
+)
+QMD_OFF = "QMD engine is off (engines.qmd: false in .podarcis/config.yaml)."
+
+
+def _qmd_config_flag() -> bool | None:
+    """`engines.qmd` from .podarcis/config.yaml, or None when the key is absent."""
     yaml_path = ROOT / ".podarcis" / "config.yaml"
     if yaml_path.exists():
         try:
             import yaml
             data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-            engines = data.get("engines", {})
-            return bool(engines.get("qmd", False))
+            raw = (data.get("engines") or {}).get("qmd")
+            return None if raw is None else bool(raw)
         except Exception:
             pass
-    return False
+    return None
 
 
 def get_qmd_status() -> tuple[Literal["disabled", "enabled_ok", "enabled_broken"], str]:
-    """Determine QMD engine state: disabled, enabled_ok, or enabled_broken."""
+    """Determine QMD engine state: disabled, enabled_ok, or enabled_broken.
+
+    An absent `engines.qmd` is not a decision the user made, so it follows the
+    binary rather than defaulting to off and then blaming a config line nobody
+    wrote. An explicit value, from the key or from $ENABLE_QMD, always wins.
+    Mirrors `podarcis.search.qmd_status`.
+    """
     env_flag = os.environ.get("ENABLE_QMD")
     if env_flag is not None:
-        enabled = env_flag.lower() in ("true", "1", "yes")
+        enabled: bool | None = env_flag.lower() in ("true", "1", "yes")
     else:
-        enabled = _is_qmd_enabled_in_config()
+        enabled = _qmd_config_flag()
 
-    if not enabled:
-        return ("disabled", "QMD engine is disabled in .podarcis/config.yaml.")
+    if enabled is False:
+        return ("disabled", QMD_OFF)
 
     qmd_bin = shutil.which("qmd")
     if not qmd_bin:
-        return ("enabled_broken", "'qmd' binary not found in PATH.")
+        # Nobody asked for it and it is not installed: nothing is broken.
+        return ("enabled_broken", "'qmd' binary not found in PATH.") if enabled else ("disabled", QMD_ABSENT)
     return ("enabled_ok", qmd_bin)
 
 
@@ -274,7 +288,7 @@ async def wiki_search(
     if status == "disabled":
         prefix = ""
         if method in ("semantic", "hybrid") or hyde:
-            prefix = "[Notice: QMD Vector DB engine is disabled in podarcis.yaml. Operating in Native Keyword Search mode.]\n\n"
+            prefix = f"[Notice: {info} Operating in Native Keyword Search mode.]\n\n"
         native_res = await _native_search(query, collection=collection, limit=limit)
         return prefix + native_res
 
@@ -362,7 +376,7 @@ async def wiki_reindex() -> str:
     """Rebuild the qmd semantic index and refresh collection context summaries."""
     status, info = get_qmd_status()
     if status == "disabled":
-        return "[Notice: QMD Vector DB engine is disabled in podarcis.yaml. Index update skipped.]"
+        return f"[Notice: {info} Index update skipped.]"
     if status == "enabled_broken":
         return (
             "⚠️ WARNING: QMD Vector DB Engine is ENABLED in podarcis.yaml, "
@@ -454,7 +468,7 @@ async def wiki_publish(
     elif status == "enabled_broken":
         index_res = f"⚠️ WARNING: QMD Vector DB Engine is ENABLED in podarcis.yaml, but QMD is unavailable ({info}). Index update skipped."
     else:
-        index_res = "[Notice: QMD Vector DB engine is disabled in podarcis.yaml. Index update skipped.]"
+        index_res = f"[Notice: {info} Index update skipped.]"
 
     # 6. Run link audits on target directory
     audit_res = ""

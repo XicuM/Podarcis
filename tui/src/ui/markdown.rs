@@ -97,6 +97,14 @@ impl Doc {
     pub fn citation_number(&self, label: &str) -> Option<usize> {
         self.citations.iter().position(|l| l == label).map(|i| i + 1)
     }
+
+    /// Index of the first body link for a footnote label — the `[n]` the
+    /// reader can highlight when its source row is picked in the inspector.
+    pub fn citation_link(&self, label: &str) -> Option<usize> {
+        self.links
+            .iter()
+            .position(|l| l.kind == LinkKind::Footnote && l.target == label)
+    }
 }
 
 impl Doc {
@@ -747,7 +755,6 @@ impl<'a> Writer<'a> {
                     self.style = saved;
                 }
             }
-            _ => {}
         }
     }
 
@@ -2052,6 +2059,21 @@ mod tests {
         assert_eq!(d.citations, vec!["smith2024", "jones2020"]);
         assert_eq!(d.citation_number("jones2020"), Some(2));
         assert_eq!(d.citation_number("nobody"), None);
+    }
+
+    #[test]
+    fn selecting_a_source_highlights_the_corresponding_mark_in_the_body() {
+        let d = doc("Body[^smith2024] and[^jones2020].\n", 80);
+        let link_idx = d.citation_link("smith2024");
+        assert_eq!(link_idx, Some(0), "the first footnote is index 0");
+        let theme = Theme::default();
+        let lines = d.to_lines(&theme, link_idx, None, 0, 40);
+        let active = lines.iter().flat_map(|l| &l.spans).any(|s| {
+            s.content.contains("[1]")
+                && s.style.bg == Some(theme.link)
+                && s.style.add_modifier.contains(Modifier::BOLD)
+        });
+        assert!(active, "[1] must carry the active-link highlight");
     }
 
     #[test]

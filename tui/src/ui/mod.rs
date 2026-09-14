@@ -26,10 +26,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let [body, status] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(area);
     app.areas = split_body(body, app);
 
+    if app.open.as_ref().and_then(|o| o.editor.as_ref()).is_none() {
+        let badge_len = format!(" {} ▾ ", app.project_name).chars().count() as u16;
+        app.areas.project_selector = Some(Rect::new(status.x, status.y, badge_len, 1));
+    } else {
+        app.areas.project_selector = None;
+    }
+
     // Sizing the child to the box it is about to be drawn into keeps the two in
     // step even while the terminal is being dragged.
     app.sync_sidebar();
 
+    if !app.areas.tab_bar.is_empty() {
+        panes::tab_bar(frame, app);
+    }
     if !app.areas.tree.is_empty() {
         let tree_area = app.areas.tree;
         panes::tree(frame, app, tree_area);
@@ -57,6 +67,14 @@ fn split_body(body: Rect, app: &App) -> Areas {
     }
 
     let narrow = body.width < NARROW;
+    // Below the threshold, panes stop sitting side by side and a tab strip
+    // takes their place as the way to switch which one is showing.
+    let (tab_bar, body) = if narrow && body.height > 1 {
+        let [bar, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
+        (tab_layout(bar), rest)
+    } else {
+        (Vec::new(), body)
+    };
     // On a narrow terminal only the focused side pane survives, so the reader
     // never gets squeezed into a column too thin to read.
     let show_tree = app.show_tree && (!narrow || app.focus == Focus::Tree);
@@ -147,7 +165,33 @@ fn split_body(body: Rect, app: &App) -> Areas {
     } else {
         None
     };
+    areas.tab_bar = tab_bar;
     areas
+}
+
+/// Lay out one clickable, labelled rect per pane across `bar`, evenly split.
+/// Tree and Agents are included whether or not they are currently open —
+/// a hidden pane's tab is still a legitimate switch target, it just reopens
+/// the pane on click (`App::select_tab`).
+fn tab_layout(bar: Rect) -> Vec<(Focus, &'static str, Rect)> {
+    const TABS: [(Focus, &str); 3] = [(Focus::Tree, "Tree"), (Focus::Doc, "Doc"), (Focus::Sidebar, "Agents")];
+    if bar.width == 0 {
+        return Vec::new();
+    }
+    let n = TABS.len() as u16;
+    let width = bar.width / n;
+    let mut x = bar.x;
+    TABS.iter()
+        .enumerate()
+        .map(|(i, (focus, label))| {
+            // The last tab absorbs the remainder so the strip always fills
+            // the full width, instead of leaving a sliver on the right.
+            let w = if i as u16 == n - 1 { bar.x + bar.width - x } else { width };
+            let rect = Rect::new(x, bar.y, w, 1);
+            x += w;
+            (*focus, *label, rect)
+        })
+        .collect()
 }
 
 /// How close to a divider a click counts as grabbing it. One column is a cruel
@@ -203,6 +247,29 @@ mod tests {
         let areas = split_body(Rect::new(0, 0, 80, 40), &a);
         assert!(!areas.tree.is_empty());
         assert!(areas.sidebar.is_empty());
+    }
+
+    #[test]
+    fn a_wide_terminal_has_no_tab_bar() {
+        let a = app_in("wide-no-tabs");
+        let areas = split_body(Rect::new(0, 0, 160, 40), &a);
+        assert!(areas.tab_bar.is_empty());
+    }
+
+    #[test]
+    fn a_narrow_terminal_gets_a_tab_bar_above_a_shrunk_body() {
+        let mut a = app_in("narrow-tabs");
+        a.focus = Focus::Doc;
+        let areas = split_body(Rect::new(0, 0, 80, 40), &a);
+        assert_eq!(areas.tab_bar.len(), 3);
+        assert_eq!(areas.doc.height, 39, "the tab row is carved out of the body, not overlaid");
+        assert_eq!(areas.doc.y, areas.tab_bar[0].2.y + 1);
+
+        let labels: Vec<&str> = areas.tab_bar.iter().map(|(_, l, _)| *l).collect();
+        assert_eq!(labels, ["Tree", "Doc", "Agents"]);
+
+        let total: u16 = areas.tab_bar.iter().map(|(_, _, r)| r.width).sum();
+        assert_eq!(total, 80, "the tabs fill the whole width, no leftover sliver");
     }
 
     #[test]

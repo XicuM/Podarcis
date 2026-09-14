@@ -11,6 +11,7 @@ pub mod event;
 pub mod herdr;
 pub mod keymap;
 pub mod platform;
+pub mod project;
 pub mod search;
 pub mod theme;
 pub mod ui;

@@ -5,7 +5,7 @@
 //! label is stale. Best-effort — a missed rename is retried on the next tick.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -85,7 +85,7 @@ pub fn planned_renames(snap: &Value, root: &Path) -> Vec<(String, String)> {
             .or_else(|| pane.get("foreground_cwd"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        if !cwd.is_empty() && Path::new(cwd) != root {
+        if !cwd.is_empty() && Path::new(cwd) != root && !Path::new(cwd).starts_with(root) {
             continue;
         }
         let agent = pane.get("agent").and_then(Value::as_str);
@@ -104,7 +104,7 @@ pub fn planned_renames(snap: &Value, root: &Path) -> Vec<(String, String)> {
 }
 
 fn snapshot() -> Result<Value, ()> {
-    let out = herdr_cmd()
+    let out = super::config::herdr_cmd()
         .args(["api", "snapshot"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -122,23 +122,12 @@ fn snapshot() -> Result<Value, ()> {
 }
 
 fn rename_tab(tab_id: &str, label: &str) {
-    let _ = herdr_cmd()
+    let _ = super::config::herdr_cmd()
         .args(["tab", "rename", tab_id, label])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
-}
-
-fn herdr_cmd() -> Command {
-    let mut cmd = Command::new(super::pty::herdr_binary());
-    cmd.args(["--session", super::config::SESSION]);
-    if let Some(path) = super::config::session_dir().map(|d| d.join("config.toml")) {
-        if path.exists() {
-            cmd.env("HERDR_CONFIG_PATH", path);
-        }
-    }
-    cmd
 }
 
 #[cfg(test)]

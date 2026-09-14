@@ -14,10 +14,12 @@ use serde_yaml_ng::Value;
 
 use crate::theme::Flavor;
 
-/// A checkout is `AGENTS.md` + `.podarcis/config.yaml` — never the engine
-/// package on its own. Mirrors `podarcis.root.is_wiki_root`.
+/// A checkout is `AGENTS.md` + `.podarcis/config.yaml`, or a `podarcis.yaml` project,
+/// or a directory with `wiki/` + `workspace/`. Mirrors `podarcis.root.is_wiki_root`.
 pub fn is_root(path: &Path) -> bool {
-    path.join("AGENTS.md").is_file() && path.join(".podarcis").join("config.yaml").is_file()
+    (path.join("AGENTS.md").is_file() && path.join(".podarcis").join("config.yaml").is_file())
+        || path.join("podarcis.yaml").is_file()
+        || (path.join("wiki").is_dir() && path.join("workspace").is_dir())
 }
 
 /// Resolve the checkout: explicit `--root`, then `$PODARCIS_ROOT`, then walk up
@@ -29,13 +31,21 @@ pub fn find_root(explicit: Option<&Path>, cwd: &Path, env_root: Option<&str>) ->
         .or_else(|| env_root.filter(|s| !s.trim().is_empty()).map(PathBuf::from));
     if let Some(pinned) = pinned {
         let path = absolutize(&pinned, cwd);
-        if !is_root(&path) {
-            bail!(
-                "not a Podarcis checkout at {} (no AGENTS.md + .podarcis/config.yaml). Pass --root.",
-                path.display()
-            );
+        if is_root(&path) {
+            return Ok(path);
         }
-        return Ok(path);
+        // Check if pinned is a registered project name
+        let reg = crate::project::ProjectRegistry::load();
+        let name = pinned.to_string_lossy();
+        if let Some(entry) = reg.projects.get(name.as_ref()) {
+            if is_root(&entry.path) {
+                return Ok(entry.path.clone());
+            }
+        }
+        bail!(
+            "not a Podarcis checkout or project at {} (no AGENTS.md + .podarcis/config.yaml or podarcis.yaml). Pass --root.",
+            path.display()
+        );
     }
 
     let start = absolutize(cwd, cwd);
@@ -46,7 +56,16 @@ pub fn find_root(explicit: Option<&Path>, cwd: &Path, env_root: Option<&str>) ->
         }
         probe = dir.parent();
     }
-    bail!("not a Podarcis checkout (no AGENTS.md + .podarcis/config.yaml). Pass --root.")
+
+    // Fall back to active project in global registry
+    let reg = crate::project::ProjectRegistry::load();
+    if let Ok(proj) = reg.resolve(None, cwd, env_root) {
+        if is_root(&proj.root) {
+            return Ok(proj.root);
+        }
+    }
+
+    bail!("not a Podarcis checkout (no AGENTS.md + .podarcis/config.yaml or podarcis.yaml). Pass --root.")
 }
 
 fn absolutize(path: &Path, cwd: &Path) -> PathBuf {
@@ -72,9 +91,9 @@ pub struct Config {
     pub inspector_height: u16,
     pub sidebar_open: bool,
     pub tree_open: bool,
-    /// `engines.qmd` — false means semantic search is off and we say so rather
-    /// than spawning a search that will fail.
-    pub qmd_enabled: bool,
+    /// Why semantic search is unavailable, phrased as the fix, or `None` when
+    /// it works. We say this rather than spawning a search that will fail.
+    pub qmd_off_reason: Option<&'static str>,
     /// `repositories:` map from collection name to git URL, `local`, or `gdrive`.
     pub repositories: HashMap<String, String>,
     /// `oneliners:` splash lines shown in the status bar's right corner.
@@ -87,7 +106,16 @@ impl Config {
     }
 
     pub fn load_with_herdr_theme(root: &Path, herdr_flavor: Option<Flavor>) -> Self {
-        let doc = std::fs::read_to_string(root.join(".podarcis").join("config.yaml"))
+        Self::load_parts(root, herdr_flavor, crate::search::qmd_on_path())
+    }
+
+    /// `qmd_present` is injected so the tests are not at the mercy of whatever
+    /// happens to be installed on the machine running them.
+    fn load_parts(root: &Path, herdr_flavor: Option<Flavor>, qmd_present: bool) -> Self {
+        let pod_yaml = root.join("podarcis.yaml");
+        let cfg_yaml = root.join(".podarcis").join("config.yaml");
+        let doc_path = if pod_yaml.is_file() { pod_yaml } else { cfg_yaml };
+        let doc = std::fs::read_to_string(&doc_path)
             .ok()
             .and_then(|raw| serde_yaml_ng::from_str::<Value>(&raw).ok())
             .unwrap_or(Value::Null);
@@ -106,11 +134,16 @@ impl Config {
             inspector_height: clamp_width(tui.and_then(|t| t.get("inspector_height")), 10, 4, 40),
             sidebar_open: tui.and_then(|t| t.get("sidebar")).and_then(Value::as_bool).unwrap_or(true),
             tree_open: tui.and_then(|t| t.get("tree")).and_then(Value::as_bool).unwrap_or(true),
-            qmd_enabled: doc
-                .get("engines")
-                .and_then(|e| e.get("qmd"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            qmd_off_reason: match doc.get("engines").and_then(|e| e.get("qmd")).and_then(Value::as_bool) {
+                Some(true) => None,
+                Some(false) => Some("semantic search is off (engines.qmd: false in .podarcis/config.yaml)"),
+                // An absent key is not a decision. Ask the filesystem instead
+                // of reporting a config line the user never wrote.
+                None if qmd_present => None,
+                None => Some(
+                    "semantic search needs the qmd binary on PATH — install it, or set engines.qmd: true in .podarcis/config.yaml",
+                ),
+            },
             repositories: doc
                 .get("repositories")
                 .and_then(Value::as_mapping)
@@ -135,6 +168,11 @@ impl Config {
                 })
                 .unwrap_or_default(),
         }
+    }
+
+    /// Can a semantic search actually run?
+    pub fn qmd_enabled(&self) -> bool {
+        self.qmd_off_reason.is_none()
     }
 
     /// A random splash line from `oneliners:`, or `None` when none are set.
@@ -223,7 +261,10 @@ pub fn with_block(current: &str, key: &str, block: &str) -> String {
     let mut lines = current.lines().peekable();
     let mut replaced = false;
     while let Some(line) = lines.next() {
-        if line.trim_end() != format!("{key}:") {
+        let is_target_key = line.trim_end() == format!("{key}:")
+            || line.starts_with(&format!("{key}: "))
+            || line.starts_with(&format!("{key}:\t"));
+        if !is_target_key {
             out.push_str(line);
             out.push('\n');
             continue;
@@ -389,7 +430,7 @@ mod tests {
         let dir = scratch("config");
         let cfg = Config::load_with_herdr_theme(&dir, None);
         assert_eq!(cfg.flavor, Flavor::Latte);
-        assert!(cfg.qmd_enabled);
+        assert!(cfg.qmd_enabled());
         assert_eq!(cfg.tree_width, 30);
 
         std::fs::write(
@@ -399,7 +440,7 @@ mod tests {
         .unwrap();
         let cfg = Config::load_with_herdr_theme(&dir, None);
         assert_eq!(cfg.flavor, Flavor::Mocha);
-        assert!(!cfg.qmd_enabled);
+        assert!(!cfg.qmd_enabled());
         assert_eq!(cfg.tree_width, 80, "widths are clamped, not trusted");
         assert!(!cfg.sidebar_open);
         assert!(cfg.repositories.is_empty());
@@ -533,7 +574,34 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = Config::load_with_herdr_theme(&dir, None);
         assert_eq!(cfg.flavor, Flavor::Latte);
-        assert!(!cfg.qmd_enabled);
+    }
+
+    #[test]
+    fn an_absent_engines_qmd_follows_the_binary_and_explains_itself() {
+        let dir = std::env::temp_dir().join(format!("podarcis-noqmd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // No key, no binary: the reason names the binary, not a config line the
+        // user never wrote.
+        let cfg = Config::load_parts(&dir, None, false);
+        assert!(!cfg.qmd_enabled());
+        assert!(cfg.qmd_off_reason.unwrap().contains("qmd binary on PATH"));
+
+        // No key, binary present: nothing to enable.
+        assert!(Config::load_parts(&dir, None, true).qmd_enabled());
+
+        // An explicit `false` is a decision, and is reported as one even when
+        // the binary is right there.
+        std::fs::write(dir.join("podarcis.yaml"), "engines:\n  qmd: false\n").unwrap();
+        let cfg = Config::load_parts(&dir, None, true);
+        assert!(!cfg.qmd_enabled());
+        assert!(cfg.qmd_off_reason.unwrap().contains("engines.qmd: false"));
+
+        // An explicit `true` wins over a missing binary: the run then fails
+        // with qmd's own error, which is accurate.
+        std::fs::write(dir.join("podarcis.yaml"), "engines:\n  qmd: true\n").unwrap();
+        assert!(Config::load_parts(&dir, None, false).qmd_enabled());
+        std::fs::remove_file(dir.join("podarcis.yaml")).unwrap();
     }
 
     #[test]
@@ -561,7 +629,7 @@ mod tests {
         let reloaded = Config::load(&dir);
         assert_eq!(reloaded.repo_url("wiki"), Some("git@example.com:w.git"));
         assert_eq!(reloaded.repo_url("sources"), Some("gdrive"));
-        assert!(reloaded.qmd_enabled);
+        assert!(reloaded.qmd_enabled());
     }
 
     #[test]
@@ -576,6 +644,6 @@ mod tests {
         let reloaded = Config::load_with_herdr_theme(&dir, None);
         assert_eq!(reloaded.tree_width, 48);
         assert_eq!(reloaded.sidebar_width, 64);
-        assert!(reloaded.qmd_enabled, "engines.qmd should be preserved");
+        assert!(reloaded.qmd_enabled(), "engines.qmd should be preserved");
     }
 }

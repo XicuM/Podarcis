@@ -35,6 +35,9 @@ def register(mcp, root: Path, config_section: dict | None = None) -> list[str]:
     '''
     skills_dir = root / '.apm' / 'skills'
     if not skills_dir.exists():
+        engine_root = Path(__file__).resolve().parents[3]
+        skills_dir = engine_root / '.apm' / 'skills'
+    if not skills_dir.exists():
         return []
 
     from podarcis.components import is_skill_enabled

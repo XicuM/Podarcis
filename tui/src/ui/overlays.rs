@@ -34,6 +34,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Some(Overlay::Finder(_)) => finder(frame, app, area),
         Some(Overlay::Palette(_)) => palette(frame, app, area),
         Some(Overlay::Themes { selected, .. }) => themes(frame, app, area, *selected),
+        Some(Overlay::Projects { selected, items }) => projects(frame, app, area, *selected, items),
         Some(Overlay::Help { scroll }) => help(frame, app, area, *scroll),
         Some(Overlay::Outline { selected }) => outline(frame, app, area, *selected),
         Some(Overlay::Prompt(_)) => prompt(frame, app, area),
@@ -196,6 +197,57 @@ fn themes(frame: &mut Frame, app: &App, area: Rect, selected: usize) {
         Span::styled("preview   ", theme.dim()),
         Span::styled("enter ", theme.faint_style()),
         Span::styled("keep   ", theme.dim()),
+        Span::styled("esc ", theme.faint_style()),
+        Span::styled("cancel", theme.dim()),
+    ]);
+    frame.render_widget(Paragraph::new(hints), hint);
+}
+
+fn projects(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    selected: usize,
+    items: &[(String, std::path::PathBuf, String)],
+) {
+    let theme = &app.theme;
+    let height = (items.len() as u16 + 3).min(area.height.saturating_sub(4)).max(6);
+    let box_area = crate::ui::centered(area, 72.min(area.width.saturating_sub(4)), height);
+    let inner = popup(frame, theme, box_area, "switch project");
+    if inner.is_empty() {
+        return;
+    }
+
+    let [list, hint] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let rows = list.height as usize;
+    let start = selected.saturating_sub(rows / 2).min(items.len().saturating_sub(rows.max(1)));
+
+    let lines: Vec<Line> = items
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(rows)
+        .map(|(i, (name, path, desc))| {
+            let on = i == selected;
+            let is_current = app.cfg.root == *path;
+            let marker = if is_current { "*" } else { " " };
+            let name_style = Style::default().fg(if on { theme.accent } else { theme.text });
+            let name_style = if on { name_style.add_modifier(Modifier::BOLD) } else { name_style };
+            Line::from(vec![
+                Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(theme.accent)),
+                Span::styled(format!("{marker} {:<16}", name), name_style),
+                Span::styled(format!("{:<28}", path.display()), theme.dim()),
+                Span::styled(desc.clone(), theme.faint_style()),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), list);
+
+    let hints = Line::from(vec![
+        Span::styled("j/k ", theme.faint_style()),
+        Span::styled("navigate   ", theme.dim()),
+        Span::styled("enter ", theme.faint_style()),
+        Span::styled("switch   ", theme.dim()),
         Span::styled("esc ", theme.faint_style()),
         Span::styled("cancel", theme.dim()),
     ]);

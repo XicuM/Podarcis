@@ -212,6 +212,8 @@ pub enum Overlay {
     /// The theme picker. `original` is restored if the picker is cancelled, so
     /// browsing twenty themes never costs you the one you had.
     Themes { selected: usize, original: Flavor },
+    /// The project switcher.
+    Projects { selected: usize, items: Vec<(String, PathBuf, String)> },
 }
 
 /// One action from the tree's right-click menu. `Delete` opens a confirmation
@@ -293,6 +295,12 @@ pub struct Areas {
     pub nav_back: Option<Rect>,
     /// Navigation arrow to go forward (reverse) in history.
     pub nav_forward: Option<Rect>,
+    /// Clickable project selector badge on the bottom bar.
+    pub project_selector: Option<Rect>,
+    /// The narrow-terminal tab strip: one clickable rect per pane, labelled,
+    /// replacing the side-by-side layout when there isn't room for it. Empty
+    /// on a wide terminal, where the panes sit next to each other instead.
+    pub tab_bar: Vec<(Focus, &'static str, Rect)>,
 }
 
 /// Which divider the pointer is dragging.
@@ -335,6 +343,9 @@ pub struct App {
     pub pending: Option<char>,
     pub finder_engine: search::Engine,
     pub quit: bool,
+    /// Like `quit`, but the process is replaced with a fresh copy of itself
+    /// instead of ending — how the palette's "restart" picks up a rebuild.
+    pub restart: bool,
     /// Set by a first `q` while a job is running.
     quit_confirmed: bool,
     /// Set by a first attempt to leave the editor with unsaved changes.
@@ -354,6 +365,8 @@ pub struct App {
     pub engine_version: Option<String>,
     /// A splash one-liner from `config.yaml` for the status bar's right corner.
     pub oneline: Option<String>,
+    /// Active project name displayed on the bottom bar selector.
+    pub project_name: String,
     pub areas: Areas,
     pub tx: Sender<AppEvent>,
     /// Cursor into `index.all_findings()` for `n` / `N`.
@@ -365,6 +378,8 @@ pub struct App {
     /// The timestamp, row and `mouse_down` generation of the most recent click
     /// in the tree, used to recognise a second click on the same row.
     last_tree_click: Option<(Instant, usize, u64)>,
+    /// Same as `last_tree_click`, for a source row in the inspector.
+    last_inspector_click: Option<(Instant, usize, u64)>,
 }
 
 impl App {
@@ -378,6 +393,19 @@ impl App {
             .iter()
             .map(|p| (p.clone(), crate::vault::git::track_state(p, &cfg.root)))
             .collect();
+        let reg = crate::project::ProjectRegistry::load();
+        let project_name = reg
+            .projects
+            .iter()
+            .find(|(_, entry)| entry.path == cfg.root)
+            .map(|(n, _)| n.clone())
+            .unwrap_or_else(|| {
+                cfg.root
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("project")
+                    .to_string()
+            });
         Self {
             tree: Tree::new(&cfg.root, collections),
             git,
@@ -403,6 +431,7 @@ impl App {
             finder_engine: search::Engine::default(),
             quit: false,
             quit_confirmed: false,
+            restart: false,
             discard_armed: false,
             dragging: None,
             dragging_scrollbar: None,
@@ -410,12 +439,14 @@ impl App {
             selecting_right: false,
             engine_version,
             oneline,
+            project_name,
             indexing: true,
             areas: Areas::default(),
             tx,
             finding_cursor: None,
             mouse_down: 0,
             last_tree_click: None,
+            last_inspector_click: None,
         }
     }
 
@@ -514,6 +545,9 @@ impl App {
     }
 
     pub fn open_path(&mut self, path: &Path, push_history: bool) {
+        if path.extension().is_some_and(|e| e == "pdf") {
+            return self.open_external(path);
+        }
         if path.is_dir() {
             let index = path.join("_index.md");
             if index.is_file() {
@@ -536,6 +570,23 @@ impl App {
                 self.focus = Focus::Doc;
             }
             None => self.toast(Level::Bad, format!("could not read {}", path.display())),
+        }
+    }
+
+    /// Hand a file off to the system's default viewer instead of rendering it
+    /// in-pane — used for PDFs, which the tree lists but never tries to
+    /// parse as markdown.
+    fn open_external(&mut self, path: &Path) {
+        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        match std::process::Command::new(opener)
+            .arg(path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => self.toast(Level::Info, format!("opened {} externally", path.display())),
+            Err(_) => self.toast(Level::Bad, format!("no viewer found for {}", path.display())),
         }
     }
 
@@ -719,8 +770,18 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         }
 
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            if let Some((focus, _, _)) =
+                self.areas.tab_bar.iter().find(|(_, _, r)| x >= r.x && x < r.x + r.width && y == r.y)
+            {
+                self.select_tab(*focus);
+                return;
+            }
             if self.areas.tree_toggle.is_some_and(|r| r.x == x && r.y == y) {
                 self.run(Cmd::ToggleTree);
+                return;
+            }
+            if self.areas.project_selector.is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+                self.run(Cmd::Projects);
                 return;
             }
             if self.areas.sidebar_toggle.is_some_and(|r| r.x == x && r.y == y) {
@@ -865,7 +926,22 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                     }
                     let row = (y - body.y) as usize;
                     if let Some(Some(id)) = self.areas.inspector_rows.get(row).cloned() {
-                        self.open_source(&id);
+                        let now = Instant::now();
+                        let double = match self.last_inspector_click.replace((now, row, self.mouse_down)) {
+                            Some((at, r, gen)) => {
+                                r == row
+                                    && gen + 1 == self.mouse_down
+                                    && now.duration_since(at) <= DOUBLE_CLICK
+                            }
+                            None => false,
+                        };
+                        if double {
+                            self.open_source(&id);
+                        } else {
+                            // A single click selects the source — its `[n]` is
+                            // highlighted in the body. Opening is a double click.
+                            self.select_source(&id);
+                        }
                     }
                 }
                 _ => {}
@@ -1107,7 +1183,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             Focus::Sidebar => self.adjust_sidebar_width(-4),
             Focus::Doc => {
                 if self.show_sidebar {
-                    self.adjust_sidebar_width(-4);
+                    self.adjust_sidebar_width(4);
                 } else if self.show_tree {
                     self.adjust_tree_width(-4);
                 }
@@ -1121,7 +1197,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             Focus::Sidebar => self.adjust_sidebar_width(4),
             Focus::Doc => {
                 if self.show_sidebar {
-                    self.adjust_sidebar_width(4);
+                    self.adjust_sidebar_width(-4);
                 } else if self.show_tree {
                     self.adjust_tree_width(4);
                 }
@@ -1274,26 +1350,65 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
 
     // -------------------------------------------------------------- commands
 
+    /// Whether leaving the app should be held back for one press.
+    ///
+    /// A sync mid-flight and an unsaved buffer are both things not to discard
+    /// by reflex; say so once, then take the second press as meaning it. The
+    /// editor already guards `esc` this way — quitting is the same loss by a
+    /// different key, so it asks the same question.
+    fn exit_blocked(&mut self, again: &str) -> bool {
+        if self.quit_confirmed {
+            return false;
+        }
+        let warning = if self.jobs.is_busy() {
+            let running = self.jobs.labels().join(", ");
+            Some(format!("still running: {running} — {again} to quit"))
+        } else if self.open.as_ref().and_then(|o| o.editor.as_ref()).is_some_and(Editor::dirty) {
+            Some(format!("unsaved changes — ctrl+s to save, {again} to discard"))
+        } else {
+            None
+        };
+        match warning {
+            Some(message) => {
+                self.quit_confirmed = true;
+                self.toast(Level::Warn, message);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn run(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::Quit => {
-                // A sync or a commit mid-flight is not something to kill by
-                // reflex; say so once, then take the second press as meaning it.
-                if self.jobs.is_busy() && !self.quit_confirmed {
-                    self.quit_confirmed = true;
-                    let running = self.jobs.labels().join(", ");
-                    self.toast(Level::Warn, format!("still running: {running} — press ctrl+q again to quit"));
-                } else {
+                if !self.exit_blocked("press ctrl+q again") {
                     self.quit = true;
                 }
             }
             Cmd::Help => self.overlay = Some(Overlay::Help { scroll: 0 }),
             Cmd::Palette => self.open_palette(),
             Cmd::Reload => self.reload_everything(),
+            Cmd::Restart => {
+                // A restart is a quit with a re-exec on the way out, so it
+                // carries the same guard — except for the unsaved buffer.
+                // Restart is reachable only from the palette, and opening the
+                // palette resets the confirmation, so "choose it again" is a
+                // prompt that can never be satisfied. An instruction can be.
+                if self.open.as_ref().and_then(|o| o.editor.as_ref()).is_some_and(Editor::dirty) {
+                    self.toast(
+                        Level::Warn,
+                        "unsaved changes — ctrl+s to save or esc to discard, then restart",
+                    );
+                } else if !self.exit_blocked("choose restart again") {
+                    self.restart = true;
+                    self.quit = true;
+                }
+            }
             Cmd::Theme => {
                 let selected = Flavor::ALL.iter().position(|f| *f == self.cfg.flavor).unwrap_or(0);
                 self.overlay = Some(Overlay::Themes { selected, original: self.cfg.flavor });
             }
+            Cmd::Projects => self.open_projects(),
 
             Cmd::FindFiles => self.open_finder(search::Mode::Files),
             Cmd::FindText => self.open_finder(search::Mode::Text),
@@ -1394,6 +1509,20 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         }
     }
 
+    /// Tab-bar click: unlike `set_focus`, this may reopen a pane the user had
+    /// hidden — clicking a tab is asking for that pane, not just its focus.
+    fn select_tab(&mut self, focus: Focus) {
+        match focus {
+            Focus::Tree => self.show_tree = true,
+            Focus::Sidebar => {
+                self.show_sidebar = true;
+                self.sidebar_error = None;
+            }
+            Focus::Doc => {}
+        }
+        self.set_focus(focus);
+    }
+
     fn set_focus(&mut self, focus: Focus) {
         let next = match focus {
             Focus::Tree if !self.show_tree => Focus::Doc,
@@ -1487,6 +1616,24 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         if let Some(open) = self.open.as_mut() {
             open.selected_citation = Some(id.to_string());
             open.citation_scroll_pending = true;
+        }
+    }
+
+    /// The mirror of `select_citation`: a source picked in the inspector's
+    /// sources section highlights the `[n]` mark that cites it in the body and
+    /// scrolls it into view.
+    fn select_source(&mut self, id: &str) {
+        self.show_inspector = true;
+        let Some(open) = self.open.as_mut() else { return };
+        open.selected_citation = Some(id.to_string());
+        open.citation_scroll_pending = true;
+        if let Some(link) = open.doc.citation_link(id) {
+            open.link = Some(link);
+            let line = open.doc.links[link].line;
+            let height = self.areas.doc_body.height.saturating_sub(1).max(1) as usize;
+            if line < open.scroll || line >= open.scroll + height {
+                open.scroll = line.saturating_sub(height / 3);
+            }
         }
     }
 
@@ -1993,6 +2140,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                 _ => {}
             },
             Some(Overlay::Themes { .. }) => self.theme_key(key),
+            Some(Overlay::Projects { .. }) => self.project_key(key),
             Some(Overlay::Palette(_)) => self.palette_key(key),
             Some(Overlay::Finder(_)) => self.finder_key(key),
             Some(Overlay::Prompt(_)) => self.prompt_key(key),
@@ -2000,6 +2148,71 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             Some(Overlay::RepoConfig(_)) => self.repo_config_key(key),
             None => {}
         }
+    }
+
+    fn open_projects(&mut self) {
+        let reg = crate::project::ProjectRegistry::load();
+        let mut items = Vec::new();
+        let mut sorted_names: Vec<&String> = reg.projects.keys().collect();
+        sorted_names.sort();
+        for name in sorted_names {
+            let entry = &reg.projects[name];
+            items.push((name.clone(), entry.path.clone(), entry.description.clone()));
+        }
+        let selected = items.iter().position(|(n, _, _)| *n == reg.active).unwrap_or(0);
+        self.overlay = Some(Overlay::Projects { selected, items });
+    }
+
+    fn project_key(&mut self, key: KeyEvent) {
+        let Some(Overlay::Projects { selected, items }) = self.overlay.as_mut() else { return };
+        let n = items.len();
+        if n == 0 {
+            self.overlay = None;
+            return;
+        }
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.overlay = None;
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                *selected = (*selected + 1) % n;
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                *selected = (*selected + n - 1) % n;
+            }
+            KeyCode::Enter => {
+                let (name, path, _) = items[*selected].clone();
+                self.overlay = None;
+                self.switch_project(&name, &path);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn switch_project(&mut self, name: &str, path: &Path) {
+        if !path.is_dir() {
+            self.toast(Level::Warn, format!("Project directory does not exist: {}", path.display()));
+            return;
+        }
+
+        let mut reg = crate::project::ProjectRegistry::load();
+        reg.active = name.to_string();
+        let _ = reg.save();
+
+        self.cfg = Config::load(path);
+        self.project_name = name.to_string();
+        let collections: Vec<PathBuf> = self.cfg.collections().into_iter().map(|(_, p)| p).collect();
+        self.tree = Tree::new(path, collections);
+        self.index = Index::build(path, &self.collection_dirs());
+        self.open = None;
+
+        if let Some(pane) = self.sidebar.as_mut() {
+            pane.switch_project(name, path);
+        } else {
+            let _ = herdr::space::ensure_project_space(name, path);
+        }
+
+        self.toast(Level::Good, format!("Switched to project '{name}'"));
     }
 
     fn theme_key(&mut self, key: KeyEvent) {
@@ -2143,10 +2356,9 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         if finder.query.trim().is_empty() {
             return;
         }
-        if !self.cfg.qmd_enabled {
-            let message = "semantic search is off (engines.qmd: false in config.yaml)";
+        if let Some(reason) = self.cfg.qmd_off_reason {
             if let Some(Overlay::Finder(finder)) = self.overlay.as_mut() {
-                finder.warning = Some(message.to_string());
+                finder.warning = Some(reason.to_string());
             }
             return;
         }
@@ -2650,7 +2862,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             self.sidebar_error = Some(format!("agents pane config: {err}"));
             return;
         }
-        match herdr::pty::Pane::spawn(&self.cfg.root, rows, cols, self.tx.clone()) {
+        match herdr::pty::Pane::spawn(&self.project_name, &self.cfg.root, rows, cols, self.tx.clone()) {
             Ok(pane) => self.sidebar = Some(pane),
             Err(err) => self.sidebar_error = Some(format!("herdr: {err}")),
         }
@@ -2814,6 +3026,16 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_pdf_hands_off_to_the_system_viewer_instead_of_rendering_it() {
+        let v = Vault::new("pdf");
+        v.write("sources/literature/smith2024/original.pdf", "%PDF-1.4");
+        let mut app = v.app();
+        app.open_path(&v.path("sources/literature/smith2024/original.pdf"), true);
+        assert!(app.open.is_none(), "a pdf is never opened in the reader pane");
+        assert_eq!(app.toasts.len(), 1);
+    }
+
+    #[test]
     fn opening_a_directory_opens_its_index_page() {
         let v = Vault::new("dir");
         let mut app = v.app();
@@ -2905,7 +3127,7 @@ mod tests {
     }
 
     #[test]
-    fn following_a_citation_selects_it_then_clicking_its_row_opens_the_source() {
+    fn a_single_click_on_a_source_row_selects_it_and_a_double_one_opens_it() {
         let v = Vault::new("citation");
         v.write(
             "sources/s1/metadata.md",
@@ -2929,12 +3151,22 @@ mod tests {
         app.areas.inspector_body = Rect::new(31, 31, 58, 8);
         app.areas.inspector_divider = None;
         app.areas.inspector_rows = vec![Some("s1".to_string())];
-        app.on_mouse(MouseEvent {
+        let down = |row: u16| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 32,
-            row: 31,
+            row,
             modifiers: KeyModifiers::NONE,
-        });
+        };
+
+        // A single click selects the source: its `[n]` stays highlighted in the
+        // body and the page is untouched.
+        app.on_mouse(down(31));
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Alpha");
+        assert_eq!(app.open.as_ref().unwrap().selected_citation.as_deref(), Some("s1"));
+        assert_eq!(app.open.as_ref().unwrap().link, Some(2), "the body [n] is the active link");
+
+        // A second click on the same row within the double-click window opens it.
+        app.on_mouse(down(31));
         assert_eq!(app.open.as_ref().unwrap().page.title(), "Source One");
     }
 
@@ -3218,6 +3450,52 @@ mod tests {
         app.on_key(ch('j'));
         app.on_key(ctrl('q'));
         assert!(!app.quit, "the warning has to be re-earned");
+    }
+
+    /// The reachable way to quit on top of a dirty buffer: `ctrl+q` is text
+    /// while the editor holds focus, but clicking into the tree leaves the
+    /// editor open and puts `ctrl+q` back in reach.
+    #[test]
+    fn quitting_with_unsaved_changes_asks_once() {
+        let v = Vault::new("quit-dirty");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.run(Cmd::Edit);
+        app.editor_key(ch('x'));
+        assert!(app.open.as_ref().unwrap().editor.as_ref().unwrap().dirty());
+        app.focus = Focus::Tree;
+
+        app.on_key(ctrl('q'));
+        assert!(!app.quit, "an unsaved buffer is not discarded by reflex");
+        assert!(app.toasts.last().unwrap().text.contains("unsaved changes"));
+        app.on_key(ctrl('q'));
+        assert!(app.quit, "the second press means it");
+    }
+
+    #[test]
+    fn a_clean_buffer_quits_on_the_first_press() {
+        let v = Vault::new("quit-clean");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.run(Cmd::Edit);
+        app.focus = Focus::Tree;
+        app.on_key(ctrl('q'));
+        assert!(app.quit, "the guard is about unsaved work, not about editing");
+    }
+
+    #[test]
+    fn restarting_with_unsaved_changes_instructs_instead_of_prompting() {
+        let v = Vault::new("restart-dirty");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.run(Cmd::Edit);
+        app.editor_key(ch('x'));
+
+        // Twice, because the palette would reset a "choose it again" prompt.
+        app.run(Cmd::Restart);
+        app.run(Cmd::Restart);
+        assert!(!app.restart);
+        assert!(app.toasts.last().unwrap().text.contains("ctrl+s to save"));
     }
 
     #[test]
@@ -3699,6 +3977,23 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_tab_focuses_its_pane_and_reopens_it_if_hidden() {
+        let v = Vault::new("tab-click");
+        let mut app = laid_out(&v);
+        app.areas.tab_bar = vec![
+            (Focus::Tree, "Tree", Rect::new(0, 0, 27, 1)),
+            (Focus::Doc, "Doc", Rect::new(27, 0, 26, 1)),
+            (Focus::Sidebar, "Agents", Rect::new(53, 0, 27, 1)),
+        ];
+        app.show_tree = false;
+        app.focus = Focus::Doc;
+
+        press(&mut app, 10, 0);
+        assert_eq!(app.focus, Focus::Tree, "clicking a hidden pane's tab still switches focus to it");
+        assert!(app.show_tree, "and reopens it, the same way a hand-hidden pane is meant to come back");
+    }
+
+    #[test]
     fn clicking_the_sidebar_handle_collapses_it_instead_of_dragging() {
         let v = Vault::new("toggle-sidebar");
         let mut app = laid_out(&v);
@@ -3902,15 +4197,16 @@ mod tests {
         app.run(Cmd::ShrinkSidebar);
         assert_eq!(app.cfg.sidebar_width, initial_sidebar);
 
-        // When in Doc, Shrink/WidenPane adjusts sidebar if open
+        // When in Doc, WidenPane shrinks the sidebar so its divider follows
+        // the arrow; the tree grows in its place.
         app.focus = Focus::Doc;
         app.show_sidebar = true;
         app.run(Cmd::WidenPane);
-        assert_eq!(app.cfg.sidebar_width, initial_sidebar + 4);
+        assert_eq!(app.cfg.sidebar_width, initial_sidebar - 4);
 
         // And verifies persistence to config.yaml
         let reloaded = Config::load_with_herdr_theme(&app.cfg.root, None);
-        assert_eq!(reloaded.sidebar_width, initial_sidebar + 4);
+        assert_eq!(reloaded.sidebar_width, initial_sidebar - 4);
     }
 
     #[test]

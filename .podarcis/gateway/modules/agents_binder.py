@@ -40,6 +40,9 @@ def register(mcp, root: Path, config_section: dict | None = None) -> list[str]:
     '''
     agents_dir = root / '.apm' / 'agents'
     if not agents_dir.exists():
+        engine_root = Path(__file__).resolve().parents[3]
+        agents_dir = engine_root / '.apm' / 'agents'
+    if not agents_dir.exists():
         return []
 
     from podarcis.components import is_agent_enabled

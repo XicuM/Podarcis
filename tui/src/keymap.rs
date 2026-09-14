@@ -14,7 +14,9 @@ pub enum Cmd {
     Quit,
     Help,
     Palette,
+    Projects,
     Reload,
+    Restart,
 
     // Find
     FindFiles,
@@ -163,7 +165,10 @@ pub const BINDINGS: &[Binding] = &[
     b(&["ctrl+q"], Cmd::Quit, "quit", "session", Ctx::Global),
     b(&["?"], Cmd::Help, "keys", "session", Ctx::Global),
     b(&["ctrl+p", ":"], Cmd::Palette, "command palette", "session", Ctx::Global),
+    b(&["P"], Cmd::Projects, "switch project", "session", Ctx::Global),
     b(&["R"], Cmd::Reload, "reload from disk", "session", Ctx::Global),
+    // Palette-only: no key, so the help overlay never lists an untyped one.
+    b(&[], Cmd::Restart, "restart", "session", Ctx::Global),
     b(&["ctrl+t"], Cmd::Theme, "theme", "session", Ctx::Global),
     // Find
     b(&["ctrl+f", "f"], Cmd::FindFiles, "find page", "find", Ctx::Global),
@@ -177,7 +182,10 @@ pub const BINDINGS: &[Binding] = &[
     b(&["backtab"], Cmd::CycleFocusBack, "previous pane", "layout", Ctx::Global),
     b(&["ctrl+b"], Cmd::ToggleTree, "toggle tree", "layout", Ctx::Global),
     b(&["ctrl+g"], Cmd::ToggleSidebar, "toggle agents", "layout", Ctx::Global),
-    b(&["ctrl+i"], Cmd::ToggleInspector, "toggle inspector", "layout", Ctx::Global),
+    // Not `ctrl+i`: that is the byte `tab` already claims above, so in any
+    // terminal without the kitty keyboard protocol it would silently cycle
+    // focus instead. See `no_binding_shares_a_control_byte_with_a_named_key`.
+    b(&["ctrl+e", "g i"], Cmd::ToggleInspector, "toggle inspector", "layout", Ctx::Global),
     b(&["alt+up"], Cmd::ShrinkInspector, "shorter inspector", "layout", Ctx::Global),
     b(&["alt+down"], Cmd::GrowInspector, "taller inspector", "layout", Ctx::Global),
     b(&["z"], Cmd::ZoomPane, "zoom pane", "layout", Ctx::Global),
@@ -228,9 +236,9 @@ pub const BINDINGS: &[Binding] = &[
     b(&["ctrl+r"], Cmd::TogglePreview, "preview while editing", "edit", Ctx::Edit),
     // Keys the agents pane intercepts before forwarding to the child.
     // Everything else, ctrl+space included, belongs to the child.
-    b(&["f12"], Cmd::LeaveSidebar, "leave agents pane", "layout", Ctx::Sidebar),
-    b(&["shift+left"], Cmd::ShrinkSidebar, "shrink agents pane", "layout", Ctx::Sidebar),
-    b(&["shift+right"], Cmd::WidenSidebar, "widen agents pane", "layout", Ctx::Sidebar),
+    b(&["f12", "alt+tab"], Cmd::LeaveSidebar, "leave agents pane", "layout", Ctx::Sidebar),
+    b(&["shift+left"], Cmd::WidenSidebar, "widen agents pane", "layout", Ctx::Sidebar),
+    b(&["shift+right"], Cmd::ShrinkSidebar, "shrink agents pane", "layout", Ctx::Sidebar),
     // Engine
     b(&["L"], Cmd::Lint, "run podarcis lint", "engine", Ctx::Global),
     b(&["g s"], Cmd::SyncRepos, "sync repositories", "engine", Ctx::Global),
@@ -429,6 +437,40 @@ mod tests {
         assert_eq!(parse("+").unwrap()[0].code, KeyCode::Char('+'));
     }
 
+    /// Control bytes a terminal cannot tell apart from a named key.
+    ///
+    /// `ctrl+i` *is* 0x09, which is `tab`; `ctrl+m` is `enter`, `ctrl+h` is
+    /// `backspace`, `ctrl+[` is `esc`. Without the kitty keyboard protocol —
+    /// which this app does not negotiate — crossterm reports the named key, so
+    /// a binding on the control form is documented in the help overlay and
+    /// then never fires. The table exists so that cannot happen.
+    #[test]
+    fn no_binding_shares_a_control_byte_with_a_named_key() {
+        const ALIASES: &[(char, &str)] = &[
+            ('i', "tab"),
+            ('m', "enter"),
+            ('h', "backspace"),
+            ('j', "enter (line feed)"),
+            ('[', "esc"),
+        ];
+        for binding in BINDINGS {
+            for spec in binding.keys {
+                for chord in parse(spec).into_iter().flatten() {
+                    if !chord.mods.contains(KeyModifiers::CONTROL) {
+                        continue;
+                    }
+                    let KeyCode::Char(c) = chord.code else { continue };
+                    if let Some((_, named)) = ALIASES.iter().find(|(a, _)| *a == c) {
+                        panic!(
+                            "`{spec}` ({}) is the same byte as `{named}` and would never fire",
+                            binding.title
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn rejects_prose_that_is_not_a_key_spec() {
         assert!(parse("tab is taken; use l").is_none());
@@ -491,6 +533,9 @@ mod tests {
     fn help_covers_every_command_that_has_a_real_binding() {
         let rows = help_rows();
         for binding in BINDINGS {
+            if binding.keys.is_empty() {
+                continue;
+            }
             assert!(
                 rows.iter().any(|(g, _, t)| *g == binding.group && *t == binding.title),
                 "{} is bound but undocumented",
@@ -519,17 +564,21 @@ mod tests {
             resolve(&key(KeyCode::F(12), KeyModifiers::NONE), Ctx::Sidebar, None),
             Resolved::Run(Cmd::LeaveSidebar)
         );
+        assert_eq!(
+            resolve(&key(KeyCode::Tab, KeyModifiers::ALT), Ctx::Sidebar, None),
+            Resolved::Run(Cmd::LeaveSidebar)
+        );
     }
 
     #[test]
     fn sidebar_handles_resize_keys() {
         assert_eq!(
             resolve(&key(KeyCode::Left, KeyModifiers::SHIFT), Ctx::Sidebar, None),
-            Resolved::Run(Cmd::ShrinkSidebar)
+            Resolved::Run(Cmd::WidenSidebar)
         );
         assert_eq!(
             resolve(&key(KeyCode::Right, KeyModifiers::SHIFT), Ctx::Sidebar, None),
-            Resolved::Run(Cmd::WidenSidebar)
+            Resolved::Run(Cmd::ShrinkSidebar)
         );
     }
 

@@ -121,11 +121,6 @@ pub fn set_mcp_enabled(root: &Path, name: &str, enabled: bool) -> Result<()> {
     write_block(root, "mcp_modules", &block)
 }
 
-#[cfg(test)]
-fn repos_map(root: &Path) -> HashMap<String, String> {
-    Config::load(root).repositories
-}
-
 /// Persist a repository URL under `repositories:`. Mirrors `repos.set_repo_url`.
 pub fn set_repo_url_config(root: &Path, name: &str, url: &str) -> Result<()> {
     let mut repos = Config::load(root).repositories;

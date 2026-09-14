@@ -80,27 +80,41 @@ def parse_index_health(status_text: str) -> str | None:
     return None
 
 
+QMD_ABSENT = (
+    "semantic search needs the 'qmd' binary on PATH — install it, "
+    'or set engines.qmd: true in .podarcis/config.yaml.'
+)
+QMD_OFF = 'QMD engine is off (engines.qmd: false in .podarcis/config.yaml).'
+
+
 def qmd_status(root: Path, *, environ: dict[str, str] | None = None) -> tuple[str, str]:
-    '''disabled | enabled_ok | enabled_broken.'''
+    '''disabled | enabled_ok | enabled_broken.
+
+    An absent `engines.qmd` is not a decision the user made, so it follows the
+    binary rather than defaulting to off and then blaming a config line nobody
+    wrote. An explicit value, from the key or from $ENABLE_QMD, always wins.
+    '''
     env = os.environ if environ is None else environ
     env_flag = env.get('ENABLE_QMD')
     if env_flag is not None:
         enabled = env_flag.lower() in ('true', '1', 'yes')
     else:
-        enabled = False
+        enabled = None
         yaml_path = Path(root) / '.podarcis' / 'config.yaml'
         if yaml_path.is_file():
             try:
                 import yaml
                 data = yaml.safe_load(yaml_path.read_text(encoding='utf-8')) or {}
-                enabled = bool((data.get('engines') or {}).get('qmd', False))
+                raw = (data.get('engines') or {}).get('qmd')
+                enabled = None if raw is None else bool(raw)
             except Exception:
-                enabled = False
-    if not enabled:
-        return 'disabled', 'QMD engine is disabled in .podarcis/config.yaml.'
+                enabled = None
+    if enabled is False:
+        return 'disabled', QMD_OFF
     qmd_bin = shutil.which('qmd')
     if not qmd_bin:
-        return 'enabled_broken', "'qmd' binary not found in PATH."
+        # Nobody asked for it and it is not installed: nothing is broken.
+        return ('enabled_broken', "'qmd' binary not found in PATH.") if enabled else ('disabled', QMD_ABSENT)
     return 'enabled_ok', qmd_bin
 
 
@@ -272,7 +286,7 @@ def search(
             f'QMD is enabled but unavailable ({info}). Falling back to keyword search.'
         )
     elif status == 'disabled' and meth in ('hybrid', 'semantic'):
-        out['warning'] = 'QMD engine is disabled. Operating in keyword search mode.'
+        out['warning'] = f'{info} Operating in keyword search mode.'
 
     if use_qmd:
         if meth == 'semantic':

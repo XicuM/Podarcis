@@ -36,9 +36,15 @@ def discover_modules(root: Path) -> dict[str, Path]:
     A module *is* its server.py — the same rule components.discover_components
     applies — so a leftover __pycache__/ or tests/ directory is not a module.
     '''
+    mcp_dir = root / '.agents' / 'mcp'
+    if not mcp_dir.exists():
+        engine_root = Path(__file__).resolve().parents[2]
+        mcp_dir = engine_root / '.agents' / 'mcp'
+    if not mcp_dir.exists():
+        return {}
     return {
         p.parent.name: p
-        for p in sorted((root / '.agents' / 'mcp').glob('*/server.py'))
+        for p in sorted(mcp_dir.glob('*/server.py'))
     }
 
 
@@ -56,12 +62,24 @@ def is_enabled(section: Any, name: str) -> bool:
 
 
 def load_gateway_config(root: Path, config_path: Path | None = None) -> dict[str, Any]:
-    '''Read .podarcis/config.yaml, guaranteeing the three gated sections exist.
+    '''Read config (explicit, podarcis.yaml, .podarcis/config.yaml, or global config), guaranteeing the three gated sections exist.
 
     The sections are overrides only — an absent section means "nothing is
     disabled", not "nothing is enabled".
     '''
-    cfg = load_yaml(config_path or (root / '.podarcis' / 'config.yaml'))
+    if config_path:
+        cfg = load_yaml(config_path)
+    elif (root / 'podarcis.yaml').is_file():
+        cfg = load_yaml(root / 'podarcis.yaml')
+    elif (root / '.podarcis' / 'config.yaml').is_file():
+        cfg = load_yaml(root / '.podarcis' / 'config.yaml')
+    else:
+        from podarcis.project import get_xdg_config_dir
+        global_cfg = get_xdg_config_dir() / 'config.yaml'
+        if global_cfg.is_file():
+            cfg = load_yaml(global_cfg)
+        else:
+            cfg = {}
     return cfg | {s: cfg.get(s) or {} for s in GATED_SECTIONS}
 
 

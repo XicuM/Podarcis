@@ -1393,7 +1393,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "podarcis"
-version = "11.3.0"
+version = "11.5.0"
 dependencies = [
  "anyhow",
  "catppuccin",
@@ -1405,6 +1405,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "libc",
  "notify",
  "nucleo-matcher",
  "portable-pty",

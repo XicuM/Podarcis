@@ -232,6 +232,97 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0 if res.get('status') != 'error' else 1
 
 
+def cmd_project(args: argparse.Namespace) -> int:
+    '''Manage research projects.'''
+    from podarcis.project import (
+        list_projects, get_active_project_name, set_active_project,
+        new_project, register_project, unregister_project,
+        migrate_checkout_to_projects_dir, get_projects_dir
+    )
+    action = getattr(args, 'project_action', 'list') or 'list'
+
+    if action == 'list':
+        projects = list_projects()
+        if getattr(args, 'json', False):
+            print(json.dumps(projects, indent=2))
+            return 0
+        console.print('[bold #29b8db]Podarcis Research Projects:[/bold #29b8db]\n')
+        active = get_active_project_name()
+        for name, info in sorted(projects.items()):
+            mark = '*' if name == active else ' '
+            status = 'ready' if info.get('exists') else 'missing'
+            console.print(f"  {mark} [bold]{name:<16}[/bold] [{status:<7}]  {info.get('path', ''):<35}  [dim]{info.get('description', '')}[/dim]")
+        console.print(f'\nActive project:     [green]{active}[/green]')
+        console.print(f'Projects directory: [dim]{get_projects_dir()}[/dim]\n')
+        return 0
+
+    elif action == 'current':
+        active = get_active_project_name()
+        projects = list_projects()
+        p = projects.get(active, {})
+        console.print(f"{active} ({p.get('path', 'not registered')})")
+        return 0
+
+    elif action == 'switch':
+        name = args.name
+        try:
+            set_active_project(name)
+            console.print(f'[bold green]✓ Switched active project to "{name}".[/bold green]')
+            return 0
+        except Exception as e:
+            console.print(f'[bold red]Error:[/bold red] {e}')
+            return 1
+
+    elif action == 'new':
+        try:
+            proj = new_project(
+                name=args.name,
+                path=getattr(args, 'path', None),
+                description=getattr(args, 'description', '') or '',
+                wiki_remote=getattr(args, 'wiki_remote', '') or '',
+                workspace_remote=getattr(args, 'workspace_remote', '') or '',
+                sources_remote=getattr(args, 'sources_remote', '') or '',
+                sources_backend=getattr(args, 'sources_backend', 'local') or 'local',
+            )
+            console.print(f'[bold green]✓ Initialized project "{proj.name}" at {proj.root}[/bold green]')
+            return 0
+        except Exception as e:
+            console.print(f'[bold red]Error:[/bold red] {e}')
+            return 1
+
+    elif action == 'add':
+        try:
+            path = Path(args.path).resolve()
+            name = getattr(args, 'name', None) or path.name
+            register_project(name, path, description=getattr(args, 'description', '') or '', set_active=True)
+            console.print(f'[bold green]✓ Registered project "{name}" at {path}[/bold green]')
+            return 0
+        except Exception as e:
+            console.print(f'[bold red]Error:[/bold red] {e}')
+            return 1
+
+    elif action == 'remove':
+        try:
+            unregister_project(args.name, purge=getattr(args, 'purge', False))
+            console.print(f'[bold green]✓ Removed project "{args.name}".[/bold green]')
+            return 0
+        except Exception as e:
+            console.print(f'[bold red]Error:[/bold red] {e}')
+            return 1
+
+    elif action == 'migrate':
+        try:
+            name = getattr(args, 'name', 'default') or 'default'
+            proj = migrate_checkout_to_projects_dir(ROOT_DIR, project_name=name)
+            console.print(f'[bold green]✓ Migration complete. Project "{proj.name}" is now active at {proj.root}[/bold green]')
+            return 0
+        except Exception as e:
+            console.print(f'[bold red]Error:[/bold red] {e}')
+            return 1
+
+    return 0
+
+
 def _unsupported(_args: argparse.Namespace) -> int:
     '''Core subcommands are Rust now; this Python parser no longer knows them.'''
     console.print('[bold yellow]This command lives in the Rust `podarcis` CLI.[/bold yellow]')
@@ -254,7 +345,8 @@ def main(argv: list[str] | None = None) -> int:
         version=f'podarcis {load_version_info(ROOT_DIR)[0]}',
     )
     parser.add_argument('-i', '--interactive', action='store_true', help='Launch interactive TUI menu')
-    parser.add_argument('--root', help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml)')
+    parser.add_argument('-p', '--project', help='Target project name or directory path')
+    parser.add_argument('--root', help='Podarcis checkout root (AGENTS.md + .podarcis/config.yaml or podarcis.yaml)')
 
     sub = parser.add_subparsers(dest='subcommand', title='Subcommands', help='Action to perform')
     parser.set_defaults(func=_unsupported)
@@ -264,6 +356,32 @@ def main(argv: list[str] | None = None) -> int:
         p = parent.add_parser(name, help=help_text, **kwargs)
         p.set_defaults(func=handler)
         return p
+
+    # ── project ───────────────────────────────────────────────────────────
+    proj_p = add('project', 'Manage research projects (workspaces with wiki, workspace, sources)', cmd_project)
+    proj_sub = proj_p.add_subparsers(dest='project_action', help='Project action')
+    add('list', 'List registered projects', cmd_project, parent=proj_sub) \
+        .add_argument('--json', action='store_true', help='Output in JSON format')
+    add('current', 'Show active project', cmd_project, parent=proj_sub)
+    add('switch', 'Switch active project', cmd_project, parent=proj_sub) \
+        .add_argument('name', help='Project name')
+    p_new = add('new', 'Create a new project workspace', cmd_project, parent=proj_sub)
+    p_new.add_argument('name', help='Project name')
+    p_new.add_argument('--path', help='Directory path (defaults to ~/.local/share/podarcis/projects/<name>)')
+    p_new.add_argument('--description', default='', help='Project description')
+    p_new.add_argument('--wiki-remote', default='', help='Remote Git URL for wiki')
+    p_new.add_argument('--workspace-remote', default='', help='Remote Git URL for workspace')
+    p_new.add_argument('--sources-remote', default='', help='Remote Git URL for sources')
+    p_new.add_argument('--sources-backend', default='local', choices=['local', 'gdrive'], help='Sources backend')
+    p_add = add('add', 'Register an existing directory as a project', cmd_project, parent=proj_sub)
+    p_add.add_argument('path', help='Project directory path')
+    p_add.add_argument('--name', help='Custom project name')
+    p_add.add_argument('--description', default='', help='Project description')
+    p_rm = add('remove', 'Unregister a project', cmd_project, parent=proj_sub)
+    p_rm.add_argument('name', help='Project name')
+    p_rm.add_argument('--purge', action='store_true', help='Also delete project directory on disk')
+    p_mig = add('migrate', 'Migrate current checkout into ~/.local/share/podarcis/projects/<name>', cmd_project, parent=proj_sub)
+    p_mig.add_argument('name', nargs='?', default='default', help='Target project name')
 
     # ── job ───────────────────────────────────────────────────────────────
     job_p = add('job', 'Manage and execute scheduled jobs (.agents/jobs/*.yaml)', cmd_job_list)

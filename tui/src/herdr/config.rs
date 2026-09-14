@@ -25,6 +25,18 @@ pub fn session_dir() -> Option<PathBuf> {
     Some(base.join("herdr").join("sessions").join(SESSION))
 }
 
+/// A standard Command configured to target the podarcis session.
+pub fn herdr_cmd() -> std::process::Command {
+    let mut cmd = std::process::Command::new(super::pty::herdr_binary());
+    cmd.args(["--session", SESSION]);
+    if let Some(path) = session_dir().map(|d| d.join("config.toml")) {
+        if path.exists() {
+            cmd.env("HERDR_CONFIG_PATH", path);
+        }
+    }
+    cmd
+}
+
 pub fn render(flavor: Flavor) -> String {
     TEMPLATE.replace("@THEME@", flavor.herdr_name())
 }

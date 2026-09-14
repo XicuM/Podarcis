@@ -19,14 +19,18 @@ from podarcis.gateway.watcher import ConfigWatcher
 
 logger = logging.getLogger('podarcis.gateway.server')
 
-def _find_root() -> Path:
-    env = os.environ.get("PROJECT_ROOT")
-    if env:
-        return Path(env).resolve()
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "AGENTS.md").exists():
-            return parent
-    return Path.cwd().resolve()
+def _find_root(explicit: str | None = None) -> Path:
+    from podarcis.root import find_wiki_root
+    try:
+        return find_wiki_root(explicit=explicit)
+    except Exception:
+        env = os.environ.get("PROJECT_ROOT") or os.environ.get("PODARCIS_PROJECT") or os.environ.get("PODARCIS_ROOT")
+        if env:
+            return Path(env).resolve()
+        for parent in Path(__file__).resolve().parents:
+            if (parent / "AGENTS.md").exists():
+                return parent
+        return Path.cwd().resolve()
 
 def create_gateway(root: Path, config_path: Path | None = None, port: int = 8000) -> tuple[FastMCP, ConfigWatcher]:
     '''Construct and initialize the Podarcis FastMCP Gateway server.'''
@@ -48,13 +52,19 @@ def create_gateway(root: Path, config_path: Path | None = None, port: int = 8000
 async def _run_server() -> int:
     '''Async entrypoint for podarcis-mcp command.'''
     parser = argparse.ArgumentParser(description="Podarcis Gateway MCP Server")
+    parser.add_argument("-p", "--project", type=str, default=None, help="Project name or path")
+    parser.add_argument("--root", type=str, default=None, help="Root path of project/checkout")
     parser.add_argument("--config", type=str, default=None, help="Path to config.yaml")
     parser.add_argument("--transport", choices=["stdio", "http", "sse"], default="stdio", help="Transport mode")
     parser.add_argument("--port", type=int, default=9090, help="Port for HTTP/SSE transport")
     args = parser.parse_args()
 
-    root = _find_root()
+    root = _find_root(explicit=args.project or args.root)
     cfg_path = Path(args.config).resolve() if args.config else None
+
+    # Propagate resolved root to environment for child modules
+    os.environ["PROJECT_ROOT"] = str(root)
+    os.environ["PODARCIS_PROJECT"] = str(root)
 
     logging.basicConfig(
         level=logging.INFO,

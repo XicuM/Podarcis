@@ -209,6 +209,13 @@ const COLLECTIONS: [&str; 4] = ["wiki", "protocols", "sources", "all"];
 
 const DEFAULT_LIMIT: usize = 20;
 
+/// Is a `qmd` binary reachable at all? An absent `engines.qmd` key is not a
+/// decision the user made, so the config asks this rather than defaulting to
+/// "off" and then blaming a line nobody wrote.
+pub fn qmd_on_path() -> bool {
+    crate::herdr::pty::which("qmd").is_some()
+}
+
 fn run_qmd(root: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("qmd")
         .args(args)
