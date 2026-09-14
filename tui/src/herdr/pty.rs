@@ -51,6 +51,12 @@ impl Pane {
         cmd.env_remove("HERDR_ENV");
         cmd.env_remove("HERDR_PANE_ID");
         cmd.env_remove("HERDR_TAB_ID");
+        // The pane is this machine's shell. Without a state home of its own it
+        // would inherit whichever saved SSH machine was last selected in any
+        // other herdr window, with no sidebar here to select Local again.
+        if let Some((key, dir)) = super::config::local_env() {
+            cmd.env(key, dir);
+        }
         if let Some(cfg_path) = super::config::session_dir().map(|d| d.join("config.toml")) {
             if cfg_path.exists() {
                 cmd.env("HERDR_CONFIG_PATH", cfg_path);
@@ -318,14 +324,9 @@ pub fn reload_config(flavor: Flavor) {
     if super::config::provision(flavor).is_err() || !available() {
         return;
     }
-    let binary = herdr_binary();
-    let config_path = super::config::session_dir().map(|d| d.join("config.toml"));
     std::thread::spawn(move || {
-        let mut cmd = std::process::Command::new(binary);
-        cmd.args(["--session", super::config::SESSION, "server", "reload-config"]);
-        if let Some(path) = config_path {
-            cmd.env("HERDR_CONFIG_PATH", path);
-        }
+        let mut cmd = super::config::herdr_cmd();
+        cmd.args(["server", "reload-config"]);
         let _ = cmd
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

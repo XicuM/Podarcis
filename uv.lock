@@ -1128,7 +1128,7 @@ wheels = [
 
 [[package]]
 name = "podarcis"
-version = "11.3.0"
+version = "11.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

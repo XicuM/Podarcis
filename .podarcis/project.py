@@ -159,6 +159,20 @@ def get_active_project_name() -> str:
     return load_global_config().get('active_project', 'default')
 
 
+def herdr_env() -> dict[str, str]:
+    '''Environment pinning a herdr invocation to the local machine.
+
+    Herdr keeps its saved-SSH-machine catalog and the selected machine in
+    `$XDG_STATE_HOME/herdr/client/`, shared by every herdr client on the box. A
+    state home of our own means these workspace calls always address the local
+    podarcis session, never whichever machine was last picked elsewhere. Kept in
+    step with `client_state_home()` in tui/src/herdr/config.rs.
+    '''
+    base = os.environ.get('XDG_STATE_HOME')
+    root = Path(base) if base and os.path.isabs(base) else Path.home() / '.local' / 'state'
+    return {**os.environ, 'XDG_STATE_HOME': str(root / 'podarcis' / 'herdr-state')}
+
+
 def ensure_herdr_space(name: str, path: Path, focus: bool = False) -> None:
     '''Ensure a Herdr workspace exists for the project if Herdr server is running.'''
     herdr_bin = shutil.which('herdr')
@@ -170,7 +184,7 @@ def ensure_herdr_space(name: str, path: Path, focus: bool = False) -> None:
     try:
         res = subprocess.run(
             [herdr_bin, '--session', 'podarcis', 'workspace', 'list'],
-            capture_output=True, text=True, timeout=2, check=False,
+            capture_output=True, text=True, timeout=2, check=False, env=herdr_env(),
         )
         if res.returncode != 0:
             return
@@ -183,14 +197,14 @@ def ensure_herdr_space(name: str, path: Path, focus: bool = False) -> None:
                     if ws_id:
                         subprocess.run(
                             [herdr_bin, '--session', 'podarcis', 'workspace', 'focus', ws_id],
-                            capture_output=True, timeout=2, check=False,
+                            capture_output=True, timeout=2, check=False, env=herdr_env(),
                         )
                 return
         # Create workspace for project
         flag = '--focus' if focus else '--no-focus'
         subprocess.run(
             [herdr_bin, '--session', 'podarcis', 'workspace', 'create', '--label', name, '--cwd', str(path), flag],
-            capture_output=True, timeout=2, check=False,
+            capture_output=True, timeout=2, check=False, env=herdr_env(),
         )
     except Exception:
         pass
@@ -207,7 +221,7 @@ def close_herdr_space(name: str) -> None:
     try:
         res = subprocess.run(
             [herdr_bin, '--session', 'podarcis', 'workspace', 'list'],
-            capture_output=True, text=True, timeout=2, check=False,
+            capture_output=True, text=True, timeout=2, check=False, env=herdr_env(),
         )
         if res.returncode != 0:
             return
@@ -219,7 +233,7 @@ def close_herdr_space(name: str) -> None:
                 if ws_id:
                     subprocess.run(
                         [herdr_bin, '--session', 'podarcis', 'workspace', 'close', ws_id],
-                        capture_output=True, timeout=2, check=False,
+                        capture_output=True, timeout=2, check=False, env=herdr_env(),
                     )
                 break
     except Exception:

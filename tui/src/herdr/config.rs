@@ -25,10 +25,36 @@ pub fn session_dir() -> Option<PathBuf> {
     Some(base.join("herdr").join("sessions").join(SESSION))
 }
 
-/// A standard Command configured to target the podarcis session.
+/// The state home the embedded herdr client runs under.
+///
+/// herdr keeps the saved-SSH-machine catalog and the machine currently selected
+/// in `$XDG_STATE_HOME/herdr/client/` — one pair of files shared by every herdr
+/// client on the box, not one per session. Picking a machine in any other herdr
+/// window therefore retargets this pane at its next launch, and because our
+/// session config hides the sidebar there is no way to select Local again from
+/// inside the pane. A state home of our own leaves the embedded client with an
+/// empty catalog, so it always runs Local — the only coherent choice, since the
+/// app reads `wiki/` off this disk and drives the pane over a local socket.
+pub fn client_state_home() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("state")))?;
+    Some(base.join("podarcis").join("herdr-state"))
+}
+
+/// The environment that pins a herdr invocation to the local machine.
+pub fn local_env() -> Option<(&'static str, PathBuf)> {
+    client_state_home().map(|dir| ("XDG_STATE_HOME", dir))
+}
+
+/// A standard Command configured to target the podarcis session, on this machine.
 pub fn herdr_cmd() -> std::process::Command {
     let mut cmd = std::process::Command::new(super::pty::herdr_binary());
     cmd.args(["--session", SESSION]);
+    if let Some((key, dir)) = local_env() {
+        cmd.env(key, dir);
+    }
     if let Some(path) = session_dir().map(|d| d.join("config.toml")) {
         if path.exists() {
             cmd.env("HERDR_CONFIG_PATH", path);
@@ -99,6 +125,23 @@ mod tests {
         write_into(&dir, Flavor::Mocha).unwrap();
         assert!(std::fs::read_to_string(&path).unwrap().contains("catppuccin"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_embedded_client_runs_under_a_state_home_of_its_own() {
+        // herdr's machine catalog and selection live in $XDG_STATE_HOME/herdr/client.
+        // Sharing the user's would let a machine picked in another herdr window
+        // retarget this pane, which has no sidebar to switch it back.
+        let ours = client_state_home().expect("HOME is always set in the test environment");
+        assert!(ours.ends_with("podarcis/herdr-state"), "{}", ours.display());
+
+        let cmd = herdr_cmd();
+        let state: Vec<_> = cmd
+            .get_envs()
+            .filter(|(k, _)| *k == std::ffi::OsStr::new("XDG_STATE_HOME"))
+            .collect();
+        assert_eq!(state.len(), 1, "every herdr invocation is pinned to the local machine");
+        assert_eq!(state[0].1, Some(ours.as_os_str()));
     }
 
     #[test]
