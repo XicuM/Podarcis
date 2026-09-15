@@ -16,7 +16,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use crate::actions::{JobResult, JobRunner, NativeOutcome};
 use crate::config::Config;
 use crate::control::{Command as Control, Request};
-use crate::editor::Editor;
+use crate::editor::{Editor, Save};
 use crate::event::AppEvent;
 use crate::herdr;
 use crate::keymap::{self, Cmd, Ctx, Resolved};
@@ -424,6 +424,9 @@ pub struct App {
     quit_confirmed: bool,
     /// Set by a first attempt to leave the editor with unsaved changes.
     discard_armed: bool,
+    /// Set by a save that found the file changed on disk. The next ctrl+s
+    /// overwrites, parking the outside version beside the page.
+    overwrite_armed: bool,
     /// The divider currently being dragged, if any.
     pub dragging: Option<Divider>,
     /// The scrollbar currently being dragged, if any.
@@ -517,6 +520,7 @@ impl App {
             quit_confirmed: false,
             restart: false,
             discard_armed: false,
+            overwrite_armed: false,
             dragging: None,
             dragging_scrollbar: None,
             selecting_text: false,
@@ -1668,6 +1672,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         }
         // Typing again means the warning has to be re-earned.
         self.discard_armed = false;
+        self.overwrite_armed = false;
         self.refresh_completion();
     }
 
@@ -2347,23 +2352,54 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         open.editor = Some(editor);
         self.focus = Focus::Doc;
         self.discard_armed = false;
+        self.overwrite_armed = false;
     }
 
     fn save(&mut self) {
         self.discard_armed = false;
+        let armed = std::mem::take(&mut self.overwrite_armed);
         let Some(open) = self.open.as_mut() else { return };
         let Some(editor) = open.editor.as_mut() else { return };
-        match editor.save() {
-            Ok(()) => {
-                let path = editor.path.clone();
-                if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                    self.index.refresh(&path);
+        let path = editor.path.clone();
+
+        // Armed by a previous ctrl+s that hit a conflict — the same
+        // arm-then-confirm shape as discarding an unsaved buffer, so the
+        // second press is the answer rather than a new dialog.
+        if armed {
+            match editor.save_overwriting() {
+                Ok(backup) => {
+                    let kept = crate::vault::page::rel_path(&backup, &self.cfg.root);
+                    self.after_save(&path);
+                    self.toast(Level::Warn, format!("saved — their version kept as {kept}"));
                 }
-                self.toast(Level::Good, format!("saved {}", crate::vault::page::rel_path(&path, &self.cfg.root)));
-                self.refresh_page_after_save();
+                Err(err) => self.toast(Level::Bad, format!("save failed: {err}")),
+            }
+            return;
+        }
+
+        match editor.save() {
+            Ok(Save::Written) => {
+                self.after_save(&path);
+                let rel = crate::vault::page::rel_path(&path, &self.cfg.root);
+                self.toast(Level::Good, format!("saved {rel}"));
+            }
+            Ok(Save::ChangedUnderneath) => {
+                self.overwrite_armed = true;
+                self.toast(
+                    Level::Warn,
+                    "changed on disk since you opened it — ctrl+s again to overwrite (a copy is kept), esc esc to discard yours",
+                );
             }
             Err(err) => self.toast(Level::Bad, format!("save failed: {err}")),
         }
+    }
+
+    /// Re-index and re-parse after a write that actually landed.
+    fn after_save(&mut self, path: &Path) {
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            self.index.refresh(path);
+        }
+        self.refresh_page_after_save();
     }
 
     /// Re-parse the page so the inspector and findings reflect what was saved,
@@ -2395,6 +2431,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             return;
         }
         self.discard_armed = false;
+        self.overwrite_armed = false;
         if let Some(open) = self.open.as_mut() {
             open.editor = None;
         }

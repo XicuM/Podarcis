@@ -67,7 +67,17 @@ def _bootstrap_venv() -> None:
         argv = [a for a in sys.argv if a != '--bootstrap-only']
         os.execv(str(python), [str(python)] + argv)
 
-_bootstrap_venv()
+# Only when run as a script, never on import. `_bootstrap_venv` ends in
+# `os.execv`, and a module that re-execs the interpreter as a side effect of
+# being imported takes the whole process with it: under pytest the new image
+# inherits the capture file descriptors, so every test's output disappears into
+# a pipe nobody reads and the run exits 0 having reported nothing.
+#
+# It has to happen here rather than under a `__main__` guard at the bottom of
+# the file, because the imports below are the very thing the bootstrap exists
+# to make possible on a checkout that has no venv yet.
+if __name__ == '__main__':
+    _bootstrap_venv()
 
 from podarcis.banner import display_install_banner
 from podarcis.common import load_yaml, save_yaml

@@ -66,11 +66,34 @@ pub struct Editor {
     /// tokenized from, so `refresh_syntax` can skip the work while neither
     /// changed — the tokenizer runs only when the buffer actually moved.
     syntax: Option<(Style, String)>,
+    /// The file's modification time when this buffer was filled, so `save` can
+    /// tell "nobody touched it" from "someone did".
+    ///
+    /// The watcher notices an outside edit, but a save that was already under
+    /// way when the event arrived would still land on top of it. `None` when
+    /// the file had no mtime to read (a page being created), which nothing can
+    /// conflict with.
+    opened_at: Option<std::time::SystemTime>,
+}
+
+/// What a [`Editor::save`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Save {
+    /// The buffer is on disk.
+    Written,
+    /// Nothing was written: the file moved since it was opened.
+    ChangedUnderneath,
+}
+
+/// A file's modification time, or `None` if it has none to read.
+fn mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 impl Editor {
     pub fn open(page: &Page) -> Self {
         let text = std::fs::read_to_string(&page.path).unwrap_or_default();
+        let opened_at = mtime(&page.path);
         let mut state = EditorState::new(Lines::from(text.as_str()));
         // Modeless. There is no normal mode to escape to and no `i` to
         // remember: you open a page and type, with readline motions
@@ -84,6 +107,7 @@ impl Editor {
             saved: text,
             render_width: 0,
             syntax: None,
+            opened_at,
         }
     }
 
@@ -135,14 +159,62 @@ impl Editor {
 
     /// Write to disk. Trailing whitespace is left alone — this is prose, and a
     /// silent rewrite of someone's text is not a feature.
-    pub fn save(&mut self) -> std::io::Result<()> {
+    ///
+    /// Refuses to write when the file's mtime moved since it was opened. The
+    /// pages here are edited by more than one writer — Obsidian on the same
+    /// folder, `wiki_publish` from an agent, a `git pull` — and the loser of
+    /// that race would otherwise be whoever saved last, silently.
+    pub fn save(&mut self) -> std::io::Result<Save> {
+        if self.changed_underneath() {
+            return Ok(Save::ChangedUnderneath);
+        }
+        self.write()?;
+        Ok(Save::Written)
+    }
+
+    fn write(&mut self) -> std::io::Result<()> {
         let mut text = self.text();
         if !text.ends_with('\n') {
             text.push('\n');
         }
         std::fs::write(&self.path, &text)?;
         self.saved = self.text();
+        self.opened_at = mtime(&self.path);
         Ok(())
+    }
+
+    /// Has the file moved since this buffer was filled from it?
+    ///
+    /// A file that has since been deleted counts as unchanged: the buffer is
+    /// then the only copy left, and refusing to write it would be the one
+    /// outcome that loses the text for good.
+    fn changed_underneath(&self) -> bool {
+        match (self.opened_at, mtime(&self.path)) {
+            (Some(opened), Some(current)) => current != opened,
+            _ => false,
+        }
+    }
+
+    /// Write the buffer even though the file changed, keeping the outside
+    /// version beside it as `<name>.conflict-<n>.md` rather than destroying
+    /// it. Returns where the other copy was parked.
+    pub fn save_overwriting(&mut self) -> std::io::Result<PathBuf> {
+        let backup = self.conflict_path();
+        std::fs::copy(&self.path, &backup)?;
+        self.write()?;
+        Ok(backup)
+    }
+
+    /// First free `<stem>.conflict-<n>.<ext>` beside the file.
+    fn conflict_path(&self) -> PathBuf {
+        let stem = self.path.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
+        let ext = self.path.extension().and_then(|s| s.to_str()).unwrap_or("md");
+        let dir = self.path.parent().unwrap_or(Path::new("."));
+        (1..)
+            .map(|n| dir.join(format!("{stem}.conflict-{n}.{ext}")))
+            .find(|candidate| !candidate.exists())
+            // `(1..)` is unbounded, so `find` only ends by succeeding.
+            .unwrap_or_else(|| dir.join(format!("{stem}.conflict.{ext}")))
     }
 
     /// Place the cursor on a file line, as when entering the editor from the
@@ -1004,5 +1076,89 @@ mod tests {
         editor.move_visual(true);
         assert_eq!(editor.cursor_line(), row + 1);
         assert_eq!(editor.cursor_col(), 2);
+    }
+
+    // ---- the mtime guard
+
+    /// A real page on disk, since the guard is about the file, not the buffer.
+    fn on_disk(name: &str, body: &str) -> (std::path::PathBuf, Editor) {
+        let dir = std::env::temp_dir().join(format!("podarcis-editor-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("page.md");
+        std::fs::write(&path, body).unwrap();
+        let page = Page::load(&path, &dir).unwrap();
+        (path, Editor::open(&page))
+    }
+
+    /// mtime has one-second granularity on some filesystems, so a test that
+    /// writes twice in a row has to make the second write distinguishable.
+    fn touch_later(path: &Path, body: &str) {
+        std::fs::write(path, body).unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        let _ = filetime_set(path, later);
+    }
+
+    fn filetime_set(path: &Path, when: std::time::SystemTime) -> std::io::Result<()> {
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
+        file.set_modified(when)
+    }
+
+    #[test]
+    fn an_untouched_file_saves_normally() {
+        let (path, mut editor) = on_disk("clean", "one\n");
+        set_line(&mut editor, 0, "two");
+        assert_eq!(editor.save().unwrap(), Save::Written);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+        assert!(!editor.dirty());
+    }
+
+    #[test]
+    fn a_file_changed_underneath_is_not_written_over() {
+        let (path, mut editor) = on_disk("conflict", "one\n");
+        set_line(&mut editor, 0, "mine");
+        touch_later(&path, "theirs\n");
+
+        assert_eq!(editor.save().unwrap(), Save::ChangedUnderneath);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "theirs\n",
+            "their edit survives a save that did not know about it"
+        );
+        assert!(editor.dirty(), "and our text is still in the buffer");
+    }
+
+    #[test]
+    fn overwriting_keeps_their_version_beside_the_page() {
+        let (path, mut editor) = on_disk("overwrite", "one\n");
+        set_line(&mut editor, 0, "mine");
+        touch_later(&path, "theirs\n");
+        assert_eq!(editor.save().unwrap(), Save::ChangedUnderneath);
+
+        let backup = editor.save_overwriting().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine\n");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "theirs\n");
+        assert_eq!(backup.file_name().unwrap(), "page.conflict-1.md");
+    }
+
+    #[test]
+    fn saving_twice_in_a_row_does_not_conflict_with_itself() {
+        // The guard re-stamps on every write, or the second save of a session
+        // would see its own mtime as somebody else's edit.
+        let (_path, mut editor) = on_disk("restamp", "one\n");
+        set_line(&mut editor, 0, "two");
+        assert_eq!(editor.save().unwrap(), Save::Written);
+        set_line(&mut editor, 0, "three");
+        assert_eq!(editor.save().unwrap(), Save::Written);
+    }
+
+    #[test]
+    fn a_deleted_file_is_still_written_rather_than_refused() {
+        // The buffer is the last copy; refusing is the only outcome that loses it.
+        let (path, mut editor) = on_disk("deleted", "one\n");
+        set_line(&mut editor, 0, "mine");
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(editor.save().unwrap(), Save::Written);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine\n");
     }
 }

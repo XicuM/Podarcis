@@ -1,6 +1,6 @@
 [package]
 name = "podarcis"
-version = "11.8.0"
+version = "11.9.0"
 edition = "2021"
 rust-version = "1.86"
 description = "Podarcis engine: the podarcis-tui wiki frontend and the podarcis CLI, one library"
