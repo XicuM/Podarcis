@@ -77,7 +77,7 @@ enum Cmd {
         /// Output findings as JSON.
         #[arg(long)]
         json: bool,
-        /// Apply safe auto-fixes (frontmatter quoting) via the engine checker.
+        /// Quote frontmatter values containing colons, then report what is left.
         #[arg(long)]
         fix: bool,
         /// Path to lint; defaults to the checkout root.
@@ -1015,10 +1015,9 @@ fn cmd_repo_commit(root: &Path, message: &str) -> Result<i32> {
 
 // ------------------------------------------------------------------- lint
 
-/// Lint the parts of the OKF collections the target covers, using the same
-/// `Index` the front-end's own `--lint` port runs (itself diff-gated against
-/// the engine's `check_links.run_audit`). Payload matches
-/// `audit.to_json_payload`: root-relative keys, `{ok, root, files}`.
+/// Lint the parts of the OKF collections the target covers, off the same
+/// `Index` the front-end's gutter and commit gate read. Payload is
+/// root-relative keys onto `{code, detail}` lists, under `{ok, root, files}`.
 fn lint_payload(root: &Path, target: &Path) -> Result<Value> {
     let cfg = Config::load(root);
     let collections: Vec<PathBuf> = cfg.collections().into_iter().map(|(_, p)| p).collect();
@@ -1058,6 +1057,7 @@ fn lint_payload(root: &Path, target: &Path) -> Result<Value> {
             Value::Array(vec![json!({"code": finding.code, "detail": finding.detail})]),
         );
     }
+    yaml_findings(root, target, &mut files);
     Ok(json!({
         "ok": files.is_empty(),
         "root": root.to_string_lossy(),
@@ -1071,7 +1071,7 @@ fn lint_payload(root: &Path, target: &Path) -> Result<Value> {
 fn raw_walk_payload(root: &Path, target: &Path) -> Result<Value> {
     let mut files: Map<String, Value> = Map::new();
     for entry in walk_documents(target, root) {
-        let findings = lint::check(&entry.raw, &entry.path);
+        let findings = lint_document(&entry);
         if !findings.is_empty() {
             let arr: Vec<Value> = findings
                 .iter()
@@ -1093,6 +1093,65 @@ struct DocEntry {
     raw: String,
 }
 
+impl DocEntry {
+    fn is_yaml(&self) -> bool {
+        matches!(
+            self.path.extension().and_then(|e| e.to_str()),
+            Some("yaml") | Some("yml")
+        )
+    }
+}
+
+/// Markdown gets the page rules; a standalone YAML file gets a syntax check.
+fn lint_document(entry: &DocEntry) -> Vec<lint::Finding> {
+    if entry.is_yaml() {
+        lint::check_yaml(&entry.raw)
+    } else {
+        lint::check(&entry.raw, &entry.path)
+    }
+}
+
+/// Apply `--fix` to every markdown file under the target, returning what
+/// changed. Writes only files whose frontmatter parses *after* quoting and did
+/// not parse before, so a run over a clean tree touches nothing.
+fn cmd_lint_fix(root: &Path, target: &Path) -> Result<Vec<String>> {
+    let mut fixed = Vec::new();
+    for entry in walk_documents(target, root) {
+        if entry.is_yaml() {
+            continue;
+        }
+        if let Some(repaired) = lint::fix_frontmatter(&entry.raw) {
+            std::fs::write(&entry.path, repaired)?;
+            fixed.push(entry.rel);
+        }
+    }
+    fixed.sort();
+    Ok(fixed)
+}
+
+/// YAML files under the target, which the collection `Index` does not hold.
+///
+/// Job declarations and `config.yaml` live outside `wiki/`, `workspace/` and
+/// `sources/`, so an index-driven pass would never look at them — and a job
+/// YAML that stopped parsing is exactly the kind of thing a lint run should
+/// catch before a timer fires on it.
+fn yaml_findings(root: &Path, target: &Path, files: &mut Map<String, Value>) {
+    for entry in walk_documents(target, root) {
+        if !entry.is_yaml() {
+            continue;
+        }
+        let findings = lint::check_yaml(&entry.raw);
+        if findings.is_empty() {
+            continue;
+        }
+        let arr: Vec<Value> = findings
+            .iter()
+            .map(|f| json!({"code": f.code, "detail": f.detail}))
+            .collect();
+        files.insert(entry.rel, Value::Array(arr));
+    }
+}
+
 fn walk_documents(target: &Path, base: &Path) -> Vec<DocEntry> {
     let mut out = Vec::new();
     let mut stack = vec![target.to_path_buf()];
@@ -1105,7 +1164,10 @@ fn walk_documents(target: &Path, base: &Path) -> Vec<DocEntry> {
                 if !matches!(name.as_str(), ".git" | ".venv" | ".obsidian" | "__pycache__" | "node_modules" | "tmp" | "target") {
                     stack.push(path);
                 }
-            } else if name != "raw.md" && name.ends_with(".md") {
+            } else if (name != "raw.md" && name.ends_with(".md"))
+                || name.ends_with(".yaml")
+                || name.ends_with(".yml")
+            {
                 if let Ok(raw) = std::fs::read_to_string(&path) {
                     out.push(DocEntry { rel: page::rel_path(&path, base), path, raw });
                 }
@@ -1124,15 +1186,12 @@ fn cmd_lint(root: &Path, as_json: bool, fix: bool, rest: Vec<String>) -> Result<
     };
 
     if fix {
-        // Auto-fixes (frontmatter quoting) only exist in the engine checker.
-        let checker = root.join(".agents").join("mcp").join("wiki").join("check_links.py");
-        if !checker.is_file() {
-            eprintln!("Error: engine checker not found at {}", checker.display());
-            return Ok(1);
+        let fixed = cmd_lint_fix(root, &target)?;
+        for rel in &fixed {
+            println!("  - [FIXED] Auto-quoted value containing colons in frontmatter: {rel}");
         }
-        let py = python_bin(root);
-        let status = Command::new(py).arg(&checker).arg("--fix").arg(&target).status()?;
-        return Ok(status.code().unwrap_or(1));
+        println!("{} file(s) repaired.", fixed.len());
+        // Fall through: the point of --fix is to see what is *left*.
     }
 
     let payload = lint_payload(root, &target)?;

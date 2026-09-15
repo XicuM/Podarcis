@@ -185,7 +185,7 @@ impl Index {
     }
 }
 
-/// The engine counts subdirectories *and* non-index files toward the bloat
+/// Subdirectories *and* non-index files count toward the bloat
 /// limit, so this counts both.
 fn collect(dir: &Path, root: &Path, files: &mut Vec<PathBuf>, dir_counts: &mut HashMap<String, usize>) {
     let Ok(read) = std::fs::read_dir(dir) else { return };
@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn footnote_findings_use_the_engines_codes() {
+    fn footnote_findings_use_the_declared_codes() {
         let v = Vault::new("footnotes");
         v.write(
             "wiki/a.md",
@@ -381,7 +381,7 @@ mod tests {
         assert!(codes.contains(&"unused_footnote"), "{codes:?}");
         assert!(codes.contains(&"unmatched_source"), "{codes:?}");
         for code in codes {
-            assert!(super::super::lint::is_known(code), "{code} is not an engine code");
+            assert!(super::super::lint::is_known(code), "{code} is missing from CODES");
         }
     }
 

@@ -1,15 +1,23 @@
-//! A faithful port of the engine's linter.
+//! The linter. There is one, and this is it.
 //!
-//! `podarcis lint` is the commit gate, so a preview that disagrees with it is
-//! worse than no preview at all: it would either cry wolf or wave through a
-//! commit the gate then rejects. Every rule here mirrors
-//! `.podarcis/wiki_check_links.py::check_file`, including the parts one might
-//! be tempted to improve — notably that a footnote may be satisfied by an
-//! in-body `[^id]:` definition as well as by a `sources[].id`, and that the
-//! word count is a whitespace split over the whole file, frontmatter included.
+//! It began as a port of `check_links.py`, which lived in two byte-identical
+//! copies and was policed against this file by a `podarcis-tui --lint` differ.
+//! All three are gone: the port was proven equal to the scripts over the whole
+//! corpus (690 pages, identical findings), so keeping a second implementation
+//! only bought a second thing to keep in step. `podarcis lint`, `wiki_lint`,
+//! the agent-job autonomy gate and the front-end's commit gate all arrive
+//! here now.
 //!
-//! Codes and details match `podarcis.audit.file_issues` exactly. Line numbers
-//! are ours alone: the engine has none, and an extra field cannot disagree.
+//! Two rules look wrong and are not, so they are documented rather than
+//! improved: a footnote may be satisfied by an in-body `[^id]:` definition as
+//! well as by a `sources[].id`, and the word count is a whitespace split over
+//! the whole file, frontmatter included.
+//!
+//! One behaviour was deliberately *not* carried over. The scripts deleted
+//! every flat `.md` file in any directory named `recipes` that had
+//! `bowls`/`lunches`/`dinners` subdirectories — a one-off migration left armed
+//! inside a read-only audit, with no `--fix` guard and no mention in the
+//! report. An audit does not delete the thing it audits.
 
 use std::path::Path;
 
@@ -28,7 +36,7 @@ pub struct Finding {
     pub line: Option<usize>,
 }
 
-/// Every code the engine emits, and how loudly to show it. A code that blocks
+/// Every code the linter emits, and how loudly to show it. A code that blocks
 /// the commit gate is an error; the rest are warnings.
 pub const CODES: [(&str, Severity); 9] = [
     ("broken_link", Severity::Error),
@@ -57,8 +65,12 @@ pub fn severity(code: &str) -> Severity {
         .unwrap_or(Severity::Warn)
 }
 
-/// Is this a code the engine also emits? Used to keep `podarcis-tui --lint`
-/// output diffable against `podarcis lint --json`.
+/// Is this one of the codes declared in [`CODES`]?
+///
+/// [`CODES`] drives severity, the gutter and the JSON payload, so a finding
+/// whose code is missing from it is invisible to all three. Asserted by the
+/// tests rather than enforced at the call site: it is a property of this file
+/// being internally consistent, not a runtime condition.
 pub fn is_known(code: &str) -> bool {
     CODES.iter().any(|(name, _)| *name == code)
 }
@@ -106,7 +118,8 @@ pub fn check(content: &str, path: &Path) -> Vec<Finding> {
     out
 }
 
-/// Fenced blocks then inline spans, in that order — the engine's two passes.
+/// Fenced blocks then inline spans, in that order — two passes, because a
+/// fence may contain backticks that are not an inline span.
 fn strip_code(content: &str) -> String {
     let mut out = String::with_capacity(content.len());
     let mut rest = content;
@@ -163,7 +176,7 @@ fn frontmatter(content: &str, out: &mut Vec<Finding>, source_ids: &mut Vec<Strin
 
     let doc: Value = match serde_yaml_ng::from_str(&yaml) {
         Ok(value) => value,
-        // The engine repairs unquoted colons before giving up, and only reports
+        // An unquoted colon is repaired before giving up, and only reported as
         // a YAML error if the repair also fails. A real page reads
         // `rationale: Antifragile: Things That Gain from Disorder`, and calling
         // that an error would be a false positive the gate does not raise.
@@ -188,7 +201,8 @@ fn frontmatter(content: &str, out: &mut Vec<Finding>, source_ids: &mut Vec<Strin
                 line: Some(first_line),
             });
         } else {
-            // An empty block parses as null; the engine treats that as `{}`.
+            // An empty block parses as null; treat it as `{}`, so the message
+            // names the missing fields rather than the empty block.
             out.push(Finding {
                 code: "missing_frontmatter",
                 detail: "Missing required fields: type, category, rationale".into(),
@@ -249,8 +263,9 @@ fn frontmatter(content: &str, out: &mut Vec<Finding>, source_ids: &mut Vec<Strin
     }
 }
 
-/// Port of the engine's `try_fix_unquoted_colons`: quote a single-line scalar
-/// that itself contains a colon. Returns `None` when nothing was changed.
+/// Quote a single-line scalar that itself contains a colon, which is the one
+/// YAML mistake a page author makes often enough to repair automatically —
+/// `rationale: Antifragile: Things That Gain`. `None` when nothing changed.
 fn quote_unquoted_colons(yaml: &str) -> Option<String> {
     let mut changed = false;
     let fixed: Vec<String> = yaml
@@ -264,7 +279,7 @@ fn quote_unquoted_colons(yaml: &str) -> Option<String> {
             if matches!(first, None | Some('"') | Some('\'')) || first.is_some_and(char::is_whitespace) {
                 return line.to_string();
             }
-            // The engine's regex requires a further `:` in the value.
+            // Only a value that itself contains a colon needs quoting.
             if !value.contains(':') {
                 return line.to_string();
             }
@@ -299,7 +314,7 @@ fn scalar_text(value: &Value) -> String {
     }
 }
 
-/// `\[[^\]]+\]\(([^)]+)\)` — the engine's link regex, hand-rolled.
+/// `\[[^\]]+\]\(([^)]+)\)`, hand-rolled.
 pub fn markdown_links(content: &str) -> Vec<String> {
     let bytes = content.as_bytes();
     let mut out = Vec::new();
@@ -349,7 +364,7 @@ fn links(stripped: &str, path: &Path, raw: &str, out: &mut Vec<Finding>) {
     }
 }
 
-/// `^\s*\[\^id\]:` — a definition. `\s*` spans newlines in the engine's regex,
+/// `^\s*\[\^id\]:` — a definition. `\s*` spans newlines,
 /// which only ever widens what counts as a definition, never narrows it.
 fn footnote_defs(content: &str) -> Vec<String> {
     content
@@ -448,7 +463,7 @@ fn line_of(content: &str, needle: &str) -> Option<usize> {
     content.lines().position(|line| line.contains(needle))
 }
 
-/// The engine's directory-bloat rule: directories and non-index files.
+/// The directory-bloat rule: directories and non-index files.
 pub fn bloat(entries: usize) -> Option<Finding> {
     (entries > MAX_DIR_ENTRIES).then(|| Finding {
         code: "bloated_directory",
@@ -457,10 +472,50 @@ pub fn bloat(entries: usize) -> Option<Finding> {
     })
 }
 
-/// The `podarcis lint --json` object (`audit.py::to_json_payload`), built from
-/// an already-built `Index` instead of a fresh `wiki_check_links.py` run —
-/// every page's findings are already sitting there, kept fresh by the file
-/// watcher.
+/// Validate a standalone `.yaml`/`.yml` file, the way `check_yaml_file` did.
+///
+/// Config and job declarations are linted too: a `.podarcis/config.yaml` that
+/// stopped parsing is the kind of breakage that otherwise surfaces as a
+/// puzzling default three commands later.
+pub fn check_yaml(content: &str) -> Vec<Finding> {
+    match serde_yaml_ng::from_str::<Value>(content) {
+        Ok(_) => Vec::new(),
+        Err(err) => {
+            // serde_yaml_ng renders `at line N, column M` into its Display,
+            // where PyYAML put it in a separate `problem_mark`. Both end up in
+            // `detail`, so the text differs while the code does not.
+            let line = err.location().map(|loc| loc.line().saturating_sub(1));
+            vec![Finding { code: "yaml_error", detail: format!("Invalid YAML syntax: {err}"), line }]
+        }
+    }
+}
+
+/// Repair a frontmatter block whose only fault is an unquoted scalar
+/// containing a colon, returning the whole file's new contents.
+///
+/// This is the entire `--fix` surface, and deliberately so: it is the one
+/// repair that cannot change what a page means, because the value it quotes
+/// was already meant as text. `None` when there is nothing to fix, or when
+/// quoting does not make the block parse — a file that is broken some other
+/// way is reported, never rewritten on a guess.
+pub fn fix_frontmatter(content: &str) -> Option<String> {
+    let (yaml, _) = split_frontmatter(content)?;
+    if serde_yaml_ng::from_str::<Value>(&yaml).is_ok() {
+        return None;
+    }
+    let fixed = quote_unquoted_colons(&yaml)?;
+    serde_yaml_ng::from_str::<Value>(&fixed).ok()?;
+    let start = content.find(&yaml)?;
+    let mut out = String::with_capacity(content.len() + 16);
+    out.push_str(&content[..start]);
+    out.push_str(&fixed);
+    out.push_str(&content[start + yaml.len()..]);
+    Some(out)
+}
+
+/// The `podarcis lint --json` object, built from an already-built `Index`
+/// rather than a fresh walk — every page's findings are already sitting there,
+/// kept fresh by the file watcher.
 pub fn to_json_payload(index: &super::index::Index) -> serde_json::Value {
     let mut files = serde_json::Map::new();
     for entry in &index.entries {
@@ -542,11 +597,11 @@ mod tests {
             .filter(|f| f.code == "positional_footnote")
             .map(|f| f.detail.as_str())
             .collect();
-        assert_eq!(positional, vec!["1", "2"], "sorted, as the engine sorts them");
+        assert_eq!(positional, vec!["1", "2"], "sorted, not in order of appearance");
     }
 
     #[test]
-    fn missing_frontmatter_uses_the_engines_wording() {
+    fn missing_frontmatter_names_the_fields_that_are_missing() {
         let findings = check("# No frontmatter\n", &wiki("a.md"));
         assert_eq!(findings[0].code, "missing_frontmatter");
         assert_eq!(findings[0].detail, "Entire YAML frontmatter block is missing");
@@ -568,6 +623,51 @@ mod tests {
     fn an_unquoted_colon_in_a_value_is_repaired_not_reported() {
         let raw = "---\ntitle: T\ntype: concept\ncategory: c\nrationale: Antifragile: Things That Gain from Disorder\n---\nbody\n";
         assert!(check(raw, &wiki("a.md")).is_empty(), "{:?}", check(raw, &wiki("a.md")));
+    }
+
+    // ---- ported from the deleted test_yaml_checker.py / test_check_links.py
+
+    #[test]
+    fn a_valid_standalone_yaml_file_has_no_findings() {
+        assert!(check_yaml("name: Podarcis\nversion: 1.0\n").is_empty());
+    }
+
+    #[test]
+    fn an_invalid_standalone_yaml_file_is_a_yaml_error() {
+        let findings = check_yaml("name: Podarcis\n  version: : 1.0\n");
+        assert_eq!(codes(&findings), ["yaml_error"]);
+        assert!(findings[0].detail.starts_with("Invalid YAML syntax"), "{:?}", findings[0]);
+    }
+
+    #[test]
+    fn fix_quotes_a_value_containing_a_colon_and_leaves_the_body_alone() {
+        let raw = "---\ntitle: Protocol: State Transitions\ntype: protocol\ncategory: psychology\nrationale: test\n---\nBody text\n";
+        let fixed = fix_frontmatter(raw).expect("repairable");
+        assert!(fixed.contains("title: \"Protocol: State Transitions\""), "{fixed}");
+        assert!(fixed.ends_with("---\nBody text\n"), "{fixed}");
+    }
+
+    #[test]
+    fn fix_is_a_no_op_on_frontmatter_that_already_parses() {
+        let raw = "---\ntitle: \"Test Note\"\ntype: concept\ncategory: test\nrationale: text\n---\nBody\n";
+        assert_eq!(fix_frontmatter(raw), None);
+        // And so idempotent: fixing twice cannot drift.
+        let once = "---\ntitle: A: B\ntype: concept\ncategory: c\nrationale: r\n---\nb\n";
+        let fixed = fix_frontmatter(once).expect("repairable");
+        assert_eq!(fix_frontmatter(&fixed), None);
+    }
+
+    #[test]
+    fn fix_refuses_yaml_that_quoting_cannot_save() {
+        // Broken some other way: reported by `check`, never rewritten on a guess.
+        let raw = "---\ntitle: T\n  bad indent\n    worse: [unclosed\n---\nbody\n";
+        assert_eq!(fix_frontmatter(raw), None);
+        assert!(check(raw, &wiki("a.md")).iter().any(|f| f.code == "yaml_error"));
+    }
+
+    #[test]
+    fn fix_leaves_a_file_with_no_frontmatter_untouched() {
+        assert_eq!(fix_frontmatter("Just a body, no frontmatter.\n"), None);
     }
 
     #[test]
@@ -603,8 +703,9 @@ mod tests {
 
     #[test]
     fn the_word_count_is_a_whitespace_split_of_the_whole_file() {
-        // The engine counts frontmatter and code too. Matching it matters more
-        // than counting "better", because the engine is the gate.
+        // Frontmatter and code count too. MAX_WORDS was calibrated against
+        // counts taken this way, so counting "better" would silently move the
+        // threshold rather than improve it.
         let body = "word ".repeat(MAX_WORDS);
         let raw = format!("---\ntitle: T\ntype: concept\ncategory: c\nrationale: r\n---\n{body}");
         let findings = check(&raw, &wiki("a.md"));
@@ -647,18 +748,18 @@ mod tests {
     }
 
     #[test]
-    fn the_link_regex_matches_what_the_engine_matches() {
+    fn the_link_regex_stops_where_a_markdown_link_stops() {
         assert_eq!(markdown_links("[a](x.md) [b](y.md)"), vec!["x.md", "y.md"]);
         assert_eq!(markdown_links("[]()"), Vec::<String>::new(), "empty text does not match");
-        assert_eq!(markdown_links("[a](b(1).md)"), vec!["b(1"], "the engine stops at the first paren, and so do we");
+        assert_eq!(markdown_links("[a](b(1).md)"), vec!["b(1"], "stops at the first closing paren");
         assert!(markdown_links("[^footnote]").is_empty());
     }
 
     #[test]
-    fn every_emitted_code_is_one_the_engine_emits() {
+    fn every_emitted_code_is_declared_in_codes() {
         let raw = "---\ntitle: T\ntype: bogus\n---\n[a](gone.md) [^x] [^1]\n\n[^orphan]: y\n";
         for finding in check(raw, &wiki("a.md")) {
-            assert!(is_known(finding.code), "{} is not an engine code", finding.code);
+            assert!(is_known(finding.code), "{} is missing from CODES", finding.code);
         }
     }
 

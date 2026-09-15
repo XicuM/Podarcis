@@ -1,6 +1,6 @@
 """wiki-mcp — FastMCP server for wiki querying and lint auditing.
 
-Wraps the qmd CLI (BM25 + vector + LLM re-ranking) and lint scripts.
+Wraps the qmd CLI (BM25 + vector + LLM re-ranking) and `podarcis lint`.
 Set PROJECT_ROOT env var to the repository root.
 """
 from __future__ import annotations
@@ -9,7 +9,6 @@ import asyncio
 import os
 import re
 import shutil
-import sys
 import time
 from pathlib import Path
 from typing import Annotated, Literal
@@ -31,15 +30,6 @@ def _find_root() -> Path:
     )
 
 ROOT = _find_root()
-_WIKI_DIR = Path(__file__).resolve().parent
-_VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
-
-# Add lint scripts to sys.path for direct import
-for _p in (_WIKI_DIR,):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
-# Lint scripts are executed as subprocesses by path (see _run_script), not imported.
 
 # ── Server ────────────────────────────────────────────────────────────────────
 
@@ -238,10 +228,24 @@ async def _qmd(
     return stdout.decode()
 
 
-async def _run_script(script: str, *args: str) -> str:
-    """Run a lint Python script and return its stdout."""
+async def _run_lint(*args: str) -> str:
+    """Run `podarcis lint` and return its output.
+
+    The linter is Rust and lives in the `podarcis` binary; this used to invoke
+    a `check_links.py` sitting next to this file, one of two identical copies.
+    A build that is missing says so, because a lint whose failure is
+    indistinguishable from a lint that never ran is not a check.
+    """
+    try:
+        from podarcis.audit import podarcis_bin
+        binary = podarcis_bin(ROOT)
+    except (FileNotFoundError, ImportError) as err:
+        # Imported here, not at module scope: this server is otherwise
+        # standalone, and a missing engine package should degrade to a legible
+        # message from one tool rather than failing the whole module to load.
+        return f"Link checker unavailable: {err}"
     proc = await asyncio.create_subprocess_exec(
-        str(_VENV_PYTHON), str(_WIKI_DIR / script), *args,
+        binary, "lint", *args,
         cwd=str(ROOT),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -473,7 +477,7 @@ async def wiki_publish(
     # 6. Run link audits on target directory
     audit_res = ""
     try:
-        audit_res = await _run_script("check_links.py", str(target_file.parent))
+        audit_res = await _run_lint(str(target_file.parent))
     except Exception as e:
         audit_res = f"Link checker error: {e}"
 
@@ -513,7 +517,7 @@ async def wiki_lint(
     args = [str(path)]
     if fix:
         args.append("--fix")
-    return await _run_script("check_links.py", *args)
+    return await _run_lint(*args)
 
 
 

@@ -1,140 +1,63 @@
-'''Lint-gated commit. Same gate as agent jobs; Python is ``sys.executable``.'''
+'''Lint-gated commit. Same gate as agent jobs, and the same linter.
+
+The linter itself lives in Rust (``tui/src/vault/lint.rs``) and is reached
+through the ``podarcis`` binary. It used to live here too, in two identical
+``check_links.py`` copies policed against the Rust port by a differ; the port
+was proven equal over the whole corpus, so the copies and the differ are gone.
+This module keeps the *gate* — what a failing lint means for a commit — which
+is the part that was never duplicated.
+'''
 
 from __future__ import annotations
 
-import importlib.util
-import json
+import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 from podarcis.repos import get_repo_names
-from podarcis.root import is_wiki_root
-
-MAX_WORDS = 1500
 
 
-def python_bin() -> str:
-    '''Interpreter that can import this package. Never checkout ``.venv/bin/python``.'''
-    if sys.executable:
-        return sys.executable
-    return shutil.which('python3') or 'python3'
+def podarcis_bin(root: Path | str | None = None) -> str:
+    '''Path to the Rust ``podarcis`` binary, which owns the linter.
 
-
-def bundled_check_links() -> Path:
-    return Path(__file__).resolve().parent / 'wiki_check_links.py'
-
-
-def check_links_path(root: Path | str | None = None) -> Path:
-    '''Prefer the checkout copy (run_audit), then engine tree, then package data.
-
-    JSON mapping lives in this module so an older checkout script without
-    ``to_json_payload`` still works for ``podarcis lint --json``.
+    ``PODARCIS_BIN`` first so a test or a container can point at one build,
+    then the checkout's own release binary, then ``PATH``. Deliberately never
+    falls back to a Python entry point: there is no Python linter left to fall
+    back to, and a gate that silently passes because it could not find its
+    checker is worse than one that fails.
     '''
+    if (env := os.environ.get('PODARCIS_BIN')) and Path(env).is_file():
+        return env
     if root is not None:
-        local = Path(root) / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
+        local = Path(root) / 'tui' / 'target' / 'release' / 'podarcis'
         if local.is_file():
-            return local
+            return str(local)
     from podarcis import ROOT_DIR
-    engine = ROOT_DIR / '.agents' / 'mcp' / 'wiki' / 'check_links.py'
+    engine = ROOT_DIR / 'tui' / 'target' / 'release' / 'podarcis'
     if engine.is_file():
-        return engine
-    bundled = bundled_check_links()
-    if bundled.is_file():
-        return bundled
-    raise FileNotFoundError('check_links.py not found')
-
-
-def load_check_links(root: Path | str | None = None):
-    path = check_links_path(root)
-    spec = importlib.util.spec_from_file_location('_podarcis_check_links', path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f'cannot load {path}')
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def lint_json_path(root: Path) -> Path:
-    return Path(root) / 'tmp' / 'tui' / 'lint.json'
-
-
-def file_issues(path: str, res: dict, *, max_words: int = MAX_WORDS) -> list[dict]:
-    '''Map one ``run_audit`` result to ``{code, detail}`` records.'''
-    issues: list[dict] = []
-    if res.get('bloated_directory'):
-        issues.append({'code': 'bloated_directory', 'detail': str(res['bloated_directory'])})
-    parts = Path(path).as_posix().split('/')
-    if 'wiki' in parts or 'user' in parts:
-        if res.get('word_count', 0) > max_words:
-            issues.append({'code': 'page_length', 'detail': str(res['word_count'])})
-    for err in res.get('yaml_errors') or []:
-        issues.append({'code': 'yaml_error', 'detail': str(err)})
-    for item in res.get('broken_links') or []:
-        if isinstance(item, (tuple, list)) and item:
-            link = item[0]
-            target = item[1] if len(item) > 1 else ''
-            detail = f'{link} -> {target}' if target else str(link)
-        else:
-            detail = str(item)
-        issues.append({'code': 'broken_link', 'detail': detail})
-    for ref in res.get('missing_footnotes') or []:
-        issues.append({'code': 'missing_footnote', 'detail': str(ref)})
-    for ref in res.get('unused_footnotes') or []:
-        issues.append({'code': 'unused_footnote', 'detail': str(ref)})
-    for ref in res.get('unmatched_sources') or []:
-        issues.append({'code': 'unmatched_source', 'detail': str(ref)})
-    for ref in res.get('positional_footnotes') or []:
-        issues.append({'code': 'positional_footnote', 'detail': str(ref)})
-    for item in res.get('missing_frontmatter') or []:
-        issues.append({'code': 'missing_frontmatter', 'detail': str(item)})
-    return issues
-
-
-def to_json_payload(audit_results: dict, root: str, *, max_words: int = MAX_WORDS) -> dict:
-    '''``podarcis lint --json`` object: path → list of ``{code, detail}``.'''
-    root_path = Path(root).resolve()
-    files: dict[str, list[dict]] = {}
-    for path, res in (audit_results or {}).items():
-        issues = file_issues(str(path), res, max_words=max_words)
-        if not issues:
-            continue
-        try:
-            rel = Path(path).resolve().relative_to(root_path).as_posix()
-        except ValueError:
-            rel = str(path)
-        files[rel] = issues
-    return {'ok': not files, 'root': str(root_path), 'files': files}
-
-
-def write_lint_json(root: Path, payload: dict) -> Path | None:
-    if not is_wiki_root(root):
-        return None
-    dest = lint_json_path(root)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
-    return dest
-
-
-def lint(root: Path | str, path: str | Path | None = None, *, fix: bool = False) -> dict:
-    '''Return the ``podarcis lint --json`` object. Does not spawn ``.venv/bin/python``.'''
-    root_path = Path(root).resolve()
-    target = Path(path).resolve() if path else root_path
-    mod = load_check_links(root_path)
-    results = mod.run_audit(str(target), do_fix=fix)
-    max_words = int(getattr(mod, 'MAX_WORDS', MAX_WORDS) or MAX_WORDS)
-    payload = to_json_payload(results, str(root_path), max_words=max_words)
-    write_lint_json(root_path, payload)
-    return payload
+        return str(engine)
+    if found := shutil.which('podarcis'):
+        return found
+    raise FileNotFoundError(
+        'the podarcis binary is not built — run `podarcis build` '
+        '(or set PODARCIS_BIN); the linter lives there'
+    )
 
 
 def audit_gate(root: Path | str) -> tuple[bool, str]:
-    '''Run the same link/frontmatter audit as ``podarcis lint``.'''
+    '''Run ``podarcis lint``, which exits non-zero on findings.
+
+    Returns ``(False, detail)`` when the linter reports findings *or* cannot be
+    run at all. Both are reasons not to commit.
+    '''
     root_path = Path(root)
-    script = check_links_path(root_path)
+    try:
+        binary = podarcis_bin(root_path)
+    except FileNotFoundError as err:
+        return False, str(err)
     proc = subprocess.run(
-        [python_bin(), str(script), str(root_path)],
+        [binary, 'lint', str(root_path)],
         capture_output=True, text=True, check=False, cwd=str(root_path),
     )
     if proc.returncode != 0:
@@ -207,24 +130,3 @@ def audit_and_commit(root: Path | str, message: str) -> dict:
             'message': err or 'commit failed',
         }
     return {'ok': True, 'committed': committed, 'message': 'committed ' + ', '.join(committed)}
-
-
-def run_lint(
-    root: Path | str,
-    target: str | Path | None = None,
-    *,
-    as_json: bool = False,
-    fix: bool = False,
-) -> int:
-    '''CLI helper for ``podarcis lint``. Human text stays the default.'''
-    root_path = Path(root)
-    dest = Path(target) if target else root_path
-    if as_json:
-        payload = lint(root_path, dest, fix=fix)
-        print(json.dumps(payload, indent=2))
-        return 0 if payload.get('ok') else 1
-    cmd = [python_bin(), str(check_links_path(root_path))]
-    if fix:
-        cmd.append('--fix')
-    cmd.append(str(dest))
-    return subprocess.run(cmd).returncode

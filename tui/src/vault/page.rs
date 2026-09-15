@@ -9,12 +9,14 @@ use std::path::{Path, PathBuf};
 
 use serde_yaml_ng::Value;
 
-/// The nine `type:` values the linter accepts (`wiki_check_links.KNOWN_OKF_TYPES`).
+/// The nine `type:` values the linter accepts. Declared here, once: the OKF
+/// schema is a property of a page, and `lint` imports it rather than restating
+/// it.
 pub const KNOWN_TYPES: [&str; 9] = [
     "concept", "protocol", "entity", "overview", "synthesis", "guide", "meta", "recipe", "journal",
 ];
 
-/// `wiki_check_links.MAX_WORDS` — pages over this are flagged.
+/// Word cap for a `wiki/` page; over this, `lint` flags `page_length`.
 pub const MAX_WORDS: usize = 1500;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -4,10 +4,15 @@
 #
 # The rule was previously unenforced and followed about two commits in three.
 # Install with: git config core.hooksPath .githooks (podarcis install does this).
+#
+# This file must stay mode 755: git silently ignores a non-executable hook, and
+# the only symptom is an `advice.ignoredHook` hint most people have turned off.
+# `tui/` counts as platform code — it holds the engine library and both
+# binaries, which is the largest source of the drift this rule exists to catch.
 set -u
 
 staged=$(git diff --cached --name-only)
-platform=$(echo "$staged" | grep -E '^(\.podarcis/|\.agents/|pyproject\.toml$)' || true)
+platform=$(echo "$staged" | grep -E '^(\.podarcis/|\.agents/|tui/|pyproject\.toml$)' || true)
 [ -z "$platform" ] && exit 0
 
 if ! echo "$staged" | grep -qx 'pyproject.toml'; then

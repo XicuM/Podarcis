@@ -105,7 +105,7 @@ First `podarcis` run after install downloads the GGUF models (EmbeddingGemma-300
 | `podarcis status` | Display status of MCP servers, skills, agents, jobs, and repos (`--json` supported) |
 | `podarcis config interactive` | Launch interactive TUI configuration menu |
 | `podarcis test` | Run test suite across all MCP servers and skills |
-| `podarcis lint` | Run link integrity check across wiki markdown files (`--json` for structured findings) |
+| `podarcis lint` | Link, footnote, frontmatter and YAML audit (`--json` for structured findings, `--fix` to quote colons) |
 | `podarcis [path]` | Open the frontend (`podarcis-tui`), optionally at a page |
 | `podarcis build` | Compile the frontend binary |
 | `podarcis tui open\|highlight\|ask` | Drive a running frontend over its control socket |

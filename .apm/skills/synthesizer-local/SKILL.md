@@ -11,7 +11,7 @@ Applies when `sources_backend: local` in `.podarcis/config.yaml`.
 ## Done when
 
 - The wiki page cites only files that exist under `sources/` (including `sources/literature/`).
-- Every `sources[].id` is a `[^id]` footnote; every `resource` is a relative path from the concept file (resolvable by `check_links.py`).
+- Every `sources[].id` is a `[^id]` footnote; every `resource` is a relative path from the concept file (one the linter can resolve — check with `wiki_lint`).
 - New source directories are committed in the `sources/` repo before they are cited.
 - `@auditor` has the written wiki path.
 

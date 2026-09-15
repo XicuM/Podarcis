@@ -24,4 +24,4 @@ Applies when `sources_backend: gdrive` in `.podarcis/config.yaml`.
 ## Backend facts
 
 - Read Drive via the official `drive` MCP (`search_files`, `read_file_content`). Discover papers with `literature_search` (metadata/abstracts only).
-- `check_links.py` skips HTTPS `resource` values; they must still be real, clickable URLs.
+- The linter (`podarcis lint`, `wiki_lint`) skips HTTPS `resource` values; they must still be real, clickable URLs.

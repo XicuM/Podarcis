@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+RUST_BIN="${PODARCIS_BIN:-$SCRIPT_DIR/tui/target/release/podarcis}"
 
 # Bootstrap virtualenv automatically if absent or missing required libraries
 if [ ! -x "$VENV_PYTHON" ] || ! "$VENV_PYTHON" -c "import rich, questionary, podarcis" &>/dev/null; then
     python3 "$SCRIPT_DIR/.podarcis/install.py" --bootstrap-only || exit 1
 fi
 
+# The Rust binary owns the command tree and dispatches the Python-bound
+# families back to `python -m podarcis.cli` itself. Going straight to Python
+# here is what broke `./podarcis lint` and `./podarcis test` when those
+# commands moved to Rust: argparse rejected them as unknown subcommands, and
+# the audit_wiki job — whose command *is* `./podarcis lint` — has been failing
+# that way ever since, unnoticed because the job ships disabled.
+if [ -x "$RUST_BIN" ]; then
+    exec "$RUST_BIN" "$@"
+fi
+
+# No build yet: the Python CLI still serves install/bootstrap, which is what
+# someone reaches for first on a fresh checkout.
 exec "$VENV_PYTHON" -m podarcis.cli "$@"

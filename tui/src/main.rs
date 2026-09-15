@@ -29,11 +29,6 @@ struct Args {
     /// Print the resolved checkout and exit.
     #[arg(long)]
     check: bool,
-    /// Print findings as `podarcis lint --json` would, and exit. Exists so the
-    /// two linters can be diffed: if this ever disagrees with the engine, the
-    /// in-app gutter is lying.
-    #[arg(long)]
-    lint: bool,
 }
 
 /// Make sure `root` is a project on disk, creating it if it is not.
@@ -62,8 +57,8 @@ fn main() -> Result<()> {
     // Scaffold it here rather than opening onto an empty screen: projects are
     // managed inside the app, so the first run must produce one, not a prompt
     // asking the user for a path.
-    // `--check` and `--lint` only report, so they never scaffold anything.
-    let root = if args.check || args.lint { root } else { ensure_project(root)? };
+    // `--check` only reports, so it never scaffolds anything.
+    let root = if args.check { root } else { ensure_project(root)? };
     let cfg = Config::load(&root);
 
     if args.check {
@@ -75,30 +70,6 @@ fn main() -> Result<()> {
         for (label, path) in cfg.collections() {
             println!("{label}: {}", path.display());
         }
-        return Ok(());
-    }
-
-    if args.lint {
-        let index = podarcis::vault::index::Index::build(
-            &root,
-            &cfg.collections().into_iter().map(|(_, p)| p).collect::<Vec<_>>(),
-        );
-        let mut files = serde_json::Map::new();
-        for entry in &index.entries {
-            if entry.findings.is_empty() {
-                continue;
-            }
-            files.insert(entry.rel.clone(), findings_json(&entry.findings));
-        }
-        for (rel, finding) in &index.dir_findings {
-            files.insert(rel.clone(), findings_json(std::slice::from_ref(finding)));
-        }
-        let payload = serde_json::json!({
-            "ok": files.is_empty(),
-            "root": root.display().to_string(),
-            "files": files,
-        });
-        println!("{}", serde_json::to_string_pretty(&payload)?);
         return Ok(());
     }
 
@@ -167,18 +138,6 @@ fn exec_replace() -> ! {
     // panicking — restart is best-effort.
     eprintln!("restart failed: {} (exiting cleanly)", std::io::Error::last_os_error());
     std::process::exit(0);
-}
-
-fn findings_json(findings: &[podarcis::vault::lint::Finding]) -> serde_json::Value {
-    serde_json::Value::Array(
-        findings
-            .iter()
-            // A code the engine does not emit would make the two linters
-            // undiffable, which is the one thing this output exists for.
-            .filter(|f| podarcis::vault::lint::is_known(f.code))
-            .map(|f| serde_json::json!({"code": f.code, "detail": f.detail}))
-            .collect(),
-    )
 }
 
 struct Guard;
