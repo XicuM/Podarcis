@@ -57,6 +57,12 @@ impl Pane {
         if let Some((key, dir)) = super::config::local_env() {
             cmd.env(key, dir);
         }
+        // An agent working in this pane drives the front-end above it through
+        // this socket; `CommandBuilder` starts from a clean environment, so it
+        // has to be handed over explicitly.
+        if let Some(sock) = std::env::var_os("PODARCIS_TUI_SOCK") {
+            cmd.env("PODARCIS_TUI_SOCK", sock);
+        }
         if let Some(cfg_path) = super::config::session_dir().map(|d| d.join("config.toml")) {
             if cfg_path.exists() {
                 cmd.env("HERDR_CONFIG_PATH", cfg_path);

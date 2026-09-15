@@ -5,6 +5,7 @@
 //! implemented. Rendering reads this state and writes nothing back except the
 //! pane geometry it just measured.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
@@ -14,13 +15,15 @@ use ratatui::layout::{Constraint, Layout, Rect};
 
 use crate::actions::{JobResult, JobRunner, NativeOutcome};
 use crate::config::Config;
+use crate::control::{Command as Control, Request};
 use crate::editor::Editor;
 use crate::event::AppEvent;
 use crate::herdr;
 use crate::keymap::{self, Cmd, Ctx, Resolved};
+use crate::platform;
 use crate::search::{self, Hit};
 use crate::theme::{Flavor, Theme};
-use crate::ui::markdown;
+use crate::ui::markdown::{self, Mark};
 use crate::vault::git::{GitMap, TrackState};
 use crate::vault::index::Index;
 use crate::vault::links::LinkKind;
@@ -75,6 +78,28 @@ pub struct Open {
     /// click, so the inspector scrolls it into view exactly once — a later
     /// manual scroll away from it is left alone.
     pub citation_scroll_pending: bool,
+}
+
+/// The in-page find bar — `ctrl+f`. Scoped to the open page, unlike the
+/// finder's text mode, which sweeps the whole vault.
+///
+/// Only the query and which hit is current live here: the hits themselves are
+/// recomputed from the rendered `Doc` on every use. A page is small enough that
+/// this costs nothing, and it means a resize — which rewraps, moving every
+/// rendered column — cannot leave a highlight pointing at the wrong text.
+pub struct PageFind {
+    pub query: String,
+    pub current: usize,
+}
+
+/// Files the reader never parses: they are handed to the system's default
+/// viewer instead. A PDF and an image are both binary, so rendering either
+/// one as markdown would only paint mojibake.
+pub fn is_external(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        Some("pdf" | "png" | "jpg" | "jpeg")
+    )
 }
 
 impl Open {
@@ -173,6 +198,9 @@ pub enum PromptKind {
     Commit,
     NewPage,
     Rename,
+    NewProject,
+    RenameProject,
+    DeleteProject,
 }
 
 pub struct Prompt {
@@ -200,6 +228,16 @@ impl RepoConfig {
     }
 }
 
+/// A question an agent put to the user, and the request still waiting on the
+/// answer. Holding the request here is what makes the agent's CLI call block
+/// until a key is pressed.
+pub struct Ask {
+    pub question: String,
+    pub options: Vec<String>,
+    pub selected: usize,
+    pub request: Request,
+}
+
 pub enum Overlay {
     Finder(Finder),
     Palette(Palette),
@@ -212,8 +250,42 @@ pub enum Overlay {
     /// The theme picker. `original` is restored if the picker is cancelled, so
     /// browsing twenty themes never costs you the one you had.
     Themes { selected: usize, original: Flavor },
-    /// The project switcher.
-    Projects { selected: usize, items: Vec<(String, PathBuf, String)> },
+    /// The project switcher. Name and path only: the registry's description
+    /// field is bookkeeping, not something worth a column in a switcher.
+    Projects { selected: usize, items: Vec<(String, PathBuf)> },
+    /// A question from an agent on the control socket.
+    Ask(Ask),
+    /// The apm extensions browser — skills and MCP servers.
+    Extensions(Extensions),
+}
+
+/// One action `apm` can be asked to run on the selected extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtensionAction {
+    Install,
+    Update,
+    Uninstall,
+}
+
+impl ExtensionAction {
+    fn verb(self) -> &'static str {
+        match self {
+            ExtensionAction::Install => "install",
+            ExtensionAction::Update => "update",
+            ExtensionAction::Uninstall => "uninstall",
+        }
+    }
+}
+
+pub struct Extensions {
+    pub selected: usize,
+    pub items: Vec<crate::extensions::ExtensionItem>,
+    /// Raw stdout/stderr of the last `apm` invocation — shown verbatim, since
+    /// apm's own output isn't machine-parseable.
+    pub log: Option<String>,
+    /// Uninstalling is destructive, so it is gated behind one extra keypress,
+    /// the same way tree-row delete is (`MenuAction::Delete`).
+    pub confirm: Option<ExtensionAction>,
 }
 
 /// One action from the tree's right-click menu. `Delete` opens a confirmation
@@ -221,6 +293,7 @@ pub enum Overlay {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Open,
+    NewPage,
     Rename,
     Delete,
     ConfirmDelete,
@@ -325,9 +398,12 @@ pub struct App {
     pub git: GitMap,
     pub git_track: Vec<(PathBuf, TrackState)>,
     pub index: Index,
+    pub components: platform::Components,
     pub open: Option<Open>,
     pub focus: Focus,
     pub overlay: Option<Overlay>,
+    /// The in-page find bar, open over the reader.
+    pub find: Option<PageFind>,
     pub toasts: Vec<Toast>,
     pub jobs: JobRunner,
     pub sidebar: Option<herdr::pty::Pane>,
@@ -335,8 +411,6 @@ pub struct App {
     pub show_tree: bool,
     pub show_sidebar: bool,
     pub show_inspector: bool,
-    /// Live preview beside the editor.
-    pub preview: bool,
     pub zoom: bool,
     pub back: Vec<PathBuf>,
     pub forward: Vec<PathBuf>,
@@ -361,6 +435,14 @@ pub struct App {
     /// it to the clipboard.
     selecting_right: bool,
     pub indexing: bool,
+    /// Source-line ranges an agent asked the reader to mark, by page. In
+    /// memory only: an agent pointing at a passage must never edit it.
+    pub marks: HashMap<PathBuf, Vec<Mark>>,
+    /// Control requests accepted but not yet acted on, because the editor was
+    /// open or a question was already on screen.
+    pub deferred: Vec<Request>,
+    /// Where the control socket is listening, when one could be bound.
+    pub control_socket: Option<PathBuf>,
     /// Engine version from `pyproject.toml`, for the status bar.
     pub engine_version: Option<String>,
     /// A splash one-liner from `config.yaml` for the status bar's right corner.
@@ -406,6 +488,7 @@ impl App {
                     .unwrap_or("project")
                     .to_string()
             });
+        let components = platform::discover_components(&cfg.root);
         Self {
             tree: Tree::new(&cfg.root, collections),
             git,
@@ -415,15 +498,16 @@ impl App {
             theme,
             cfg,
             index: Index::default(),
+            components,
             open: None,
             focus: Focus::Tree,
             overlay: None,
+            find: None,
             toasts: Vec::new(),
             jobs: JobRunner::default(),
             sidebar: None,
             sidebar_error: None,
             show_inspector: true,
-            preview: true,
             zoom: false,
             back: Vec::new(),
             forward: Vec::new(),
@@ -441,6 +525,9 @@ impl App {
             oneline,
             project_name,
             indexing: true,
+            marks: HashMap::new(),
+            deferred: Vec::new(),
+            control_socket: None,
             areas: Areas::default(),
             tx,
             finding_cursor: None,
@@ -515,12 +602,12 @@ impl App {
             .collect();
     }
 
-    pub fn track_for(&self, path: &Path) -> TrackState {
+    pub fn track_for(&self, path: &Path) -> &TrackState {
         self.git_track
             .iter()
             .find(|(p, _)| p == path)
-            .map(|(_, s)| *s)
-            .unwrap_or(TrackState::Untracked)
+            .map(|(_, s)| s)
+            .unwrap_or(&TrackState::Untracked)
     }
 
     // ---------------------------------------------------------------- toasts
@@ -537,6 +624,170 @@ impl App {
         self.toasts.retain(|t| t.at.elapsed() < TOAST_TTL);
     }
 
+    // --------------------------------------------------------------- agents
+
+    /// Marks an agent left on `path`, for the reader to tint.
+    pub fn marks_for(&self, path: &Path) -> &[Mark] {
+        self.marks.get(path).map_or(&[], Vec::as_slice)
+    }
+
+    /// A control request, straight off the socket.
+    ///
+    /// Nothing here steals the terminal from someone mid-sentence: while the
+    /// editor is open — or a question is already on screen — the request is
+    /// parked and acknowledged, and runs the moment the way is clear.
+    pub fn on_control(&mut self, request: Request) {
+        if self.control_blocked(&request.cmd) {
+            request.deferred();
+            self.announce_deferred(&request.cmd);
+            self.deferred.push(request);
+            return;
+        }
+        self.apply_control(request);
+    }
+
+    /// Run whatever was parked, oldest first, for as long as the way is clear.
+    pub fn flush_control(&mut self) {
+        while let Some(i) = self.deferred.iter().position(|r| !self.control_blocked(&r.cmd)) {
+            let request = self.deferred.remove(i);
+            self.apply_control(request);
+        }
+    }
+
+    fn control_blocked(&self, cmd: &Control) -> bool {
+        let editing = self.open.as_ref().is_some_and(Open::editing);
+        match cmd {
+            // Passive: a tint repaints under whatever you are doing.
+            Control::Highlight { .. } => false,
+            Control::Open { .. } => editing,
+            Control::Ask { .. } => editing || self.overlay.is_some(),
+        }
+    }
+
+    fn announce_deferred(&mut self, cmd: &Control) {
+        let what = match cmd {
+            Control::Open { path, .. } => format!("agent wants to open {path}"),
+            Control::Ask { .. } => "agent is waiting on a question".to_string(),
+            Control::Highlight { .. } => return,
+        };
+        self.toast(Level::Info, format!("{what} — after you leave the editor"));
+    }
+
+    fn apply_control(&mut self, request: Request) {
+        match request.cmd.clone() {
+            Control::Open { path, line } => match self.resolve_control_path(&path) {
+                Ok(target) => {
+                    self.open_path(&target, true);
+                    self.tree.reveal(&target);
+                    // Agents count file lines, the way `Read` and `sed` show
+                    // them; the reader counts body lines.
+                    if let (Some(open), Some(line)) = (self.open.as_mut(), line) {
+                        let body = line.saturating_sub(1).saturating_sub(open.page.body_start);
+                        open.scroll = open.doc.line_for_source(body);
+                    }
+                    self.toast(Level::Info, format!("agent opened {path}"));
+                    request.ok(serde_json::json!({"path": target.display().to_string()}));
+                }
+                Err(err) => request.err(err),
+            },
+            Control::Highlight { path, ranges, label, clear } => {
+                let target = match path.as_deref().map(|p| self.resolve_control_path(p)).transpose() {
+                    Ok(target) => target,
+                    Err(err) => return request.err(err),
+                };
+                match (&target, clear) {
+                    (None, _) => self.marks.clear(),
+                    (Some(target), true) => {
+                        self.marks.remove(target);
+                    }
+                    (Some(_), false) => {}
+                }
+                let count = ranges.len();
+                if let Some(target) = target.filter(|_| !ranges.is_empty()) {
+                    let offset = self.body_start(&target);
+                    let marks = ranges.into_iter().map(|(start, end)| Mark {
+                        start: start.saturating_sub(1).saturating_sub(offset),
+                        end: end.saturating_sub(1).saturating_sub(offset),
+                        label: label.clone(),
+                    });
+                    self.marks.entry(target).or_default().extend(marks);
+                    let what = label.unwrap_or_else(|| "marked".to_string());
+                    self.toast(Level::Warn, format!("{what} — {count} passage(s) flagged by an agent"));
+                }
+                request.ok(serde_json::json!({"marks": count}));
+            }
+            Control::Ask { question, options } => {
+                self.overlay = Some(Overlay::Ask(Ask { question, options, selected: 0, request }));
+                self.focus = Focus::Doc;
+            }
+        }
+    }
+
+    /// Where `path`'s body begins, so a file line an agent quoted can be
+    /// turned into the body line the reader renders. The open page already
+    /// knows; any other one costs a read, which a highlight can afford.
+    fn body_start(&self, path: &Path) -> usize {
+        match self.open.as_ref().filter(|o| o.page.path == path) {
+            Some(open) => open.page.body_start,
+            None => Page::load(path, &self.cfg.root).map_or(0, |page| page.body_start),
+        }
+    }
+
+    /// Resolve an agent-supplied path against the checkout.
+    ///
+    /// Absolute paths and `..` escapes are refused rather than followed: the
+    /// control socket reaches this project's collections, not the filesystem.
+    fn resolve_control_path(&self, path: &str) -> Result<PathBuf, String> {
+        let candidate = Path::new(path);
+        let rel = candidate.strip_prefix(&self.cfg.root).unwrap_or(candidate);
+        if rel.is_absolute() || rel.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err(format!("{path} is outside the checkout"));
+        }
+        let target = self.cfg.root.join(rel);
+        if !target.exists() {
+            return Err(format!("{path} does not exist"));
+        }
+        Ok(target)
+    }
+
+    fn ask_key(&mut self, key: KeyEvent) {
+        let Some(Overlay::Ask(ask)) = self.overlay.as_mut() else { return };
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                ask.selected = (ask.selected + 1) % ask.options.len();
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                ask.selected = (ask.selected + ask.options.len() - 1) % ask.options.len();
+            }
+            KeyCode::Esc => {
+                let Some(Overlay::Ask(ask)) = self.overlay.take() else { return };
+                // A dismissed question is an answer: "not now", not silence.
+                ask.request.ok(serde_json::json!({"cancelled": true, "answer": null}));
+                self.toast(Level::Info, "question dismissed");
+            }
+            KeyCode::Enter => {
+                let Some(Overlay::Ask(ask)) = self.overlay.take() else { return };
+                let answer = ask.options[ask.selected].clone();
+                ask.request.ok(serde_json::json!({
+                    "answer": answer,
+                    "index": ask.selected,
+                    "cancelled": false,
+                }));
+                self.toast(Level::Good, format!("answered: {answer}"));
+            }
+            // A digit picks its option outright, so a two-way question is one
+            // keystroke rather than an arrow and a return.
+            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                let pick = c.to_digit(10).unwrap() as usize - 1;
+                if pick < ask.options.len() {
+                    ask.selected = pick;
+                    self.ask_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                }
+            }
+            _ => {}
+        }
+    }
+
     // ------------------------------------------------------------- documents
 
     pub fn doc_width(&self) -> u16 {
@@ -545,7 +796,7 @@ impl App {
     }
 
     pub fn open_path(&mut self, path: &Path, push_history: bool) {
-        if path.extension().is_some_and(|e| e == "pdf") {
+        if is_external(path) {
             return self.open_external(path);
         }
         if path.is_dir() {
@@ -574,8 +825,8 @@ impl App {
     }
 
     /// Hand a file off to the system's default viewer instead of rendering it
-    /// in-pane — used for PDFs, which the tree lists but never tries to
-    /// parse as markdown.
+    /// in-pane — used for PDFs and images, which the tree lists but never
+    /// tries to parse as markdown.
     fn open_external(&mut self, path: &Path) {
         let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
         match std::process::Command::new(opener)
@@ -1038,6 +1289,16 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             // `repositories:` in the config, not to the row in the tree.
             vec![
                 (MenuAction::Open, "open"),
+                (MenuAction::NewPage, "new page…"),
+                (MenuAction::CopyRelative, "copy relative path"),
+                (MenuAction::CopyAbsolute, "copy absolute path"),
+            ]
+        } else if row.is_dir {
+            vec![
+                (MenuAction::Open, "open"),
+                (MenuAction::NewPage, "new page…"),
+                (MenuAction::Rename, "rename…"),
+                (MenuAction::Delete, "delete…"),
                 (MenuAction::CopyRelative, "copy relative path"),
                 (MenuAction::CopyAbsolute, "copy absolute path"),
             ]
@@ -1221,6 +1482,12 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             return self.overlay_key(key);
         }
 
+        // The find bar is a text input sitting over the reader: while it is
+        // open every key is its own, or nothing.
+        if self.find.is_some() {
+            return self.find_key(key);
+        }
+
         let ctx = self.ctx();
 
         // The sidebar owns its keys: only its escape hatch is ours.
@@ -1249,6 +1516,78 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             }
             Resolved::Pending(prefix) => self.pending = Some(prefix),
             Resolved::None => {}
+        }
+    }
+
+    /// Hits for the live find query against the open page.
+    ///
+    /// Derived, never stored: see `PageFind`.
+    pub fn finds(&self) -> markdown::Finds {
+        let (Some(find), Some(open)) = (self.find.as_ref(), self.open.as_ref()) else {
+            return markdown::Finds::default();
+        };
+        let hits = open.doc.find(&find.query);
+        let current = find.current.min(hits.len().saturating_sub(1));
+        markdown::Finds { hits, current }
+    }
+
+    fn open_find(&mut self) {
+        if self.open.is_none() {
+            return self.toast(Level::Warn, "no page open to search");
+        }
+        self.focus = Focus::Doc;
+        self.find = Some(PageFind { query: String::new(), current: 0 });
+    }
+
+    fn find_key(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) => self.find = None,
+            (KeyCode::Enter, m) if m.contains(KeyModifiers::SHIFT) => self.step_find(false),
+            (KeyCode::Enter | KeyCode::Down, _) => self.step_find(true),
+            (KeyCode::Up, _) => self.step_find(false),
+            (KeyCode::Char('n' | 'f'), KeyModifiers::CONTROL) => self.step_find(true),
+            (KeyCode::Char('p'), KeyModifiers::CONTROL) => self.step_find(false),
+            (KeyCode::Backspace, _) => {
+                if let Some(find) = self.find.as_mut() {
+                    find.query.pop();
+                    find.current = 0;
+                }
+                self.scroll_to_find();
+            }
+            (KeyCode::Char(c), m) if (m - KeyModifiers::SHIFT).is_empty() => {
+                if let Some(find) = self.find.as_mut() {
+                    find.query.push(c);
+                    find.current = 0;
+                }
+                self.scroll_to_find();
+            }
+            _ => {}
+        }
+    }
+
+    fn step_find(&mut self, forward: bool) {
+        let n = self.finds().hits.len();
+        if n == 0 {
+            return;
+        }
+        if let Some(find) = self.find.as_mut() {
+            let cur = find.current.min(n - 1);
+            find.current = if forward { (cur + 1) % n } else { (cur + n - 1) % n };
+        }
+        self.scroll_to_find();
+    }
+
+    /// Bring the current hit on screen, leaving the scroll alone if it already
+    /// is — a find that jumps the page on every keystroke is unreadable.
+    fn scroll_to_find(&mut self) {
+        let finds = self.finds();
+        let Some(hit) = finds.hits.get(finds.current).copied() else { return };
+        let height = self.areas.doc_body.height as usize;
+        let Some(open) = self.open.as_mut() else { return };
+        if hit.line < open.scroll {
+            open.scroll = hit.line;
+        } else if height > 0 && hit.line >= open.scroll + height {
+            open.scroll = hit.line + 1 - height;
         }
     }
 
@@ -1380,6 +1719,11 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
 
     pub fn run(&mut self, cmd: Cmd) {
         match cmd {
+            Cmd::ClearMarks => {
+                let count: usize = self.marks.values().map(Vec::len).sum();
+                self.marks.clear();
+                self.toast(Level::Info, format!("cleared {count} agent mark(s)"));
+            }
             Cmd::Quit => {
                 if !self.exit_blocked("press ctrl+q again") {
                     self.quit = true;
@@ -1387,7 +1731,6 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             }
             Cmd::Help => self.overlay = Some(Overlay::Help { scroll: 0 }),
             Cmd::Palette => self.open_palette(),
-            Cmd::Reload => self.reload_everything(),
             Cmd::Restart => {
                 // A restart is a quit with a re-exec on the way out, so it
                 // carries the same guard — except for the unsaved buffer.
@@ -1413,6 +1756,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             Cmd::FindFiles => self.open_finder(search::Mode::Files),
             Cmd::FindText => self.open_finder(search::Mode::Text),
             Cmd::FindSemantic => self.open_finder(search::Mode::Semantic),
+            Cmd::FindInPage => self.open_find(),
 
             Cmd::FocusTree => self.set_focus(Focus::Tree),
             Cmd::FocusDoc => self.set_focus(Focus::Doc),
@@ -1499,13 +1843,13 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                 self.with_editor(crate::editor::Editor::insert_link);
                 self.refresh_completion();
             }
-            Cmd::TogglePreview => self.preview = !self.preview,
 
             Cmd::Lint => self.run_lint(),
             Cmd::SyncRepos => self.run_sync_repos(),
             Cmd::Commit => self.prompt(PromptKind::Commit, "commit message"),
             Cmd::NewPage => self.prompt(PromptKind::NewPage, "new page path (relative to the checkout)"),
             Cmd::Uncited => self.show_uncited(),
+            Cmd::Extensions => self.open_extensions(),
         }
     }
 
@@ -1558,12 +1902,28 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         self.focus = order[(((at + delta) % n + n) % n) as usize];
     }
 
+    /// Rows of document the reader can actually show. The sources pane sits
+    /// *below* the reader inside the same column, so measuring the column
+    /// would count its rows as places content could scroll into — and the
+    /// last screenful would stay unreachable, reading as if the pane were
+    /// drawn over the end of the page.
+    fn viewport_height(&self) -> usize {
+        let rows = if self.areas.doc_body.height > 0 {
+            self.areas.doc_body.height
+        } else if !self.areas.doc_main.is_empty() {
+            self.areas.doc_main.height.saturating_sub(2)
+        } else {
+            self.areas.doc.height.saturating_sub(2)
+        };
+        rows.max(1) as usize
+    }
+
     fn page_step(&self) -> isize {
-        self.areas.doc.height.saturating_sub(2).max(1) as isize
+        self.viewport_height() as isize
     }
 
     fn scroll(&mut self, delta: isize) {
-        let height = self.page_step().max(1) as usize;
+        let height = self.viewport_height();
         if let Some(open) = self.open.as_mut() {
             let last = open.doc.height().saturating_sub(height.min(open.doc.height()));
             open.scroll = (open.scroll as isize + delta).clamp(0, last as isize) as usize;
@@ -1571,14 +1931,22 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
     }
 
     fn move_link(&mut self, forward: bool) {
+        let height = self.viewport_height();
         if let Some(open) = self.open.as_mut() {
             open.link = open.doc.link_after(open.link, forward);
             if let Some(link) = open.link.and_then(|i| open.doc.links.get(i)) {
                 // Keep the highlighted link on screen.
-                let height = self.areas.doc.height.saturating_sub(2).max(1) as usize;
                 if link.line < open.scroll || link.line >= open.scroll + height {
                     open.scroll = link.line.saturating_sub(height / 3);
                 }
+                if link.kind == LinkKind::Footnote {
+                    open.selected_citation = Some(link.target.clone());
+                    open.citation_scroll_pending = true;
+                } else {
+                    open.selected_citation = None;
+                }
+            } else {
+                open.selected_citation = None;
             }
         }
     }
@@ -2146,8 +2514,75 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             Some(Overlay::Prompt(_)) => self.prompt_key(key),
             Some(Overlay::Menu(_)) => self.menu_key(key),
             Some(Overlay::RepoConfig(_)) => self.repo_config_key(key),
+            Some(Overlay::Ask(_)) => self.ask_key(key),
+            Some(Overlay::Extensions(_)) => self.extensions_key(key),
             None => {}
         }
+    }
+
+    /// Say why up front rather than opening an overlay whose every action
+    /// would fail — same posture as `run_semantic_search`'s `qmd_off_reason`
+    /// check.
+    fn open_extensions(&mut self) {
+        if let Some(reason) = self.cfg.apm_off_reason {
+            self.toast(Level::Warn, reason);
+            return;
+        }
+        let items = crate::extensions::load(&self.cfg.root);
+        self.overlay = Some(Overlay::Extensions(Extensions { selected: 0, items, log: None, confirm: None }));
+    }
+
+    fn extensions_key(&mut self, key: KeyEvent) {
+        let Some(Overlay::Extensions(state)) = self.overlay.as_mut() else { return };
+        if let Some(action) = state.confirm {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    state.confirm = None;
+                    self.run_extension_action(action);
+                }
+                _ => state.confirm = None,
+            }
+            return;
+        }
+        let n = state.items.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.overlay = None,
+            KeyCode::Down | KeyCode::Char('j') if n > 0 => state.selected = (state.selected + 1).min(n - 1),
+            KeyCode::Up | KeyCode::Char('k') => state.selected = state.selected.saturating_sub(1),
+            KeyCode::Char('i') if n > 0 => self.run_extension_action(ExtensionAction::Install),
+            KeyCode::Char('u') if n > 0 => self.run_extension_action(ExtensionAction::Update),
+            KeyCode::Char('d') | KeyCode::Char('x') if n > 0 => state.confirm = Some(ExtensionAction::Uninstall),
+            _ => {}
+        }
+    }
+
+    /// Every action shells out to the real `apm` binary — this never touches
+    /// `apm.yml`/`apm.lock.yaml` itself. Runs as a native job (`extensions::run`
+    /// on its own thread) so a slow install never blocks the UI, mirroring
+    /// `run_semantic_search`.
+    fn run_extension_action(&mut self, action: ExtensionAction) {
+        let Some(Overlay::Extensions(state)) = self.overlay.as_ref() else { return };
+        let Some(item) = state.items.get(state.selected) else { return };
+        let key = item.key.clone();
+        let root = self.cfg.root.clone();
+        let tx = self.tx.clone();
+        let args: Vec<String> = match action {
+            ExtensionAction::Install => vec!["install".into(), key],
+            ExtensionAction::Update => vec!["update".into(), key, "-y".into()],
+            ExtensionAction::Uninstall => vec!["uninstall".into(), key],
+        };
+        let mut job_args = vec!["apm".to_string()];
+        job_args.extend(args.clone());
+        self.jobs.spawn_native(
+            format!("apm {}", action.verb()),
+            job_args,
+            move || {
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                let (code, stdout, stderr) = crate::extensions::run(&root, &refs);
+                NativeOutcome { code, stdout, stderr }
+            },
+            tx,
+        );
     }
 
     fn open_projects(&mut self) {
@@ -2157,17 +2592,26 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         sorted_names.sort();
         for name in sorted_names {
             let entry = &reg.projects[name];
-            items.push((name.clone(), entry.path.clone(), entry.description.clone()));
+            items.push((name.clone(), entry.path.clone()));
         }
-        let selected = items.iter().position(|(n, _, _)| *n == reg.active).unwrap_or(0);
+        let selected = items.iter().position(|(n, _)| *n == reg.active).unwrap_or(0);
         self.overlay = Some(Overlay::Projects { selected, items });
     }
 
     fn project_key(&mut self, key: KeyEvent) {
+        // Creating a project is valid even with an empty registry, so handle it
+        // before the "no items" bail-out below closes the overlay outright.
+        if key.code == KeyCode::Char('n') {
+            self.overlay = None;
+            self.prompt_new_project();
+            return;
+        }
         let Some(Overlay::Projects { selected, items }) = self.overlay.as_mut() else { return };
         let n = items.len();
         if n == 0 {
-            self.overlay = None;
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
+                self.overlay = None;
+            }
             return;
         }
         match key.code {
@@ -2181,11 +2625,153 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                 *selected = (*selected + n - 1) % n;
             }
             KeyCode::Enter => {
-                let (name, path, _) = items[*selected].clone();
+                let (name, path) = items[*selected].clone();
                 self.overlay = None;
                 self.switch_project(&name, &path);
             }
+            KeyCode::Char('r') => {
+                let (name, path) = items[*selected].clone();
+                self.overlay = None;
+                self.prompt_rename_project(&name, &path);
+            }
+            KeyCode::Char('d') => {
+                let (name, path) = items[*selected].clone();
+                self.overlay = None;
+                self.prompt_delete_project(&name, &path);
+            }
             _ => {}
+        }
+    }
+
+    fn prompt_new_project(&mut self) {
+        self.overlay = Some(Overlay::Prompt(Prompt {
+            kind: PromptKind::NewProject,
+            title: "new project name".to_string(),
+            value: String::new(),
+            path: None,
+        }));
+    }
+
+    fn prompt_rename_project(&mut self, name: &str, path: &Path) {
+        self.overlay = Some(Overlay::Prompt(Prompt {
+            kind: PromptKind::RenameProject,
+            title: format!("rename project '{name}'"),
+            value: name.to_string(),
+            path: Some(path.to_path_buf()),
+        }));
+    }
+
+    fn prompt_delete_project(&mut self, name: &str, path: &Path) {
+        let is_in_projects_dir = path.starts_with(crate::project::projects_dir());
+        let title = if is_in_projects_dir {
+            format!("type '{name}' to delete it (files will be removed from disk)")
+        } else {
+            format!("type '{name}' to unregister it (external files kept on disk)")
+        };
+        self.overlay = Some(Overlay::Prompt(Prompt {
+            kind: PromptKind::DeleteProject,
+            title,
+            value: String::new(),
+            path: Some(path.to_path_buf()),
+        }));
+    }
+
+    /// Create a project in the default XDG projects directory, register it, and switch to it.
+    fn create_new_project(&mut self, raw_name: &str) {
+        let name = raw_name.trim().replace(' ', "_");
+        if name.is_empty() {
+            return;
+        }
+        let reg = crate::project::ProjectRegistry::load();
+        if reg.projects.contains_key(&name) {
+            return self.toast(Level::Bad, format!("project '{name}' already exists"));
+        }
+        match crate::project::create_project(&name, None, "", "", "", "", "local") {
+            Ok(proj) => {
+                let _ = herdr::space::create_workspace_if_server_running(&proj.name, &proj.root);
+                self.switch_project(&proj.name, &proj.root);
+                self.toast(Level::Good, format!("created project '{name}'"));
+            }
+            Err(err) => self.toast(Level::Bad, format!("could not create project: {err}")),
+        }
+    }
+
+    /// Rename a registered project's key, leaving its files untouched.
+    fn rename_project(&mut self, path: Option<&Path>, value: &str) {
+        let Some(path) = path else { return };
+        let mut reg = crate::project::ProjectRegistry::load();
+        let Some(old_name) = reg.projects.iter().find(|(_, e)| e.path == path).map(|(n, _)| n.clone()) else {
+            return self.toast(Level::Bad, "project no longer registered — reload");
+        };
+        let new_name = value.trim().replace(' ', "_");
+        if new_name.is_empty() || new_name == old_name {
+            return;
+        }
+        if reg.projects.contains_key(&new_name) {
+            return self.toast(Level::Bad, format!("project '{new_name}' already exists"));
+        }
+        let entry = reg.projects.remove(&old_name).unwrap();
+        let was_active = reg.active == old_name;
+        reg.projects.insert(new_name.clone(), entry);
+        if was_active {
+            reg.active = new_name.clone();
+        }
+        if let Err(err) = reg.save() {
+            return self.toast(Level::Bad, format!("could not save registry: {err}"));
+        }
+        if was_active {
+            self.project_name = new_name.clone();
+        }
+        if let Ok(workspaces) = herdr::space::list_workspaces() {
+            if let Some(ws) = workspaces.iter().find(|w| w.label == old_name) {
+                let _ = herdr::space::rename_workspace(&ws.id, &new_name);
+            }
+        }
+        self.toast(Level::Good, format!("renamed project '{old_name}' → '{new_name}'"));
+    }
+
+    /// Unregister or delete a project after the user types its name back to confirm.
+    /// Projects located in the default XDG projects directory are deleted from disk
+    /// so they are not immediately re-discovered by registry scanning.
+    fn delete_project(&mut self, path: Option<&Path>, typed: &str) {
+        let Some(path) = path else { return };
+        let mut reg = crate::project::ProjectRegistry::load();
+        let Some(name) = reg.projects.iter().find(|(_, e)| e.path == path).map(|(n, _)| n.clone()) else {
+            return self.toast(Level::Bad, "project no longer registered — reload");
+        };
+        if typed.trim() != name {
+            return self.toast(Level::Warn, "name did not match — deletion cancelled");
+        }
+        reg.projects.remove(&name);
+        let was_active = reg.active == name;
+        if was_active {
+            reg.active = reg.projects.keys().next().cloned().unwrap_or_else(|| "default".to_string());
+        }
+
+        if let Ok(workspaces) = herdr::space::list_workspaces() {
+            if let Some(ws) = workspaces.iter().find(|w| w.label == name) {
+                let _ = herdr::space::close_workspace(&ws.id);
+            }
+        }
+
+        let is_in_projects_dir = path.starts_with(crate::project::projects_dir());
+        if is_in_projects_dir && path.is_dir() {
+            let _ = std::fs::remove_dir_all(path);
+            self.toast(Level::Good, format!("deleted project '{name}'"));
+        } else {
+            self.toast(Level::Good, format!("unregistered project '{name}' (files kept at {})", path.display()));
+        }
+
+        if let Err(err) = reg.save() {
+            return self.toast(Level::Bad, format!("could not save registry: {err}"));
+        }
+
+        if was_active {
+            if let Some(entry) = reg.projects.get(&reg.active) {
+                let new_path = entry.path.clone();
+                let new_name = reg.active.clone();
+                self.switch_project(&new_name, &new_path);
+            }
         }
     }
 
@@ -2204,6 +2790,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         let collections: Vec<PathBuf> = self.cfg.collections().into_iter().map(|(_, p)| p).collect();
         self.tree = Tree::new(path, collections);
         self.index = Index::build(path, &self.collection_dirs());
+        self.components = platform::discover_components(path);
         self.open = None;
 
         if let Some(pane) = self.sidebar.as_mut() {
@@ -2414,6 +3001,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         self.overlay = None;
         match action {
             Some(MenuAction::Open) => self.open_path(&path, true),
+            Some(MenuAction::NewPage) => self.prompt_new_page(&path),
             Some(MenuAction::Rename) => self.prompt_rename(&path),
             Some(MenuAction::Delete) => self.confirm_delete(path, area),
             Some(MenuAction::ConfirmDelete) => self.delete_path(&path),
@@ -2453,6 +3041,18 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         }));
     }
 
+    /// Ask for the name of a page to create inside `dir`. The prompt is a
+    /// basename joined onto the folder, so the menu can't create elsewhere.
+    fn prompt_new_page(&mut self, dir: &Path) {
+        let rel = crate::vault::page::rel_path(dir, &self.cfg.root);
+        self.overlay = Some(Overlay::Prompt(Prompt {
+            kind: PromptKind::NewPage,
+            title: format!("new page in {rel}"),
+            value: String::new(),
+            path: Some(dir.to_path_buf()),
+        }));
+    }
+
     fn rename_path(&mut self, path: &Path, value: &str) {
         let Some(parent) = path.parent() else { return self.toast(Level::Bad, "cannot rename the checkout root") };
         if !path.exists() {
@@ -2463,8 +3063,11 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             return;
         }
         if path.is_file() {
+            // Keep the file's own extension unless the new name already
+            // carries it — so a `.png` stays a `.png` without this having to
+            // know the set of extensions the tree lists.
             let ext = path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-            if !name.ends_with(".md") && !name.ends_with(".pdf") && !name.ends_with(".csv") {
+            if !ext.is_empty() && !name.to_ascii_lowercase().ends_with(&format!(".{}", ext.to_ascii_lowercase())) {
                 name = format!("{name}.{ext}");
             }
         }
@@ -2624,22 +3227,27 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                 }
                 match kind {
                     PromptKind::Commit => self.run_commit(value),
-                    PromptKind::NewPage => self.create_page(&value),
+                    PromptKind::NewPage => self.create_page(&value, path.as_deref()),
                     PromptKind::Rename => {
                         if let Some(path) = path {
                             self.rename_path(&path, &value);
                         }
                     }
+                    PromptKind::NewProject => self.create_new_project(&value),
+                    PromptKind::RenameProject => self.rename_project(path.as_deref(), &value),
+                    PromptKind::DeleteProject => self.delete_project(path.as_deref(), &value),
                 }
             }
             _ => {}
         }
     }
 
-    fn create_page(&mut self, rel: &str) {
+    fn create_page(&mut self, rel: &str, base: Option<&Path>) {
         let rel = if rel.ends_with(".md") { rel.to_string() } else { format!("{rel}.md") };
-        let path = crate::vault::links::normalize(&self.cfg.root.join(&rel));
-        if !path.starts_with(&self.cfg.root) {
+        let root = &self.cfg.root;
+        let base = base.unwrap_or(root);
+        let path = crate::vault::links::normalize(&base.join(&rel));
+        if !path.starts_with(root) {
             return self.toast(Level::Bad, "path escapes the checkout");
         }
         if path.exists() {
@@ -2774,6 +3382,10 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             return self.report_lint(&result);
         }
 
+        if result.args.first().map(String::as_str) == Some("apm") {
+            return self.report_extension_action(&result);
+        }
+
         let detail = first_line(&result.stderr)
             .or_else(|| result.stdout.lines().rev().find(|l| !l.trim().is_empty()).map(str::to_string))
             .unwrap_or_default();
@@ -2781,6 +3393,24 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             self.toast(Level::Good, format!("{} ok{}", result.label, suffix(&detail)));
             self.reload_everything();
         } else {
+            self.toast(Level::Bad, format!("{} failed{}", result.label, suffix(&detail)));
+        }
+    }
+
+    /// Refresh the browse list from `apm.yml`/`apm.lock.yaml` and show the raw
+    /// `apm` output — never parsed, since apm prints Rich tables, not JSON.
+    fn report_extension_action(&mut self, result: &JobResult) {
+        let items = crate::extensions::load(&self.cfg.root);
+        let log = if result.stdout.trim().is_empty() { result.stderr.clone() } else { result.stdout.clone() };
+        if let Some(Overlay::Extensions(state)) = self.overlay.as_mut() {
+            state.items = items;
+            state.selected = state.selected.min(state.items.len().saturating_sub(1));
+            state.log = Some(log);
+        }
+        if result.ok() {
+            self.toast(Level::Good, format!("{} ok", result.label));
+        } else {
+            let detail = first_line(&result.stderr).unwrap_or_default();
             self.toast(Level::Bad, format!("{} failed{}", result.label, suffix(&detail)));
         }
     }
@@ -2804,6 +3434,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         self.index = index;
         self.indexing = false;
         self.finding_cursor = None;
+        self.components = platform::discover_components(&self.cfg.root);
     }
 
     pub fn on_fs_changed(&mut self, paths: Vec<PathBuf>) {
@@ -2813,6 +3444,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         }
         if structural {
             self.tree.rebuild();
+            self.components = platform::discover_components(&self.cfg.root);
         }
         self.refresh_git();
         let open_changed = self
@@ -2995,6 +3627,134 @@ mod tests {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
     }
 
+    fn control(cmd: Control) -> (Request, std::sync::mpsc::Receiver<serde_json::Value>) {
+        Request::for_test(cmd)
+    }
+
+    #[test]
+    fn an_agent_can_open_a_page_at_a_line() {
+        let v = Vault::new("control-open");
+        let mut app = v.app();
+        // File line 12 is body line 2: nine lines of frontmatter precede it.
+        let (req, rx) = control(Control::Open { path: "wiki/a.md".into(), line: Some(12) });
+        app.on_control(req);
+
+        let open = app.open.as_ref().unwrap();
+        assert_eq!(open.page.title(), "Alpha");
+        assert_eq!(open.scroll, open.doc.line_for_source(2), "agents count file lines");
+        assert_eq!(rx.try_recv().unwrap()["ok"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn an_agent_cannot_reach_outside_the_checkout() {
+        let v = Vault::new("control-escape");
+        let mut app = v.app();
+        for path in ["../../etc/passwd", "/etc/passwd"] {
+            let (req, rx) = control(Control::Open { path: path.into(), line: None });
+            app.on_control(req);
+            assert!(app.open.is_none(), "{path} was opened");
+            assert_eq!(rx.try_recv().unwrap()["ok"], serde_json::json!(false));
+        }
+    }
+
+    #[test]
+    fn an_open_never_interrupts_the_editor_and_runs_once_it_closes() {
+        let v = Vault::new("control-defer");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/b.md"), true);
+        app.run(Cmd::Edit);
+
+        let (req, rx) = control(Control::Open { path: "wiki/a.md".into(), line: None });
+        app.on_control(req);
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Beta", "the editor kept the page");
+        assert_eq!(rx.try_recv().unwrap()["deferred"], serde_json::json!(true));
+        assert_eq!(app.deferred.len(), 1);
+
+        app.run(Cmd::LeaveEdit);
+        app.flush_control();
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Alpha");
+        assert!(app.deferred.is_empty());
+    }
+
+    #[test]
+    fn a_highlight_tints_the_lines_it_names_and_labels_the_first_one() {
+        let v = Vault::new("control-mark");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        let (req, _rx) = control(Control::Highlight {
+            path: Some("wiki/a.md".into()),
+            ranges: vec![(12, 12)],
+            label: Some("unsourced".into()),
+            clear: false,
+        });
+        app.on_control(req);
+
+        // File line 12 is body line 2: nine lines of frontmatter precede it.
+        let marks = app.marks_for(&v.path("wiki/a.md"));
+        assert_eq!(marks, [Mark { start: 2, end: 2, label: Some("unsourced".into()) }]);
+
+        let open = app.open.as_ref().unwrap();
+        let rendered = open
+            .doc
+            .to_lines(&app.theme, &markdown::Overlays { marks, ..Default::default() }, 0, open.doc.height())
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("◂ unsourced"), "{rendered}");
+
+        app.run(Cmd::ClearMarks);
+        assert!(app.marks_for(&v.path("wiki/a.md")).is_empty());
+    }
+
+    #[test]
+    fn a_question_blocks_until_a_key_answers_it() {
+        let v = Vault::new("control-ask");
+        let mut app = v.app();
+        let (req, rx) = control(Control::Ask {
+            question: "Merge these two pages?".into(),
+            options: vec!["yes".into(), "no".into()],
+        });
+        app.on_control(req);
+        assert!(matches!(app.overlay, Some(Overlay::Ask(_))));
+        assert!(rx.try_recv().is_err(), "nothing is answered before a keypress");
+
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let reply = rx.try_recv().unwrap();
+        assert_eq!(reply["answer"], serde_json::json!("no"));
+        assert_eq!(reply["index"], serde_json::json!(1));
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn a_digit_answers_a_question_outright() {
+        let v = Vault::new("control-ask-digit");
+        let mut app = v.app();
+        let (req, rx) = control(Control::Ask {
+            question: "Which?".into(),
+            options: vec!["alpha".into(), "beta".into(), "gamma".into()],
+        });
+        app.on_control(req);
+        app.on_key(ch('3'));
+        assert_eq!(rx.try_recv().unwrap()["answer"], serde_json::json!("gamma"));
+    }
+
+    #[test]
+    fn a_dismissed_question_is_answered_as_a_dismissal_rather_than_left_hanging() {
+        let v = Vault::new("control-ask-esc");
+        let mut app = v.app();
+        let (req, rx) = control(Control::Ask {
+            question: "Merge?".into(),
+            options: vec!["yes".into()],
+        });
+        app.on_control(req);
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let reply = rx.try_recv().unwrap();
+        assert_eq!(reply["cancelled"], serde_json::json!(true));
+        assert!(reply["answer"].is_null());
+    }
+
     #[test]
     fn opening_a_page_renders_it_and_moves_focus() {
         let v = Vault::new("open");
@@ -3033,6 +3793,27 @@ mod tests {
         app.open_path(&v.path("sources/literature/smith2024/original.pdf"), true);
         assert!(app.open.is_none(), "a pdf is never opened in the reader pane");
         assert_eq!(app.toasts.len(), 1);
+    }
+
+    #[test]
+    fn opening_an_image_hands_off_to_the_system_viewer_too() {
+        let v = Vault::new("image");
+        v.write("wiki/biology/figure.png", "\u{89}PNG");
+        v.write("wiki/biology/photo.JPEG", "jpegdata");
+        let mut app = v.app();
+        for rel in ["wiki/biology/figure.png", "wiki/biology/photo.JPEG"] {
+            app.open_path(&v.path(rel), true);
+            assert!(app.open.is_none(), "{rel} is never opened in the reader pane");
+        }
+    }
+
+    #[test]
+    fn renaming_keeps_a_non_markdown_extension() {
+        let v = Vault::new("rename-ext");
+        v.write("wiki/biology/figure.png", "x");
+        let mut app = v.app();
+        app.rename_path(&v.path("wiki/biology/figure.png"), "diagram");
+        assert!(v.path("wiki/biology/diagram.png").is_file(), "the .png survives a rename");
     }
 
     #[test]
@@ -3196,6 +3977,8 @@ mod tests {
         let v = Vault::new("focus");
         let mut app = v.app();
         app.areas.doc = Rect::new(30, 0, 60, 6);
+        app.areas.doc_main = app.areas.doc;
+        app.areas.doc_body = Rect::new(32, 1, 56, 4);
         app.open_path(&v.path("wiki/a.md"), true);
 
         app.focus = Focus::Doc;
@@ -3235,6 +4018,20 @@ mod tests {
         let at = app.open.as_ref().unwrap().scroll;
         app.run(Cmd::ScrollDown);
         assert_eq!(app.open.as_ref().unwrap().scroll, at);
+    }
+
+    #[test]
+    fn the_last_lines_are_reachable_with_the_sources_pane_open() {
+        let v = Vault::new("scroll-inspector");
+        let body: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+        let long = v.write("wiki/long.md", &format!("---\ntitle: Long\ntype: concept\ncategory: c\nrationale: r\n---\n{body}"));
+        let mut app = v.app();
+        app.open_path(&long, true);
+        app.run(Cmd::DocBottom);
+        let open = app.open.as_ref().unwrap();
+        // The reader body is 30 rows of the 40-row column; the other 10 are
+        // the sources pane and are not room the document can scroll into.
+        assert_eq!(open.scroll, open.doc.height() - 30, "the tail of the page must scroll into the reader");
     }
 
     #[test]
@@ -3342,7 +4139,7 @@ mod tests {
     fn a_new_page_path_cannot_escape_the_checkout() {
         let v = Vault::new("escape");
         let mut app = v.app();
-        app.create_page("../../etc/evil");
+        app.create_page("../../etc/evil", None);
         assert!(app.toasts.last().unwrap().text.contains("escapes"));
         assert!(app.open.is_none());
     }
@@ -3412,12 +4209,12 @@ mod tests {
         let v = Vault::new("palette");
         let mut app = v.app();
         app.run(Cmd::Palette);
-        for c in "reload".chars() {
+        for c in "restart".chars() {
             app.on_key(ch(c));
         }
         let Some(Overlay::Palette(p)) = app.overlay.as_ref() else { panic!() };
         assert_eq!(p.items.len(), 1);
-        assert_eq!(p.items[0].0, Cmd::Reload);
+        assert_eq!(p.items[0].0, Cmd::Restart);
 
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.overlay.is_none());
@@ -3650,7 +4447,37 @@ mod tests {
         right_click(&mut app, "wiki");
         let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { panic!("expected menu overlay") };
         let labels: Vec<&str> = menu.items.iter().map(|(_, l)| *l).collect();
-        assert_eq!(labels, vec!["open", "copy relative path", "copy absolute path"]);
+        assert_eq!(labels, vec!["open", "new page…", "copy relative path", "copy absolute path"]);
+    }
+
+    #[test]
+    fn the_menu_creates_a_page_inside_the_clicked_folder() {
+        let v = Vault::new("menu-new-page");
+        let mut app = v.app();
+        right_click(&mut app, "wiki");
+        app.on_key(ch('j')); // new page…
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let Some(Overlay::Prompt(prompt)) = app.overlay.as_ref() else { panic!("expected new-page prompt") };
+        assert_eq!(prompt.kind, PromptKind::NewPage);
+        assert_eq!(prompt.value, "");
+        assert_eq!(prompt.path.as_deref(), Some(v.path("wiki").as_path()));
+        app.on_key(ch('c'));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.overlay.is_none());
+        assert!(v.path("wiki/c.md").exists(), "the page was created in the clicked folder");
+        assert!(app.tree.rows.iter().any(|r| r.label == "c"), "the tree sees the new page");
+        assert!(app.open.is_some(), "the new page is opened");
+    }
+
+    #[test]
+    fn a_normal_folder_also_offers_new_page() {
+        let v = Vault::new("menu-new-page-dir");
+        v.write("wiki/nested/x.md", "# X\n");
+        let mut app = v.app();
+        right_click(&mut app, "nested");
+        let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { panic!("expected menu overlay") };
+        let labels: Vec<&str> = menu.items.iter().map(|(_, l)| *l).collect();
+        assert_eq!(labels, vec!["open", "new page…", "rename…", "delete…", "copy relative path", "copy absolute path"]);
     }
 
     #[test]
@@ -3808,6 +4635,8 @@ mod tests {
         let v = Vault::new("wheel");
         let mut app = v.app();
         app.areas.doc = Rect::new(30, 0, 60, 6);
+        app.areas.doc_main = app.areas.doc;
+        app.areas.doc_body = Rect::new(32, 1, 56, 4);
         app.open_path(&v.path("wiki/a.md"), true);
         app.focus = Focus::Tree;
         app.on_mouse(MouseEvent {
@@ -4424,6 +5253,101 @@ mod tests {
         app.toasts[0].at = Instant::now() - TOAST_TTL - Duration::from_secs(1);
         app.expire_toasts();
         assert_eq!(app.toasts.len(), 2);
+    }
+
+    #[test]
+    fn ctrl_f_searches_the_open_page_rather_than_the_whole_vault() {
+        let v = Vault::new("find-in-page");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.on_key(ctrl('f'));
+        assert!(app.find.is_some(), "ctrl+f opens the in-page bar");
+        assert!(app.overlay.is_none(), "and never the vault-wide finder");
+
+        for c in "beta".chars() {
+            app.on_key(ch(c));
+        }
+        assert_eq!(app.finds().hits.len(), 1, "case-insensitive, and only this page");
+
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.find.is_none(), "esc closes it");
+    }
+
+    #[test]
+    fn enter_walks_the_hits_and_wraps_round() {
+        let v = Vault::new("find-cycle");
+        let mut app = v.app();
+        let path = v.write(
+            "wiki/c.md",
+            "---\ntitle: Gamma\ntype: concept\ncategory: c\nrationale: r\n---\n# Gamma\n\nfirst hit\n\nsecond hit\n\nthird hit\n",
+        );
+        app.open_path(&path, true);
+        app.run(Cmd::FindInPage);
+        for c in "hit".chars() {
+            app.on_key(ch(c));
+        }
+        assert_eq!(app.finds().hits.len(), 3);
+        assert_eq!(app.finds().current, 0, "typing lands on the first hit");
+
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        app.on_key(enter);
+        assert_eq!(app.finds().current, 1);
+        app.on_key(enter);
+        app.on_key(enter);
+        assert_eq!(app.finds().current, 0, "wraps past the last hit");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert_eq!(app.finds().current, 2, "shift+enter walks back");
+    }
+
+    #[test]
+    fn the_find_bar_swallows_keys_that_would_otherwise_be_commands() {
+        let v = Vault::new("find-swallows");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.run(Cmd::FindInPage);
+        // `q` quits and `e` edits when the reader has focus; in the bar they
+        // are two characters of a query.
+        app.on_key(ch('q'));
+        app.on_key(ch('e'));
+        assert!(!app.quit);
+        assert!(!app.open.as_ref().unwrap().editing());
+        assert_eq!(app.find.as_ref().unwrap().query, "qe");
+        app.on_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.find.as_ref().unwrap().query, "q");
+    }
+
+    #[test]
+    fn a_hit_below_the_fold_is_scrolled_into_view() {
+        let v = Vault::new("find-scroll");
+        let mut app = v.app();
+        let mut body =
+            String::from("---\ntitle: Long\ntype: concept\ncategory: c\nrationale: r\n---\n# Long\n\n");
+        for i in 0..120 {
+            body.push_str(&format!("filler line {i}\n\n"));
+        }
+        body.push_str("the needle\n");
+        let path = v.write("wiki/long.md", &body);
+        app.open_path(&path, true);
+        // The reader has not been drawn, so give it the viewport a draw would.
+        app.areas.doc_body = Rect::new(0, 0, 80, 20);
+        app.run(Cmd::FindInPage);
+        for c in "needle".chars() {
+            app.on_key(ch(c));
+        }
+        let finds = app.finds();
+        assert_eq!(finds.hits.len(), 1);
+        let open = app.open.as_ref().unwrap();
+        let line = finds.hits[0].line;
+        assert!(line >= open.scroll && line < open.scroll + 20, "hit {line} off screen at {}", open.scroll);
+    }
+
+    #[test]
+    fn find_declines_politely_when_nothing_is_open() {
+        let v = Vault::new("find-empty");
+        let mut app = v.app();
+        app.run(Cmd::FindInPage);
+        assert!(app.find.is_none());
+        assert!(app.toasts.last().unwrap().text.contains("no page open"));
     }
 
     #[test]

@@ -1,10 +1,15 @@
 //! `podarcis` — the Rust CLI for the Podarcis engine.
 //!
 //! Owns the whole command tree. Core commands (status, config, repo, lint,
-//! diagnose, test, wiki, frontend) run natively in Rust on the shared library;
-//! the Python-bound families (job timers, research/ingest HTTP+PDF, install/
+//! diagnose, test, build, tui) run natively in Rust on the shared library; the
+//! Python-bound families (job timers, research/ingest HTTP+PDF, install/
 //! uninstall venv lifecycle) dispatch to the engine's remaining Python CLI
 //! (`python -m podarcis.cli`) until ported.
+//!
+//! Bare `podarcis [PATH]` opens the configured frontend (the `podarcis-tui`
+//! Ratatui app by default), optionally landing on `PATH`. There is no `wiki`
+//! or `frontend` subcommand: the bare command already means "open it", and a
+//! named subcommand for the same action was a redundant alias.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -38,6 +43,8 @@ struct Cli {
     /// Podarcis checkout root (AGENTS.md + .podarcis/config.yaml or podarcis.yaml).
     #[arg(long)]
     root: Option<PathBuf>,
+    /// Page or file to open in the frontend (bare invocation only).
+    path: Option<String>,
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -88,16 +95,17 @@ enum Cmd {
         #[arg(trailing_var_arg = true)]
         rest: Vec<String>,
     },
-    /// Browse, search, and edit the wiki (Ratatui frontend).
-    Wiki {
-        #[command(subcommand)]
-        action: Option<WikiAction>,
-        /// Page to open.
-        #[arg(trailing_var_arg = true)]
-        rest: Vec<String>,
+    /// Compile the frontend binary (podarcis-tui).
+    Build {
+        /// Build the debug profile.
+        #[arg(long)]
+        debug: bool,
     },
-    /// Open the configured frontend tool.
-    Frontend,
+    /// Drive a running front-end: show a page, mark a passage, ask a question.
+    Tui {
+        #[command(subcommand)]
+        action: TuiAction,
+    },
     /// Clean Python build artifacts and cache files.
     Clean,
     /// Remove global symlink, virtualenv, and build artefacts.
@@ -239,6 +247,11 @@ enum ProjectAction {
         #[arg(long)]
         purge: bool,
     },
+    /// Rename a registered project's key. Files on disk are left untouched.
+    Rename {
+        name: String,
+        new_name: String,
+    },
     /// Migrate the current checkout's wiki/workspace/sources to ~/.local/share/podarcis/projects/<name>.
     Migrate {
         #[arg(default_value = "default")]
@@ -282,18 +295,45 @@ struct ProjectAddArgs {
     description: String,
 }
 
+/// What an agent can ask the running front-end to do.
+///
+/// Everything here is advisory: with no front-end attached the command says so
+/// and succeeds, so an agent job running headlessly is never broken by it. The
+/// exception is `ask`, which exists to get an answer and fails without one.
 #[derive(Subcommand, Debug)]
-enum WikiAction {
-    /// Open the wiki frontend, optionally at a page.
+enum TuiAction {
+    /// Show a page in the reader.
     Open {
-        /// Page to open.
-        path: Option<String>,
-    },
-    /// Compile the wiki frontend.
-    Build {
-        /// Build the debug profile.
+        /// Page path, relative to the checkout.
+        path: String,
+        /// Scroll to this source line (1-based).
         #[arg(long)]
-        debug: bool,
+        line: Option<usize>,
+    },
+    /// Mark passages of a page for the reader to draw attention to.
+    Highlight {
+        /// Page path, relative to the checkout.
+        path: Option<String>,
+        /// Source line range, `START-END` or a single line. Repeatable.
+        #[arg(long = "lines", value_name = "START-END")]
+        lines: Vec<String>,
+        /// Short label shown beside the first marked line.
+        #[arg(long)]
+        label: Option<String>,
+        /// Drop existing marks — on PATH, or everywhere when PATH is omitted.
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Put a question to the user and wait for the answer.
+    Ask {
+        /// The question.
+        question: String,
+        /// Comma-separated answers to choose between.
+        #[arg(long, default_value = "yes,no", value_delimiter = ',')]
+        options: Vec<String>,
+        /// Give up after this many seconds. 0 waits indefinitely.
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
     },
 }
 
@@ -321,7 +361,7 @@ fn run(cli: Cli) -> Result<i32> {
     }
 
     match cli.command {
-        None => open_frontend(&root),
+        None => open_frontend(&root, cli.path.as_deref()),
         Some(Cmd::Project { action }) => match action {
             None | Some(ProjectAction::List { json: false }) => cmd_project_list(false),
             Some(ProjectAction::List { json: true }) => cmd_project_list(true),
@@ -330,6 +370,7 @@ fn run(cli: Cli) -> Result<i32> {
             Some(ProjectAction::New(args)) => cmd_project_new(args),
             Some(ProjectAction::Add(args)) => cmd_project_add(args),
             Some(ProjectAction::Remove { name, purge }) => cmd_project_remove(&name, purge),
+            Some(ProjectAction::Rename { name, new_name }) => cmd_project_rename(&name, &new_name),
             Some(ProjectAction::Migrate { name }) => cmd_project_migrate(&root, &name),
         },
         Some(Cmd::Status { json }) => cmd_status(&root, json),
@@ -362,12 +403,8 @@ fn run(cli: Cli) -> Result<i32> {
         Some(Cmd::Lint { json, fix, rest }) => cmd_lint(&root, json, fix, rest),
         Some(Cmd::Diagnose(args)) => cmd_diagnose(&root, args),
         Some(Cmd::Test { python_only, rest }) => cmd_test(&root, python_only, rest),
-        Some(Cmd::Wiki { action, rest }) => match action {
-            None => run_wiki(&root, rest.first().map(String::as_str)),
-            Some(WikiAction::Open { path }) => run_wiki(&root, path.as_deref()),
-            Some(WikiAction::Build { debug }) => cmd_wiki_build(&root, debug),
-        },
-        Some(Cmd::Frontend) => open_frontend(&root),
+        Some(Cmd::Build { debug }) => cmd_build(&root, debug),
+        Some(Cmd::Tui { action }) => cmd_tui(&root, action),
         Some(Cmd::Clean) => cmd_clean(&root),
         Some(Cmd::Uninstall { yes, dry_run, purge }) => {
             let mut argv = vec!["uninstall".to_string()];
@@ -390,6 +427,93 @@ fn pass_through(root: &Path, subcommand: &str, rest: &[String]) -> Result<i32> {
         .chain(rest.iter().map(String::as_str))
         .collect::<Vec<_>>();
     exec_python_cli(root, &argv)
+}
+
+/// Drive a running front-end over its control socket.
+///
+/// Exit codes are the contract an agent reads: 0 delivered (or nothing
+/// listening, for the advisory commands), 1 the front-end refused, 2 nothing
+/// was listening for a question, 4 the question was dismissed.
+fn cmd_tui(root: &Path, action: TuiAction) -> Result<i32> {
+    let socket = std::env::var_os("PODARCIS_TUI_SOCK")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| podarcis::control::socket_path(root));
+
+    let (request, timeout, blocking) = match action {
+        TuiAction::Open { path, line } => {
+            (json!({"cmd": "open", "path": path, "line": line}), Some(TUI_REPLY_TIMEOUT), false)
+        }
+        TuiAction::Highlight { path, lines, label, clear } => {
+            let ranges = lines.iter().map(|spec| parse_line_range(spec)).collect::<Result<Vec<_>>>()?;
+            (
+                json!({
+                    "cmd": "highlight",
+                    "path": path,
+                    "ranges": ranges,
+                    "label": label,
+                    "clear": clear,
+                }),
+                Some(TUI_REPLY_TIMEOUT),
+                false,
+            )
+        }
+        TuiAction::Ask { question, options, timeout } => (
+            json!({"cmd": "ask", "question": question, "options": options}),
+            (timeout > 0).then(|| std::time::Duration::from_secs(timeout)),
+            true,
+        ),
+    };
+
+    let reply = match podarcis::control::send(&socket, &request, timeout) {
+        Ok(reply) => reply,
+        Err(err) => {
+            eprintln!("no front-end attached at {} ({err})", socket.display());
+            // An advisory command is not a failure when nobody is watching:
+            // the same agent has to work in a headless job.
+            return Ok(if blocking { 2 } else { 0 });
+        }
+    };
+
+    if reply.get("ok").and_then(Value::as_bool) != Some(true) {
+        let message = reply.get("error").and_then(Value::as_str).unwrap_or("refused");
+        eprintln!("{message}");
+        return Ok(1);
+    }
+    if !blocking {
+        if reply.get("deferred").and_then(Value::as_bool) == Some(true) {
+            eprintln!("queued — the editor is open");
+        }
+        return Ok(0);
+    }
+    match reply.get("answer").and_then(Value::as_str) {
+        Some(answer) => {
+            println!("{answer}");
+            Ok(0)
+        }
+        None => {
+            eprintln!("dismissed without an answer");
+            Ok(4)
+        }
+    }
+}
+
+/// How long a non-blocking control command waits for the app to acknowledge it.
+/// Long enough to survive a slow redraw, short enough not to wedge an agent.
+const TUI_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Parse `"40-58"` or `"40"` into an inclusive, 1-based line range.
+fn parse_line_range(spec: &str) -> Result<(usize, usize)> {
+    let (start, end) = spec.split_once('-').unwrap_or((spec, spec));
+    let parse = |s: &str| {
+        s.trim()
+            .parse::<usize>()
+            .map_err(|_| anyhow::anyhow!("`{spec}` is not a line range (expected START-END)"))
+    };
+    let (start, end) = (parse(start)?, parse(end)?);
+    if start == 0 || end < start {
+        anyhow::bail!("`{spec}` is not a line range (lines are 1-based, start first)");
+    }
+    Ok((start, end))
 }
 
 fn find_root(cli: &Cli) -> Result<PathBuf> {
@@ -571,18 +695,45 @@ fn cmd_project_remove(name: &str, purge: bool) -> Result<i32> {
     if reg.active == name {
         reg.active = reg.projects.keys().next().cloned().unwrap_or_else(|| "default".to_string());
     }
-    reg.save()?;
     if let Ok(workspaces) = podarcis::herdr::space::list_workspaces() {
         if let Some(ws) = workspaces.iter().find(|w| w.label == name) {
             let _ = podarcis::herdr::space::close_workspace(&ws.id);
         }
     }
-    if purge && entry.path.is_dir() {
+    let is_in_projects_dir = entry.path.starts_with(podarcis::project::projects_dir());
+    if (purge || is_in_projects_dir) && entry.path.is_dir() {
         std::fs::remove_dir_all(&entry.path)?;
         println!("✓ Removed project \"{name}\" and deleted {}", entry.path.display());
     } else {
         println!("✓ Unregistered project \"{name}\" (files kept at {})", entry.path.display());
     }
+    reg.save()?;
+    Ok(0)
+}
+
+fn cmd_project_rename(name: &str, new_name: &str) -> Result<i32> {
+    let mut reg = podarcis::project::ProjectRegistry::load();
+    let Some(entry) = reg.projects.remove(name) else {
+        eprintln!("Error: project \"{name}\" not found in registry.");
+        return Ok(1);
+    };
+    if reg.projects.contains_key(new_name) {
+        reg.projects.insert(name.to_string(), entry);
+        eprintln!("Error: project \"{new_name}\" already exists.");
+        return Ok(1);
+    }
+    let was_active = reg.active == name;
+    reg.projects.insert(new_name.to_string(), entry);
+    if was_active {
+        reg.active = new_name.to_string();
+    }
+    reg.save()?;
+    if let Ok(workspaces) = podarcis::herdr::space::list_workspaces() {
+        if let Some(ws) = workspaces.iter().find(|w| w.label == name) {
+            let _ = podarcis::herdr::space::rename_workspace(&ws.id, new_name);
+        }
+    }
+    println!("✓ Renamed project \"{name}\" to \"{new_name}\".");
     Ok(0)
 }
 
@@ -697,7 +848,7 @@ fn cmd_status(root: &Path, as_json: bool) -> Result<i32> {
     if fe["built"].as_bool().unwrap_or(false) {
         println!("  • {name:<20} ✓ {}  {}", fe["version"].as_str().unwrap_or(""), fe["binary"].as_str().unwrap_or(""));
     } else {
-        println!("  • {name:<20} not built  (run `podarcis wiki build`)");
+        println!("  • {name:<20} not built  (run `podarcis build`)");
     }
     println!("\nRepositories:");
     for (k, v) in payload["repositories"].as_object().unwrap_or(&Map::new()) {
@@ -1091,16 +1242,16 @@ fn cmd_test(root: &Path, python_only: bool, rest: Vec<String>) -> Result<i32> {
     Ok(if py_code != 0 { py_code } else { rust })
 }
 
-// -------------------------------------------------------------------- wiki
+// ------------------------------------------------------------------- build
 
-fn cmd_wiki_build(root: &Path, debug: bool) -> Result<i32> {
+fn cmd_build(root: &Path, debug: bool) -> Result<i32> {
     let manifest = root.join("tui").join("Cargo.toml");
     if !manifest.is_file() {
         eprintln!("No crate at {}; skipping frontend build.", manifest.display());
         return Ok(1);
     }
     let Some(cargo) = which("cargo") else {
-        eprintln!("cargo not found — the wiki frontend will not be built.");
+        eprintln!("cargo not found — the frontend will not be built.");
         return Ok(1);
     };
     let mut cmd = Command::new(cargo);
@@ -1118,10 +1269,10 @@ fn cmd_wiki_build(root: &Path, debug: bool) -> Result<i32> {
     Ok(0)
 }
 
-fn run_wiki(root: &Path, path: Option<&str>) -> Result<i32> {
+fn run_frontend_tui(root: &Path, path: Option<&str>) -> Result<i32> {
     let mut binary = platform::find_frontend_binary(root);
     if binary.is_none() && which("cargo").is_some() {
-        println!("Building the wiki frontend (first run)…");
+        println!("Building the frontend (first run)…");
         if !Command::new(which("cargo").unwrap())
             .args(["build", "--release", "--manifest-path"])
             .arg(root.join("tui").join("Cargo.toml"))
@@ -1134,7 +1285,7 @@ fn run_wiki(root: &Path, path: Option<&str>) -> Result<i32> {
         binary = platform::find_frontend_binary(root);
     }
     let Some(binary) = binary else {
-        eprintln!("Error: podarcis-tui not found. Build it with `podarcis wiki build`.");
+        eprintln!("Error: podarcis-tui not found. Build it with `podarcis build`.");
         return Ok(1);
     };
     let mut cmd = Command::new(&binary);
@@ -1148,10 +1299,10 @@ fn run_wiki(root: &Path, path: Option<&str>) -> Result<i32> {
 
 // ---------------------------------------------------------------- frontend
 
-fn open_frontend(root: &Path) -> Result<i32> {
+fn open_frontend(root: &Path, path: Option<&str>) -> Result<i32> {
     let name = platform::frontend(root);
     match name.as_str() {
-        "tui" => run_wiki(root, None),
+        "tui" => run_frontend_tui(root, path),
         "none" => {
             println!("Frontend set to none — nothing to open.");
             Ok(0)
@@ -1218,4 +1369,23 @@ fn cmd_clean(root: &Path) -> Result<i32> {
     }
     println!("✓ Cleaned {count} build artifacts and cache directories.");
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_line_number_is_a_one_line_range() {
+        assert_eq!(parse_line_range("40").unwrap(), (40, 40));
+        assert_eq!(parse_line_range("40-58").unwrap(), (40, 58));
+        assert_eq!(parse_line_range(" 40 - 58 ").unwrap(), (40, 58));
+    }
+
+    #[test]
+    fn a_range_that_cannot_name_lines_is_refused_rather_than_guessed() {
+        for spec in ["0-4", "58-40", "", "top-bottom", "40-"] {
+            assert!(parse_line_range(spec).is_err(), "`{spec}` was accepted");
+        }
+    }
 }

@@ -252,7 +252,13 @@ fn list_dir(dir: &Path) -> Vec<(PathBuf, bool)> {
         match entry.file_type() {
             Ok(ft) if ft.is_dir() => dirs.push((name, path)),
             Ok(ft) if ft.is_file() => {
-                if !name.ends_with(".md") && !name.ends_with(".pdf") && !name.ends_with(".csv") {
+                if !name.ends_with(".md")
+                    && !name.ends_with(".pdf")
+                    && !name.ends_with(".csv")
+                    && !name.ends_with(".png")
+                    && !name.ends_with(".jpg")
+                    && !name.ends_with(".jpeg")
+                {
                     continue;
                 }
                 if name == "_index.md" || name == "index.md" {
@@ -275,7 +281,12 @@ fn label_for(path: &Path, is_dir: bool) -> String {
     let stem = if is_dir {
         name.as_ref()
     } else {
-        name.trim_end_matches(".md").trim_end_matches(".pdf").trim_end_matches(".csv")
+        name.trim_end_matches(".md")
+            .trim_end_matches(".pdf")
+            .trim_end_matches(".csv")
+            .trim_end_matches(".png")
+            .trim_end_matches(".jpg")
+            .trim_end_matches(".jpeg")
     };
     stem.trim_start_matches('_').replace('_', " ")
 }
@@ -406,6 +417,23 @@ mod tests {
         tree.expand(); // finance
         assert!(tree.rows.iter().any(|r| r.label == "finance"));
         assert!(tree.rows.iter().any(|r| r.label == "quotes" && r.path.extension().unwrap() == "csv"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_files_are_shown_with_extension_stripped_label() {
+        let dir = std::env::temp_dir().join(format!("podarcis-tree-img-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sources/literature/smith2024")).unwrap();
+        std::fs::write(dir.join("sources/literature/smith2024/figure.png"), b"\x89PNG").unwrap();
+        std::fs::write(dir.join("sources/literature/smith2024/photo.jpg"), b"\xff\xd8\xff").unwrap();
+        let mut tree = Tree::new(&dir, vec![dir.join("sources")]);
+        tree.move_to(1); // literature
+        tree.expand();
+        tree.move_to(2); // smith2024
+        tree.expand();
+        assert!(tree.rows.iter().any(|r| r.label == "figure" && r.path.extension().unwrap() == "png"));
+        assert!(tree.rows.iter().any(|r| r.label == "photo" && r.path.extension().unwrap() == "jpg"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

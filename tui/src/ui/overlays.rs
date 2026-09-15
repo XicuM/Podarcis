@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Level, Overlay};
+use crate::app::{App, ExtensionAction, Level, Overlay};
 use crate::search::Hit;
 use crate::theme::Theme;
 
@@ -39,6 +39,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Some(Overlay::Outline { selected }) => outline(frame, app, area, *selected),
         Some(Overlay::Prompt(_)) => prompt(frame, app, area),
         Some(Overlay::RepoConfig(_)) => repo_config(frame, app, area),
+        Some(Overlay::Ask(_)) => ask(frame, app, area),
+        Some(Overlay::Extensions(_)) => extensions(frame, app, area),
         Some(Overlay::Menu(_)) => menu(frame, app),
         None => {}
     }
@@ -203,17 +205,36 @@ fn themes(frame: &mut Frame, app: &App, area: Rect, selected: usize) {
     frame.render_widget(Paragraph::new(hints), hint);
 }
 
+/// Where the projects popup sits: hanging off the status-bar selector badge it
+/// was opened from, growing upwards so its bottom edge touches the bar. A menu
+/// that drops from its own button reads as part of the bar; a centred box reads
+/// as a mode. The badge is gone while the editor owns the bar, so the popup
+/// then falls back to the left edge.
+fn projects_rect(area: Rect, anchor: Option<Rect>, items: usize) -> Rect {
+    // Two border rows, one hint row, and a row per project.
+    let height = (items as u16 + 3).max(6).min(area.height.saturating_sub(1));
+    let width = 72.min(area.width);
+    let anchor_x = anchor.map(|a| a.x).unwrap_or(area.x);
+    let max_x = area.x + area.width.saturating_sub(width);
+    let bar_y = area.y + area.height.saturating_sub(1);
+    Rect {
+        x: anchor_x.min(max_x),
+        y: bar_y.saturating_sub(height),
+        width,
+        height,
+    }
+}
+
 fn projects(
     frame: &mut Frame,
     app: &App,
     area: Rect,
     selected: usize,
-    items: &[(String, std::path::PathBuf, String)],
+    items: &[(String, std::path::PathBuf)],
 ) {
     let theme = &app.theme;
-    let height = (items.len() as u16 + 3).min(area.height.saturating_sub(4)).max(6);
-    let box_area = crate::ui::centered(area, 72.min(area.width.saturating_sub(4)), height);
-    let inner = popup(frame, theme, box_area, "switch project");
+    let box_area = projects_rect(area, app.areas.project_selector, items.len());
+    let inner = popup(frame, theme, box_area, "projects");
     if inner.is_empty() {
         return;
     }
@@ -227,7 +248,7 @@ fn projects(
         .enumerate()
         .skip(start)
         .take(rows)
-        .map(|(i, (name, path, desc))| {
+        .map(|(i, (name, path))| {
             let on = i == selected;
             let is_current = app.cfg.root == *path;
             let marker = if is_current { "*" } else { " " };
@@ -236,8 +257,7 @@ fn projects(
             Line::from(vec![
                 Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(theme.accent)),
                 Span::styled(format!("{marker} {:<16}", name), name_style),
-                Span::styled(format!("{:<28}", path.display()), theme.dim()),
-                Span::styled(desc.clone(), theme.faint_style()),
+                Span::styled(path.display().to_string(), theme.dim()),
             ])
         })
         .collect();
@@ -248,6 +268,12 @@ fn projects(
         Span::styled("navigate   ", theme.dim()),
         Span::styled("enter ", theme.faint_style()),
         Span::styled("switch   ", theme.dim()),
+        Span::styled("n ", theme.faint_style()),
+        Span::styled("new   ", theme.dim()),
+        Span::styled("r ", theme.faint_style()),
+        Span::styled("rename   ", theme.dim()),
+        Span::styled("d ", theme.faint_style()),
+        Span::styled("delete   ", theme.dim()),
         Span::styled("esc ", theme.faint_style()),
         Span::styled("cancel", theme.dim()),
     ]);
@@ -409,6 +435,161 @@ fn repo_config(frame: &mut Frame, app: &App, area: Rect) {
 /// A right-click context menu, drawn at the popup rectangle the app recorded
 /// when the menu was opened. The items are actions on the row the menu was
 /// opened for; the border is plain so nothing on the screen leaks the path.
+/// A question an agent is blocked on. Deliberately the plainest overlay in the
+/// app: it interrupts, so it says who is asking, what they want, and nothing
+/// else.
+fn ask(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(Overlay::Ask(state)) = app.overlay.as_ref() else { return };
+    let theme = &app.theme;
+    let width = area.width.saturating_sub(16).clamp(24, 72);
+    let wrapped = wrap(&state.question, width.saturating_sub(4) as usize);
+    let height = (wrapped.len() + state.options.len() + 4).min(area.height as usize) as u16;
+    let inner = popup(frame, theme, crate::ui::centered(area, width, height), "agent asks");
+    if inner.is_empty() {
+        return;
+    }
+
+    let mut lines: Vec<Line> = wrapped
+        .into_iter()
+        .map(|text| Line::from(Span::styled(text, Style::default().fg(theme.text))))
+        .collect();
+    lines.push(Line::from(""));
+    for (i, option) in state.options.iter().enumerate() {
+        let on = i == state.selected;
+        let style = if on { theme.selection(true) } else { Style::default().fg(theme.text) };
+        lines.push(Line::from(vec![
+            Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(theme.accent)),
+            Span::styled(format!("{} ", i + 1), theme.faint_style()),
+            Span::styled(option.clone(), style),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        "↑↓ choose · 1-9 pick · enter answer · esc dismiss",
+        theme.faint_style(),
+    )));
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Break a question across `width` columns on word boundaries.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Browse `apm.yml`/`apm.lock.yaml` dependencies and drive `apm install` /
+/// `apm update` / `apm uninstall` on the selected one. Output is shown
+/// verbatim in a log pane rather than parsed — apm's own list commands print
+/// Rich tables with no machine-readable form worth chasing.
+fn extensions(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(Overlay::Extensions(state)) = app.overlay.as_ref() else { return };
+    let theme = &app.theme;
+    let box_area = crate::ui::centered(area, area.width.saturating_sub(10).min(96), area.height.saturating_sub(6).min(28));
+    let inner = popup(frame, theme, box_area, "extensions (apm)");
+    if inner.is_empty() {
+        return;
+    }
+
+    if let Some(action) = state.confirm {
+        let verb = match action {
+            ExtensionAction::Install => "install",
+            ExtensionAction::Update => "update",
+            ExtensionAction::Uninstall => "uninstall",
+        };
+        let name = state.items.get(state.selected).map(|i| i.name.as_str()).unwrap_or("");
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  {verb} {name}?"),
+                Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled("  y to confirm · any other key to cancel", theme.faint_style())),
+        ];
+        frame.render_widget(Paragraph::new(lines), inner);
+        return;
+    }
+
+    let log_height = if state.log.is_some() { (inner.height / 3).clamp(3, 10) } else { 0 };
+    let [list, log, hint] = Layout::vertical([
+        Constraint::Min(3),
+        Constraint::Length(log_height),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    if state.items.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  no apm dependencies declared in apm.yml",
+                theme.faint_style(),
+            ))),
+            list,
+        );
+    } else {
+        let rows = list.height as usize;
+        let start = state.selected.saturating_sub(rows / 2).min(state.items.len().saturating_sub(rows.max(1)));
+        let lines: Vec<Line> = state
+            .items
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(rows)
+            .map(|(i, item)| {
+                let on = i == state.selected;
+                let base = if on { theme.selection(true) } else { Style::default().fg(theme.text) };
+                Line::from(vec![
+                    Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(theme.accent)),
+                    Span::styled(format!("{:<28}", item.name), base.add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{:<16}", item.package_type), theme.dim()),
+                    Span::styled(format!("{:<10}", item.source), theme.dim()),
+                    Span::styled(item.version.clone(), theme.faint_style()),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), list);
+    }
+
+    if let Some(text) = &state.log {
+        let tail: Vec<&str> = text.lines().rev().take(log_height as usize).collect();
+        let lines: Vec<Line> = tail
+            .into_iter()
+            .rev()
+            .map(|l| Line::from(Span::styled(l.to_string(), theme.faint_style())))
+            .collect();
+        frame.render_widget(Paragraph::new(lines), log);
+    }
+
+    let hints = Line::from(vec![
+        Span::styled("j/k ", theme.faint_style()),
+        Span::styled("navigate   ", theme.dim()),
+        Span::styled("i ", theme.faint_style()),
+        Span::styled("install   ", theme.dim()),
+        Span::styled("u ", theme.faint_style()),
+        Span::styled("update   ", theme.dim()),
+        Span::styled("d ", theme.faint_style()),
+        Span::styled("uninstall   ", theme.dim()),
+        Span::styled("esc ", theme.faint_style()),
+        Span::styled("close", theme.dim()),
+    ]);
+    frame.render_widget(Paragraph::new(hints), hint);
+}
+
 fn menu(frame: &mut Frame, app: &App) {
     let Some(Overlay::Menu(menu)) = app.overlay.as_ref() else { return };
     let theme = &app.theme;
@@ -496,5 +677,37 @@ pub fn toasts(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(Clear, rect);
         frame.render_widget(block, rect);
         frame.render_widget(text, inner);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_projects_popup_hangs_off_the_selector_badge_above_the_status_bar() {
+        let screen = Rect::new(0, 0, 120, 40);
+        let badge = Rect::new(0, 39, 14, 1);
+        let rect = projects_rect(screen, Some(badge), 4);
+        assert_eq!(rect.x, badge.x, "left edge follows the badge");
+        assert_eq!(rect.y + rect.height, badge.y, "bottom edge touches the status bar");
+        assert_eq!(rect.height, 7, "two borders, a hint row, and a row per project");
+    }
+
+    #[test]
+    fn a_popup_wider_than_the_screen_is_pulled_back_inside_it() {
+        let screen = Rect::new(0, 0, 40, 12);
+        let badge = Rect::new(30, 11, 9, 1);
+        let rect = projects_rect(screen, Some(badge), 2);
+        assert!(rect.x + rect.width <= screen.width, "{rect:?} overflows {screen:?}");
+        assert!(rect.height <= screen.height - 1, "the status bar stays visible");
+    }
+
+    #[test]
+    fn without_a_badge_the_popup_falls_back_to_the_left_edge() {
+        let screen = Rect::new(0, 0, 120, 40);
+        let rect = projects_rect(screen, None, 3);
+        assert_eq!(rect.x, screen.x);
+        assert_eq!(rect.y + rect.height, screen.y + screen.height - 1);
     }
 }

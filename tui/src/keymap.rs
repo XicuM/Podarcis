@@ -15,13 +15,13 @@ pub enum Cmd {
     Help,
     Palette,
     Projects,
-    Reload,
     Restart,
 
     // Find
     FindFiles,
     FindText,
     FindSemantic,
+    FindInPage,
 
     // Layout
     FocusTree,
@@ -86,7 +86,6 @@ pub enum Cmd {
     Bold,
     Italic,
     Link,
-    TogglePreview,
 
     // Engine
     Lint,
@@ -95,6 +94,10 @@ pub enum Cmd {
     NewPage,
     /// Sources no wiki page cites — the live `literature_status`.
     Uncited,
+    /// Drop every passage an agent marked in the reader.
+    ClearMarks,
+    /// Browse and manage apm dependencies — skills and MCP servers.
+    Extensions,
 }
 
 impl Cmd {
@@ -132,7 +135,6 @@ impl Cmd {
                 | Cmd::Bold
                 | Cmd::Italic
                 | Cmd::Link
-                | Cmd::TogglePreview
         )
     }
 }
@@ -166,12 +168,15 @@ pub const BINDINGS: &[Binding] = &[
     b(&["?"], Cmd::Help, "keys", "session", Ctx::Global),
     b(&["ctrl+p", ":"], Cmd::Palette, "command palette", "session", Ctx::Global),
     b(&["P"], Cmd::Projects, "switch project", "session", Ctx::Global),
-    b(&["R"], Cmd::Reload, "reload from disk", "session", Ctx::Global),
     // Palette-only: no key, so the help overlay never lists an untyped one.
     b(&[], Cmd::Restart, "restart", "session", Ctx::Global),
     b(&["ctrl+t"], Cmd::Theme, "theme", "session", Ctx::Global),
     // Find
-    b(&["ctrl+f", "f"], Cmd::FindFiles, "find page", "find", Ctx::Global),
+    b(&["f"], Cmd::FindFiles, "find page", "find", Ctx::Global),
+    // `ctrl+f` is the one every other reader spends on finding text in what is
+    // on screen, not on opening a different document. `/` keeps the vault-wide
+    // search it always had.
+    b(&["ctrl+f"], Cmd::FindInPage, "find in this page", "find", Ctx::Global),
     b(&["/"], Cmd::FindText, "search text", "find", Ctx::Global),
     b(&["S"], Cmd::FindSemantic, "semantic search", "find", Ctx::Global),
     // Layout
@@ -233,10 +238,9 @@ pub const BINDINGS: &[Binding] = &[
     b(&["ctrl+b"], Cmd::Bold, "bold", "edit", Ctx::Edit),
     b(&["alt+i"], Cmd::Italic, "italic", "edit", Ctx::Edit),
     b(&["ctrl+l"], Cmd::Link, "insert link", "edit", Ctx::Edit),
-    b(&["ctrl+r"], Cmd::TogglePreview, "preview while editing", "edit", Ctx::Edit),
     // Keys the agents pane intercepts before forwarding to the child.
     // Everything else, ctrl+space included, belongs to the child.
-    b(&["f12", "alt+tab"], Cmd::LeaveSidebar, "leave agents pane", "layout", Ctx::Sidebar),
+    b(&["f12"], Cmd::LeaveSidebar, "leave agents pane", "layout", Ctx::Sidebar),
     b(&["shift+left"], Cmd::WidenSidebar, "widen agents pane", "layout", Ctx::Sidebar),
     b(&["shift+right"], Cmd::ShrinkSidebar, "shrink agents pane", "layout", Ctx::Sidebar),
     // Engine
@@ -245,6 +249,8 @@ pub const BINDINGS: &[Binding] = &[
     b(&["g c"], Cmd::Commit, "lint-gated commit", "engine", Ctx::Global),
     b(&["ctrl+n"], Cmd::NewPage, "new page", "engine", Ctx::Global),
     b(&["g u"], Cmd::Uncited, "uncited sources", "engine", Ctx::Global),
+    b(&["g m"], Cmd::ClearMarks, "clear agent marks", "engine", Ctx::Global),
+    b(&["g p"], Cmd::Extensions, "extensions (apm)", "engine", Ctx::Global),
 ];
 
 const fn b(
@@ -471,6 +477,17 @@ mod tests {
         }
     }
 
+    /// `ctrl+f` is the reader's find-in-page, not the page opener: every other
+    /// document reader spends it that way, and the finder still has `f`.
+    #[test]
+    fn ctrl_f_finds_in_the_page_and_plain_f_finds_a_page() {
+        let cf = key(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        assert_eq!(resolve(&cf, Ctx::Doc, None), Resolved::Run(Cmd::FindInPage));
+        assert_eq!(resolve(&cf, Ctx::Tree, None), Resolved::Run(Cmd::FindInPage));
+        assert_eq!(resolve(&ch('f'), Ctx::Doc, None), Resolved::Run(Cmd::FindFiles));
+        assert_eq!(resolve(&ch('/'), Ctx::Doc, None), Resolved::Run(Cmd::FindText));
+    }
+
     #[test]
     fn rejects_prose_that_is_not_a_key_spec() {
         assert!(parse("tab is taken; use l").is_none());
@@ -564,9 +581,11 @@ mod tests {
             resolve(&key(KeyCode::F(12), KeyModifiers::NONE), Ctx::Sidebar, None),
             Resolved::Run(Cmd::LeaveSidebar)
         );
+        // Not alt+tab: the compositor grabs it before the terminal sees it, so
+        // binding it here only pretends to offer a way out.
         assert_eq!(
             resolve(&key(KeyCode::Tab, KeyModifiers::ALT), Ctx::Sidebar, None),
-            Resolved::Run(Cmd::LeaveSidebar)
+            Resolved::None
         );
     }
 
@@ -607,7 +626,6 @@ mod tests {
         assert!(!Cmd::ScrollDown.palette_visible());
         assert!(!Cmd::TreeDown.palette_visible());
         assert!(Cmd::Lint.palette_visible());
-        assert!(Cmd::Reload.palette_visible());
     }
 
     #[test]

@@ -407,12 +407,16 @@ def unregister_project(name: str, purge: bool = False) -> None:
         gcfg['active_project'] = next(iter(projects.keys()), 'default')
     save_global_config(gcfg)
 
-    if purge:
-        close_herdr_space(name)
-        if p_info and p_info.get('path'):
-            p_path = Path(p_info['path'])
-            if p_path.is_dir():
-                shutil.rmtree(p_path, ignore_errors=True)
+    close_herdr_space(name)
+    if p_info and p_info.get('path'):
+        p_path = Path(p_info['path']).resolve()
+        is_in_projects_dir = False
+        try:
+            is_in_projects_dir = p_path.is_relative_to(get_projects_dir().resolve())
+        except AttributeError:
+            is_in_projects_dir = str(p_path).startswith(str(get_projects_dir().resolve()))
+        if (purge or is_in_projects_dir) and p_path.is_dir():
+            shutil.rmtree(p_path, ignore_errors=True)
 
 
 def migrate_checkout_to_projects_dir(

@@ -21,7 +21,9 @@ use ratatui::Terminal;
 struct Args {
     /// Page to open.
     path: Option<String>,
-    /// Checkout root. Defaults to `$PODARCIS_ROOT`, else a walk up from the cwd.
+    /// Checkout root. Defaults to `$PODARCIS_ROOT`, then a walk up from the cwd,
+    /// then the active project — projects are managed in-app, so this is a pin
+    /// for scripts, never something the user has to supply.
     #[arg(long)]
     root: Option<PathBuf>,
     /// Print the resolved checkout and exit.
@@ -34,11 +36,34 @@ struct Args {
     lint: bool,
 }
 
+/// Make sure `root` is a project on disk, creating it if it is not.
+///
+/// Only reached on a first run (or after the registry's last project was moved
+/// away): every other path through `find_root` returns an existing checkout.
+fn ensure_project(root: PathBuf) -> Result<PathBuf> {
+    if podarcis::config::is_root(&root) {
+        return Ok(root);
+    }
+    let name = root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("default")
+        .to_string();
+    let project = podarcis::project::create_project(&name, Some(&root), "", "", "", "", "local")?;
+    Ok(project.root)
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let cwd = std::env::current_dir()?;
     let env_root = std::env::var("PODARCIS_ROOT").ok();
     let root = podarcis::config::find_root(args.root.as_deref(), &cwd, env_root.as_deref())?;
+    // `find_root` answers with the default project's home when nothing resolves.
+    // Scaffold it here rather than opening onto an empty screen: projects are
+    // managed inside the app, so the first run must produce one, not a prompt
+    // asking the user for a path.
+    // `--check` and `--lint` only report, so they never scaffold anything.
+    let root = if args.check || args.lint { root } else { ensure_project(root)? };
     let cfg = Config::load(&root);
 
     if args.check {
@@ -46,6 +71,7 @@ fn main() -> Result<()> {
         println!("theme: {}", cfg.flavor.as_str());
         println!("qmd: {}", cfg.qmd_off_reason.unwrap_or("enabled"));
         println!("herdr: {}", if podarcis::herdr::pty::available() { "found" } else { "missing" });
+        println!("control: {}", podarcis::control::socket_path(&root).display());
         for (label, path) in cfg.collections() {
             println!("{label}: {}", path.display());
         }
@@ -84,6 +110,21 @@ fn main() -> Result<()> {
 
     let mut events = Events::new();
     let mut app = App::new(cfg, events.tx.clone());
+    // Bound before anything is spawned, so the herdr pane — and every agent
+    // inside it — inherits the address instead of having to guess it.
+    // Held until the end of `main`: dropping it unlinks the socket, so a
+    // clean exit never leaves a dead address for the next instance.
+    let _control = match podarcis::control::listen(&root, events.tx.clone()) {
+        Ok(server) => {
+            std::env::set_var("PODARCIS_TUI_SOCK", server.path());
+            app.control_socket = Some(server.path().to_path_buf());
+            Some(server)
+        }
+        Err(err) => {
+            eprintln!("control socket unavailable: {err}");
+            None
+        }
+    };
     app.start_indexing();
     let _ = events.watch(&app.collection_dirs());
     if let Some(path) = open {
@@ -121,9 +162,11 @@ fn exec_replace() -> ! {
     unsafe {
         libc::execv(c_exe.as_ptr(), c_ptrs.as_ptr());
     }
-    // execv failed — the only remaining option is to abort, but a visible
-    // panic is friendlier than silence.
-    panic!("restart failed: {}", std::io::Error::last_os_error());
+    // execv failed (binary was likely rebuilt under us, so /proc/self/exe
+    // points at a deleted inode). Fall through and exit cleanly rather than
+    // panicking — restart is best-effort.
+    eprintln!("restart failed: {} (exiting cleanly)", std::io::Error::last_os_error());
+    std::process::exit(0);
 }
 
 fn findings_json(findings: &[podarcis::vault::lint::Finding]) -> serde_json::Value {
@@ -220,6 +263,10 @@ fn run(
                     app.on_job_done(result);
                     redraw = true;
                 }
+                AppEvent::Control(request) => {
+                    app.on_control(request);
+                    redraw = true;
+                }
                 AppEvent::PtyOutput => redraw = true,
                 AppEvent::PtyExited => redraw = true,
             }
@@ -230,6 +277,9 @@ fn run(
             fs_changed.dedup();
             app.on_fs_changed(fs_changed);
         }
+        // Anything an agent asked for while the editor was open runs now: the
+        // keystroke that closed the editor is the event that gets us here.
+        app.flush_control();
         app.expire_toasts();
 
         if app.quit {

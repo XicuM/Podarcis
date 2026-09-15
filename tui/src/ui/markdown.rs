@@ -59,6 +59,76 @@ impl Selection {
     }
 }
 
+/// A source-line range an agent asked the reader to draw attention to.
+///
+/// Ranges are over *source* lines, not rendered ones: rendering rewraps prose,
+/// so a rendered range would move whenever the pane is resized. Marks are
+/// in-memory only — nothing an agent points at is written back to the page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mark {
+    /// 0-based, inclusive.
+    pub start: usize,
+    /// 0-based, inclusive.
+    pub end: usize,
+    pub label: Option<String>,
+}
+
+impl Mark {
+    pub fn covers(&self, src_line: usize) -> bool {
+        src_line >= self.start && src_line <= self.end
+    }
+}
+
+/// One literal hit for the in-page find, in *rendered* coordinates: character
+/// columns on one rendered line.
+///
+/// Rendered, not source, unlike `Mark` — find highlights exactly what is on
+/// screen, and a hit is recomputed from the current `Doc` rather than kept
+/// across a resize, so rewrapping cannot strand it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Match {
+    pub line: usize,
+    /// 0-based character column, inclusive.
+    pub start: usize,
+    /// 0-based character column, exclusive.
+    pub end: usize,
+}
+
+/// Every hit for the live find query, and which one the reader is sitting on.
+#[derive(Clone, Debug, Default)]
+pub struct Finds {
+    pub hits: Vec<Match>,
+    pub current: usize,
+}
+
+/// Everything the reader paints *over* the rendered text. Bundled because they
+/// are one concept — "what is highlighted right now" — and because four more
+/// positional arguments on `to_lines` would be four more chances to pass them
+/// in the wrong order.
+#[derive(Clone, Copy, Default)]
+pub struct Overlays<'a> {
+    /// The link the reader is sitting on.
+    pub link: Option<usize>,
+    pub selection: Option<Selection>,
+    pub finds: &'a [Match],
+    /// Index into `finds` of the hit the find bar is on.
+    pub current_find: usize,
+    pub marks: &'a [Mark],
+}
+
+impl<'a> Overlays<'a> {
+    pub fn new(link: Option<usize>, selection: Option<Selection>, finds: &'a Finds, marks: &'a [Mark]) -> Self {
+        Self { link, selection, finds: &finds.hits, current_find: finds.current, marks }
+    }
+}
+
+/// Case folded one character at a time, never `str::to_lowercase`: a few
+/// characters lowercase into two, which would shift every column after them
+/// and highlight the wrong text.
+fn fold(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct DocLine {
     pub segs: Vec<Seg>,
@@ -164,6 +234,33 @@ impl Doc {
         self.lines.get(line).map(|l| l.src_line).unwrap_or(0)
     }
 
+    /// Every case-insensitive occurrence of `query` in the rendered text, in
+    /// reading order.
+    ///
+    /// A hit never spans two rendered lines: the reader rewraps prose, so a
+    /// phrase broken across a wrap has no single highlightable span, and
+    /// pretending otherwise would tint half a line for no visible reason.
+    pub fn find(&self, query: &str) -> Vec<Match> {
+        let needle: Vec<char> = query.chars().map(fold).collect();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let mut hits = Vec::new();
+        for (line, text) in self.lines.iter().enumerate() {
+            let hay: Vec<char> = text.plain_text().chars().map(fold).collect();
+            let mut col = 0;
+            while col + needle.len() <= hay.len() {
+                if hay[col..col + needle.len()] == needle[..] {
+                    hits.push(Match { line, start: col, end: col + needle.len() });
+                    col += needle.len();
+                } else {
+                    col += 1;
+                }
+            }
+        }
+        hits
+    }
+
     /// The next link at or after `from`, wrapping around.
     pub fn link_after(&self, from: Option<usize>, forward: bool) -> Option<usize> {
         if self.links.is_empty() {
@@ -178,17 +275,24 @@ impl Doc {
         })
     }
 
-    /// Convert to ratatui lines, highlighting `active` link and `selection` if set.
+    /// Convert to ratatui lines, highlighting `active` link, `selection`, any
+    /// `finds` from the in-page search, and any agent `marks` that fall in view.
     pub fn to_lines(
         &self,
         theme: &Theme,
-        active: Option<usize>,
-        selection: Option<Selection>,
+        over: &Overlays,
         from: usize,
         height: usize,
     ) -> Vec<Line<'static>> {
-        let sel_range = selection.filter(|s| !s.is_empty()).map(|s| s.range());
+        let sel_range = over.selection.filter(|s| !s.is_empty()).map(|s| s.range());
         let sel_style = Style::default().fg(theme.bg).bg(theme.accent);
+        // The hit you are on gets the solid background; the rest are merely
+        // underlined, so "there are more of these" never competes with "you
+        // are here".
+        let find_style = Style::default().fg(theme.bg).bg(theme.warn).add_modifier(Modifier::BOLD);
+        let other_find_style =
+            Style::default().fg(theme.warn).add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+        let mark_bg = theme.surface;
 
         self.lines
             .iter()
@@ -211,11 +315,26 @@ impl Doc {
                     }
                 });
 
+                // Every column range on this line that overrides the segment
+                // style, sorted and de-overlapped so the split below can walk
+                // them in one pass. The selection is pushed first, so where it
+                // collides with a find hit it is the one that survives.
+                let mut highlights: Vec<(usize, usize, Style)> = Vec::new();
+                if let Some((start, end)) = line_sel {
+                    highlights.push((start, end, sel_style));
+                }
+                for (i, hit) in over.finds.iter().enumerate().filter(|(_, h)| h.line == line_idx) {
+                    let style = if i == over.current_find { find_style } else { other_find_style };
+                    highlights.push((hit.start, hit.end, style));
+                }
+                highlights.sort_by_key(|(start, _, _)| *start);
+                highlights.dedup_by(|cur, prev| prev.1 > cur.0);
+
                 let mut spans: Vec<Span<'static>> = Vec::new();
                 let mut cur_char_offset = 0usize;
 
                 for seg in &line.segs {
-                    let base_style = match (seg.link, active) {
+                    let base_style = match (seg.link, over.link) {
                         (Some(i), Some(a)) if i == a => {
                             Style::default().fg(theme.bg).bg(theme.link).add_modifier(Modifier::BOLD)
                         }
@@ -227,30 +346,54 @@ impl Doc {
                     let seg_end = cur_char_offset + seg_char_count;
                     cur_char_offset = seg_end;
 
-                    match line_sel {
-                        Some((sel_start, sel_end))
-                            if sel_end > seg_start && sel_start < seg_end =>
-                        {
-                            let overlap_start = seg_start.max(sel_start);
-                            let overlap_end = seg_end.min(sel_end);
-                            let chars: Vec<char> = seg.text.chars().collect();
-                            let rel_start = overlap_start - seg_start;
-                            let rel_end = overlap_end - seg_start;
+                    let chars: Vec<char> = seg.text.chars().collect();
+                    if chars.is_empty() {
+                        spans.push(Span::styled(seg.text.clone(), base_style));
+                        continue;
+                    }
+                    // Walk the segment, emitting one span per run that shares a
+                    // style: either inside a highlight, or up to where the next
+                    // one begins.
+                    let mut col = seg_start;
+                    while col < seg_end {
+                        let (until, style) =
+                            match highlights.iter().find(|(start, end, _)| col >= *start && col < *end) {
+                                Some((_, end, style)) => ((*end).min(seg_end), *style),
+                                None => (
+                                    highlights
+                                        .iter()
+                                        .map(|(start, _, _)| *start)
+                                        .find(|start| *start > col)
+                                        .unwrap_or(seg_end)
+                                        .min(seg_end),
+                                    base_style,
+                                ),
+                            };
+                        let text: String = chars[col - seg_start..until - seg_start].iter().collect();
+                        spans.push(Span::styled(text, style));
+                        col = until;
+                    }
+                }
 
-                            if rel_start > 0 {
-                                let before: String = chars[..rel_start].iter().collect();
-                                spans.push(Span::styled(before, base_style));
-                            }
-                            let mid: String = chars[rel_start..rel_end].iter().collect();
-                            spans.push(Span::styled(mid, sel_style));
-                            if rel_end < chars.len() {
-                                let after: String = chars[rel_end..].iter().collect();
-                                spans.push(Span::styled(after, base_style));
-                            }
+                // A mark tints the whole rendered line rather than a column
+                // span: the reader rewraps, so there is no honest mapping from
+                // a source column to a rendered one.
+                if let Some(mark) = over.marks.iter().find(|m| m.covers(line.src_line)) {
+                    for span in &mut spans {
+                        if span.style.bg.is_none() {
+                            span.style = span.style.bg(mark_bg);
                         }
-                        _ => {
-                            spans.push(Span::styled(seg.text.clone(), base_style));
-                        }
+                    }
+                    let opens = line_idx == 0
+                        || !self.lines.get(line_idx - 1).is_some_and(|prev| mark.covers(prev.src_line));
+                    if let (true, Some(label)) = (opens, mark.label.as_deref()) {
+                        spans.push(Span::styled(
+                            format!("  ◂ {label}"),
+                            Style::default()
+                                .fg(theme.accent)
+                                .bg(mark_bg)
+                                .add_modifier(Modifier::ITALIC),
+                        ));
                     }
                 }
                 Line::from(spans)
@@ -2067,7 +2210,7 @@ mod tests {
         let link_idx = d.citation_link("smith2024");
         assert_eq!(link_idx, Some(0), "the first footnote is index 0");
         let theme = Theme::default();
-        let lines = d.to_lines(&theme, link_idx, None, 0, 40);
+        let lines = d.to_lines(&theme, &Overlays { link: link_idx, ..Overlays::default() }, 0, 40);
         let active = lines.iter().flat_map(|l| &l.spans).any(|s| {
             s.content.contains("[1]")
                 && s.style.bg == Some(theme.link)
@@ -2250,12 +2393,45 @@ mod tests {
         let theme = Theme::default();
         let d = doc("Alpha **Beta** Gamma", 80);
         let sel = Selection::new(TextPos { line: 1, col: 3 }, TextPos { line: 1, col: 10 });
-        let lines = d.to_lines(&theme, None, Some(sel), 1, 1);
+        let lines = d.to_lines(&theme, &Overlays { selection: Some(sel), ..Overlays::default() }, 1, 1);
         assert_eq!(lines.len(), 1);
         let line = &lines[0];
         // Check that some spans have the selection style (accent background)
         let has_sel_span = line.spans.iter().any(|s| s.style.bg == Some(theme.accent));
         assert!(has_sel_span, "selected range must have theme.accent background");
+    }
+
+    #[test]
+    fn find_matches_case_insensitively_and_never_across_a_wrap() {
+        let d = doc("Alpha alpha ALPHA", 80);
+        let hits = d.find("alpha");
+        assert_eq!(hits.len(), 3);
+        assert!(hits.windows(2).all(|w| w[0].line == w[1].line), "one rendered line");
+        assert_eq!(hits[0].end - hits[0].start, 5);
+        assert!(d.find("").is_empty(), "an empty query matches nothing, not everything");
+        // The wrap is where the reader broke the prose, so a phrase spanning it
+        // has no single span to tint.
+        let wrapped = doc("alpha beta gamma delta", 12);
+        assert!(wrapped.find("gamma delta").is_empty());
+    }
+
+    #[test]
+    fn to_lines_tints_the_current_find_hit_apart_from_the_others() {
+        let theme = Theme::default();
+        let d = doc("alpha beta alpha", 80);
+        let hits = d.find("alpha");
+        assert_eq!(hits.len(), 2);
+        let lines = d.to_lines(&theme, &Overlays { finds: &hits, current_find: 1, ..Overlays::default() }, 1, 1);
+        let spans = &lines[0].spans;
+        let current: Vec<&str> =
+            spans.iter().filter(|s| s.style.bg == Some(theme.warn)).map(|s| s.content.as_ref()).collect();
+        assert_eq!(current, ["alpha"], "only the hit you are on gets a background");
+        assert!(
+            spans.iter().any(|s| s.style.bg.is_none()
+                && s.style.add_modifier.contains(Modifier::UNDERLINED)
+                && s.content.as_ref() == "alpha"),
+            "the other hit is underlined instead"
+        );
     }
 
     #[test]

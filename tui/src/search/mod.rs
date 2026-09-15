@@ -359,7 +359,7 @@ fn hits_from_qmd_json(payload: &serde_json::Value, root: &Path, collection: &str
 /// Run a semantic search through `qmd` directly and return the same
 /// `{query, collection, method, warning, hits}` shape `parse_semantic` and
 /// `semantic_warning` already know how to read — previously produced by
-/// `podarcis wiki search --json` (`search.py::search`), now built here so the
+/// the Python `search.py::search` helper, now built here so the
 /// TUI no longer shells out to the Python engine for it. Runs two `qmd`
 /// invocations (the query, then a quick `status` for the index-health
 /// warning), so callers should run this off the UI thread.
@@ -420,7 +420,7 @@ pub fn parse_semantic(value: &serde_json::Value, root: &Path) -> Vec<Hit> {
         .unwrap_or_default()
 }
 
-/// The warning `podarcis wiki search` emits when the index is stale or qmd is
+/// The warning `semantic_search` emits when the index is stale or qmd is
 /// unavailable. Worth showing: it explains empty results.
 pub fn semantic_warning(value: &serde_json::Value) -> Option<String> {
     value

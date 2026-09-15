@@ -2,7 +2,7 @@
 
 use edtui::{EditorStatusLine, EditorTheme, EditorView, LineNumbers};
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
@@ -10,6 +10,7 @@ use tui_term::widget::PseudoTerminal;
 
 use crate::app::{App, Focus, Open, TreePane};
 use crate::theme::Theme;
+use crate::ui::markdown::{Finds, Overlays};
 use crate::vault::git::GitStatus;
 use crate::vault::index::Severity;
 
@@ -48,18 +49,19 @@ pub fn tree(frame: &mut Frame, app: &mut App, area: Rect) {
         let track = app.track_for(&row.path);
         let section_focus = focused && selected >= header && selected < end;
 
-        let git_style = if track.tracked() {
-            Style::default().fg(app.theme.ok).add_modifier(Modifier::BOLD)
+        let mut spans = vec![
+            Span::styled(format!(" {}", row.label), app.theme.title(section_focus)),
+        ];
+        if let Some(branch) = track.branch() {
+            spans.push(Span::styled(" · ", app.theme.faint_style()));
+            spans.push(Span::styled(
+                format!("{branch} "),
+                Style::default().fg(app.theme.ok).add_modifier(Modifier::BOLD),
+            ));
         } else {
-            Style::default().fg(app.theme.warn)
-        };
-        let title = Line::from(vec![
-            Span::styled(format!(" {} ", row.label), app.theme.title(section_focus)),
-            Span::styled(
-                format!(" {} ", track.label()),
-                git_style,
-            ),
-        ]);
+            spans[0] = Span::styled(format!(" {} ", row.label), app.theme.title(section_focus));
+        }
+        let title = Line::from(spans);
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -108,6 +110,20 @@ pub fn tree(frame: &mut Frame, app: &mut App, area: Rect) {
     app.areas.tree_panes = panes;
 }
 
+/// Left-of-label badge for a non-markdown file, one colour per external type.
+fn external_badge(theme: &Theme, path: &std::path::Path, is_dir: bool) -> Option<(&'static str, Color)> {
+    if is_dir {
+        return None;
+    }
+    match path.extension().and_then(|e| e.to_str())?.to_ascii_lowercase().as_str() {
+        "pdf" => Some(("PDF", theme.err)),
+        "csv" => Some(("CSV", theme.ok)),
+        "png" => Some(("PNG", theme.link)),
+        "jpg" | "jpeg" => Some(("JPG", theme.warn)),
+        _ => None,
+    }
+}
+
 fn tree_line<'a>(
     app: &'a App,
     i: usize,
@@ -143,12 +159,19 @@ fn tree_line<'a>(
     let mut spans = vec![
         Span::styled(" ".repeat(indent), style),
         Span::styled(marker, style),
-        Span::styled(row.label.clone(), style),
     ];
 
-    if !row.is_dir && row.path.extension().and_then(|e| e.to_str()) == Some("csv") {
-        spans.push(Span::styled("  csv", Style::default().fg(app.theme.accent)));
+    if let Some((tag, colour)) = external_badge(&app.theme, &row.path, row.is_dir) {
+        // The colour block itself is the badge — one space of padding inside
+        // it on each side so the three letters are not flush against the edge.
+        spans.push(Span::styled(
+            format!(" {tag} "),
+            Style::default().fg(app.theme.overlay).bg(colour).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
     }
+
+    spans.push(Span::styled(row.label.clone(), style));
 
     if let Some(status) = app.git.status_for(&row.path) {
         let colour = match status {
@@ -240,17 +263,7 @@ pub fn document(frame: &mut Frame, app: &mut App, area: Rect) {
         app.areas.doc_body = Rect::ZERO;
         app.areas.nav_back = None;
         app.areas.nav_forward = None;
-        // Side by side when there is room, and the editor alone when there is
-        // not — a 40-column preview is worse than none.
-        let preview = app.preview && main.width >= 90;
-        if preview {
-            let [left, right] =
-                Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(main);
-            editor(frame, app, left);
-            preview_pane(frame, app, right);
-        } else {
-            editor(frame, app, main);
-        }
+        editor(frame, app, main);
     } else {
         reader(frame, app, main);
     }
@@ -271,8 +284,9 @@ fn empty_document(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(app.theme.text).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(Span::styled("  ctrl+f   find a page", app.theme.dim())),
-        Line::from(Span::styled("  /        search text", app.theme.dim())),
+        Line::from(Span::styled("  f        find a page", app.theme.dim())),
+        Line::from(Span::styled("  ctrl+f   find in the open page", app.theme.dim())),
+        Line::from(Span::styled("  /        search text across the vault", app.theme.dim())),
         Line::from(Span::styled("  ctrl+p   command palette", app.theme.dim())),
         Line::from(Span::styled("  ?        every key", app.theme.dim())),
     ];
@@ -324,12 +338,50 @@ fn reader(frame: &mut Frame, app: &mut App, area: Rect) {
         app.areas.doc_body = Rect::ZERO;
         return;
     }
-    app.areas.doc_body = inner;
+    // The find bar eats the bottom row of the reader. `doc_body` stays the text
+    // region alone: it is what mouse clicks and scroll arithmetic are measured
+    // against, so it must never include chrome.
+    let (body, bar) = if app.find.is_some() && inner.height > 1 {
+        let [body, bar] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+        (body, Some(bar))
+    } else {
+        (inner, None)
+    };
+    app.areas.doc_body = body;
 
-    let lines = open.doc.to_lines(&app.theme, open.link, open.selection, open.scroll, inner.height as usize);
-    frame.render_widget(Paragraph::new(lines), inner);
+    let finds = app.finds();
+    let marks = app.marks_for(&open.page.path);
+    let over = Overlays::new(open.link, open.selection, &finds, marks);
+    let lines = open.doc.to_lines(&app.theme, &over, open.scroll, body.height as usize);
+    frame.render_widget(Paragraph::new(lines), body);
 
-    scrollbar(frame, app, area, open.scroll, open.doc.height(), inner.height as usize);
+    if let Some(bar) = bar {
+        find_bar(frame, app, &finds, bar);
+    }
+
+    scrollbar(frame, app, area, open.scroll, open.doc.height(), body.height as usize);
+}
+
+/// The in-page find input: query, hit counter, and the two keys that move.
+fn find_bar(frame: &mut Frame, app: &App, finds: &Finds, area: Rect) {
+    let Some(find) = app.find.as_ref() else { return };
+    let theme = &app.theme;
+    let count = if find.query.is_empty() {
+        String::new()
+    } else if finds.hits.is_empty() {
+        "  no matches".to_string()
+    } else {
+        format!("  {}/{}", finds.current + 1, finds.hits.len())
+    };
+    let line = Line::from(vec![
+        Span::styled("⌕ ", Style::default().fg(theme.accent)),
+        Span::styled(find.query.clone(), Style::default().fg(theme.text)),
+        Span::styled("▌", Style::default().fg(theme.accent)),
+        Span::styled(count, Style::default().fg(theme.warn)),
+        Span::styled("   enter next · shift+enter previous · esc close", theme.faint_style()),
+    ]);
+    frame.render_widget(Paragraph::new(line).style(Style::default().bg(theme.surface)), area);
 }
 
 fn scrollbar(frame: &mut Frame, app: &App, area: Rect, scroll: usize, total: usize, height: usize) {
@@ -393,50 +445,6 @@ fn editor(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 
     completion_popup(frame, app, inner);
-}
-
-/// The page as it will read, re-rendered from the editor's buffer on every
-/// keystroke. This is what makes the editor a markdown editor rather than a
-/// text box that happens to hold markdown.
-fn preview_pane(frame: &mut Frame, app: &mut App, area: Rect) {
-    let theme = app.theme;
-    let block = pane(&theme, "preview", false).padding(ratatui::widgets::Padding::horizontal(1));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.is_empty() {
-        return;
-    }
-
-    let Some(open) = app.open.as_mut() else { return };
-    let Some(editor) = open.editor.as_ref() else { return };
-    let text = editor.text();
-    let cursor_line = editor.cursor_line();
-
-    // A CSV's preview is its table, re-parsed from the editor buffer on every
-    // keystroke, so a header you edit is a header you see change.
-    if open.csv() {
-        let doc = crate::ui::csv::Grid::parse(&text).to_doc(inner.width, &theme);
-        let target = doc.line_for_source(cursor_line);
-        let height = inner.height as usize;
-        let scroll = target.saturating_sub(height / 3).min(doc.height().saturating_sub(height.min(doc.height())));
-        frame.render_widget(Paragraph::new(doc.to_lines(&theme, None, None, scroll, height)), inner);
-        return;
-    }
-
-    let body_start = text
-        .lines()
-        .position(|line| line.trim_end() == "---")
-        .filter(|first| *first == 0)
-        .and_then(|_| text.lines().skip(1).position(|line| line.trim_end() == "---").map(|i| i + 2))
-        .unwrap_or(0);
-    let body: String = text.lines().skip(body_start).collect::<Vec<_>>().join("\n");
-
-    let doc = crate::ui::markdown::render(&body, inner.width.min(crate::ui::markdown::MAX_WIDTH), &theme);
-    // Follow the cursor, so what you are typing is what you are looking at.
-    let target = doc.line_for_source(cursor_line.saturating_sub(body_start));
-    let height = inner.height as usize;
-    let scroll = target.saturating_sub(height / 3).min(doc.height().saturating_sub(height.min(doc.height())));
-    frame.render_widget(Paragraph::new(doc.to_lines(&theme, None, None, scroll, height)), inner);
 }
 
 fn completion_popup(frame: &mut Frame, app: &App, area: Rect) {
@@ -585,6 +593,12 @@ fn inspector_rows(
     // body — numbered sources sort by that number, the uncited trail after.
     let mut candidates: Vec<(usize, String, Line<'static>)> = Vec::new();
 
+    let active_link_target = open
+        .link
+        .and_then(|i| open.doc.links.get(i))
+        .filter(|l| l.kind == crate::vault::links::LinkKind::Footnote)
+        .map(|l| l.target.as_str());
+
     // A footnote definition carries the full citation the wiki wrote — prefer
     // it over the abbreviated `sources:` copy.
     for (id, text, _) in &defs {
@@ -594,21 +608,23 @@ fn inspector_rows(
             None if used => "✓".to_string(),
             None => "·".to_string(),
         };
-        let selected = open.selected_citation.as_deref() == Some(id.as_str());
+        let selected = open.selected_citation.as_deref() == Some(id.as_str())
+            || active_link_target == Some(id.as_str());
         let order = open.doc.citation_number(id).unwrap_or(usize::MAX);
         let colour = if used { theme.ok } else { theme.faint };
-        let id_style = if selected {
+        let mark_style = if selected {
             Style::default().fg(theme.bg).bg(theme.accent).add_modifier(Modifier::BOLD)
         } else {
-            theme.faint_style()
+            Style::default().fg(colour)
         };
         candidates.push((
             order,
             id.clone(),
             Line::from(vec![
-                Span::styled(format!("{mark} "), Style::default().fg(colour)),
+                Span::styled(mark, mark_style),
+                Span::raw(" "),
                 Span::styled(text.clone(), Style::default().fg(theme.text)),
-                Span::styled(format!("  {id}"), id_style),
+                Span::styled(format!("  {id}"), theme.faint_style()),
             ]),
         ));
     }
@@ -623,21 +639,23 @@ fn inspector_rows(
             None if used => "✓".to_string(),
             None => "·".to_string(),
         };
-        let selected = open.selected_citation.as_deref() == Some(source.id.as_str());
+        let selected = open.selected_citation.as_deref() == Some(source.id.as_str())
+            || active_link_target == Some(source.id.as_str());
         let order = open.doc.citation_number(&source.id).unwrap_or(usize::MAX);
         let colour = if used { theme.ok } else { theme.faint };
-        let id_style = if selected {
+        let mark_style = if selected {
             Style::default().fg(theme.bg).bg(theme.accent).add_modifier(Modifier::BOLD)
         } else {
-            theme.faint_style()
+            Style::default().fg(colour)
         };
         candidates.push((
             order,
             source.id.clone(),
             Line::from(vec![
-                Span::styled(format!("{mark} "), Style::default().fg(colour)),
+                Span::styled(mark, mark_style),
+                Span::raw(" "),
                 Span::styled(label, Style::default().fg(theme.text)),
-                Span::styled(format!("  {}", source.id), id_style),
+                Span::styled(format!("  {}", source.id), theme.faint_style()),
             ]),
         ));
     }
@@ -814,30 +832,48 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
 
 /// Wrap a bibliography row so its continuation lines hang under the citation
 /// text instead of under its `[1]` mark. The row's first span *is* the mark
-/// (with its trailing space), so everything after it wraps into `width - mark`
-/// columns and every continuation line opens with a spacer that wide.
+/// (with its trailing space or as a separate span), so everything after it wraps
+/// into `width - mark` columns and every continuation line opens with a spacer that wide.
 fn wrap_biblio(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     use unicode_width::UnicodeWidthStr;
     let Some(mark) = line.spans.first().cloned() else {
         return wrap_line(line, width);
     };
-    let hang = mark.content.as_ref().width();
+    let (prefix, hang, remove_count) = if mark.content.ends_with(' ') {
+        (vec![mark.clone()], mark.content.as_ref().width(), 1)
+    } else if let Some(space) = line.spans.get(1) {
+        if space.content.chars().all(|c| c.is_whitespace()) {
+            let hang = mark.content.as_ref().width() + space.content.as_ref().width();
+            (vec![mark.clone(), space.clone()], hang, 2)
+        } else {
+            (vec![mark.clone()], mark.content.as_ref().width(), 1)
+        }
+    } else {
+        (vec![mark.clone()], mark.content.as_ref().width(), 1)
+    };
+
     if width <= hang {
         return wrap_line(line, width);
     }
     let mut rest = line;
-    rest.spans.remove(0);
+    for _ in 0..remove_count {
+        rest.spans.remove(0);
+    }
     let rest_rows = wrap_line(rest, width - hang);
     if rest_rows.len() == 1 && rest_rows[0].spans.is_empty() {
-        return vec![mark.into()];
+        return vec![Line::from(prefix)];
     }
-    let spacer = Span::styled(" ".repeat(hang), mark.style);
+    let spacer = Span::raw(" ".repeat(hang));
     rest_rows
         .into_iter()
         .enumerate()
         .map(|(i, row)| {
-            let mut spans = Vec::with_capacity(row.spans.len() + 1);
-            spans.push(if i == 0 { mark.clone() } else { spacer.clone() });
+            let mut spans = Vec::with_capacity(row.spans.len() + prefix.len());
+            if i == 0 {
+                spans.extend(prefix.clone());
+            } else {
+                spans.push(spacer.clone());
+            }
             spans.extend(row.spans);
             Line::from(spans)
         })
@@ -888,7 +924,7 @@ pub fn sidebar(frame: &mut Frame, app: &App, area: Rect) {
     let mut block = pane(&app.theme, "agents", focused);
     if focused && area.width >= 28 {
         block = block.title(
-            Line::from(Span::styled(" alt+tab to unfocus ", app.theme.dim()))
+            Line::from(Span::styled(" f12 to unfocus ", app.theme.dim()))
                 .alignment(Alignment::Right),
         );
     }
@@ -932,7 +968,10 @@ pub fn status(frame: &mut Frame, app: &App, area: Rect) {
     let (badge_text, badge_style) = match app.open.as_ref().and_then(|o| o.editor.as_ref()) {
         Some(editor) if editor.dirty() => (" EDIT ⏺ ".to_string(), Style::default().fg(theme.bg).bg(theme.warn)),
         Some(_) => (" EDIT ".to_string(), Style::default().fg(theme.bg).bg(theme.ok)),
-        None => (format!(" {} ▾ ", app.project_name), Style::default().fg(theme.bg).bg(theme.accent)),
+        None => (
+            format!(" {} ▾ ", app.project_name),
+            Style::default().fg(Color::Rgb(255, 255, 255)).bg(theme.accent),
+        ),
     };
     left.push(Span::styled(badge_text, badge_style.add_modifier(Modifier::BOLD)));
 
@@ -943,16 +982,15 @@ pub fn status(frame: &mut Frame, app: &App, area: Rect) {
     if app.indexing {
         left.push(Span::styled("  indexing…", theme.dim()));
     } else {
-        let findings = app.index.finding_count();
-        let (mark, style) = if findings == 0 {
-            ("✓ clean", Style::default().fg(theme.ok))
-        } else {
-            ("⚠", Style::default().fg(theme.warn))
-        };
-        left.push(Span::styled(format!("  {mark}"), style));
-        if findings > 0 {
-            left.push(Span::styled(format!(" {findings} findings"), theme.dim()));
-        }
+        left.push(Span::styled(
+            format!(
+                "  {} skills  {} agents  {} mcp",
+                app.components.skills.len(),
+                app.components.agents.len(),
+                app.components.mcp.len()
+            ),
+            theme.faint_style(),
+        ));
         left.push(Span::styled(format!("  {} pages", app.index.entries.len()), theme.faint_style()));
     }
 
@@ -982,9 +1020,20 @@ pub fn status(frame: &mut Frame, app: &App, area: Rect) {
 
     let bar = Style::default().bg(theme.surface).fg(theme.text);
     frame.render_widget(Block::default().style(bar), area);
-    frame.render_widget(Paragraph::new(Line::from(left)).style(bar), area);
-    let right_line = Line::from(right).right_aligned();
-    frame.render_widget(Paragraph::new(right_line).style(bar), area);
+
+    let right_line = Line::from(right);
+    let right_width = right_line.width() as u16;
+    let right_area = Rect::new(
+        area.x + area.width.saturating_sub(right_width),
+        area.y,
+        right_width.min(area.width),
+        area.height,
+    );
+    let left_width = area.width.saturating_sub(right_width);
+    let left_area = Rect::new(area.x, area.y, left_width, area.height);
+
+    frame.render_widget(Paragraph::new(Line::from(left)), left_area);
+    frame.render_widget(Paragraph::new(right_line), right_area);
 }
 
 #[cfg(test)]
@@ -1127,6 +1176,71 @@ mod tests {
     }
 
     #[test]
+    fn biblio_wrapping_handles_separated_mark_and_space_without_tinting_spacer() {
+        use ratatui::style::Color;
+        let row = Line::from(vec![
+            Span::styled("[1]", Style::default().bg(Color::Blue)),
+            Span::raw(" "),
+            Span::raw("A paper title long enough that it must wrap onto another line here."),
+            Span::raw("  fame1970"),
+        ]);
+        let wrapped = wrap_biblio(row, 20);
+        let rows: Vec<String> = wrapped.iter().map(|l| format!("{l}")).collect();
+        assert!(rows.len() > 1, "long citation wraps: {:?}", rows);
+        assert!(rows[0].starts_with("[1] "), "first line keeps the mark and space: {:?}", rows);
+        assert_eq!(wrapped[0].spans[0].content, "[1]");
+        assert_eq!(wrapped[0].spans[0].style.bg, Some(Color::Blue));
+        assert_eq!(wrapped[0].spans[1].content, " ");
+        assert_eq!(wrapped[0].spans[1].style.bg, None);
+        for (i, line) in wrapped.iter().enumerate().skip(1) {
+            assert!(rows[i].starts_with("    "), "continuations hang 4 under the mark: {:?}", rows[i]);
+            assert_eq!(line.spans[0].content, "    ");
+            assert_eq!(line.spans[0].style.bg, None, "spacer must not inherit mark background");
+        }
+    }
+
+    #[test]
+    fn selecting_a_citation_highlights_its_number_mark_not_its_id() {
+        let mut open = open_doc(
+            "Cites beta first, then alpha[^b][^a].\n\n## Sources\n[^a]: [Alpha paper (2020).](../lit/a/metadata.md)\n[^b]: [Beta paper (2019).](../lit/b/metadata.md)\n",
+        );
+        let root = open.page.path.parent().unwrap().to_path_buf();
+        let index = crate::vault::index::Index::default();
+        let theme = Theme::default();
+
+        // When nothing is selected, [1] has ok colour, no bg; and id 'b' has faint style.
+        let rows = inspector_rows(&open, &index, &root, &theme);
+        let (first_line, first_id) = &rows[0];
+        assert_eq!(first_id.as_deref(), Some("b"));
+        assert_eq!(first_line.spans[0].content, "[1]");
+        assert_eq!(first_line.spans[0].style.fg, Some(theme.ok));
+        assert_eq!(first_line.spans[0].style.bg, None);
+        // The id span (index 3) is faint, not highlighted
+        assert_eq!(first_line.spans[3].content, "  b");
+        assert_eq!(first_line.spans[3].style.bg, None);
+
+        // When citation "b" is selected, [1] is highlighted with accent bg, while the id stays faint.
+        open.selected_citation = Some("b".to_string());
+        let rows = inspector_rows(&open, &index, &root, &theme);
+        let (first_line, first_id) = &rows[0];
+        assert_eq!(first_id.as_deref(), Some("b"));
+        assert_eq!(first_line.spans[0].content, "[1]");
+        assert_eq!(first_line.spans[0].style.bg, Some(theme.accent));
+        assert_eq!(first_line.spans[0].style.fg, Some(theme.bg));
+        // id 'b' is still not highlighted with accent bg
+        assert_eq!(first_line.spans[3].content, "  b");
+        assert_eq!(first_line.spans[3].style.bg, None);
+
+        // When the active link in the reader is [^b]
+        open.selected_citation = None;
+        open.link = open.doc.citation_link("b");
+        let rows = inspector_rows(&open, &index, &root, &theme);
+        let (first_line, _) = &rows[0];
+        assert_eq!(first_line.spans[0].style.bg, Some(theme.accent));
+        assert_eq!(first_line.spans[3].style.bg, None);
+    }
+
+    #[test]
     fn status_bar_renders_project_selector_instead_of_read() {
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
@@ -1158,7 +1272,177 @@ mod tests {
             .collect();
 
         assert!(content.contains("test-project ▾"), "status has project selector: {content}");
+        assert_eq!(buffer[(1, 0)].fg, Color::Rgb(255, 255, 255));
+        assert_eq!(buffer[(1, 0)].bg, app.theme.accent);
         assert!(!content.contains("READ"), "status does not contain READ: {content}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The sources pane sits below the reader, not on top of it: the reader's
+    /// own bottom border survives, and the end of the page can be scrolled
+    /// into the rows above it.
+    #[test]
+    fn the_sources_pane_does_not_cover_the_end_of_the_page() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let count = INSP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("podarcis-inspect-overlap-{}-{count}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".podarcis")).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "").unwrap();
+        std::fs::write(dir.join(".podarcis/config.yaml"), "").unwrap();
+        std::fs::create_dir_all(dir.join("wiki")).unwrap();
+        let body: String = (1..=60).map(|i| format!("para {i}\n\n")).collect();
+        let page = dir.join("wiki/long.md");
+        std::fs::write(
+            &page,
+            format!("---\ntitle: Long\ntype: concept\ncategory: c\nrationale: r\n---\n{body}"),
+        )
+        .unwrap();
+
+        let (mut app, _rx) = crate::app::test_app(&dir);
+        app.open_path(&page, true);
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 30)).unwrap();
+        let draw = |app: &mut App, terminal: &mut Terminal<TestBackend>| {
+            terminal.draw(|f| document(f, app, f.area())).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let rows: Vec<String> = (0..buffer.area.height)
+                .map(|y| (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect())
+                .collect();
+            rows
+        };
+
+        // First frame measures the panes; the second scrolls with those
+        // measurements in hand, as the event loop does.
+        draw(&mut app, &mut terminal);
+        let reader_bottom = app.areas.inspector.y.saturating_sub(1) as usize;
+        app.run(crate::keymap::Cmd::DocBottom);
+        let rows = draw(&mut app, &mut terminal);
+
+        assert!(app.areas.inspector.y > app.areas.doc_main.y, "the sources pane is below the reader");
+        assert!(
+            rows[reader_bottom].chars().all(|c| "╰╯─".contains(c)),
+            "the reader keeps its own bottom border: {:?}",
+            rows[reader_bottom]
+        );
+        assert!(
+            rows[..reader_bottom].iter().any(|r| r.contains("para 60")),
+            "the last paragraph scrolls into the reader:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    #[test]
+    fn tree_renders_repo_branch_and_omits_non_git() {
+        use std::process::Command;
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        use crate::config::Config;
+
+        let count = INSP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("podarcis-tree-branch-{}-{count}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".podarcis")).unwrap();
+        std::fs::create_dir_all(dir.join("wiki")).unwrap();
+        std::fs::create_dir_all(dir.join("sources")).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "").unwrap();
+        std::fs::write(
+            dir.join(".podarcis/config.yaml"),
+            "repositories:\n  wiki: local\n  sources: local\n",
+        ).unwrap();
+
+        // init git in wiki on branch "test-branch"
+        Command::new("git").args(["init"]).current_dir(dir.join("wiki")).output().unwrap();
+        Command::new("git").args(["checkout", "-b", "test-branch"]).current_dir(dir.join("wiki")).output().unwrap();
+
+        // sources is not a git repo
+
+        let cfg = Config::load(&dir);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut app = App::new(cfg, tx);
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                tree(f, &mut app, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let mut rendered = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                rendered.push_str(buffer[(x, y)].symbol());
+            }
+            rendered.push('\n');
+        }
+
+        assert!(rendered.contains("wiki · test-branch"), "tree contains directory and branch separated by ·: {rendered}");
+        assert!(!rendered.contains("git repo"), "tree does not contain 'git repo': {rendered}");
+        assert!(!rendered.contains("no git"), "tree does not contain 'no git': {rendered}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tree_renders_a_csv_badge_to_the_left_of_the_label() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        use crate::config::Config;
+
+        let count = INSP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("podarcis-tree-csv-badge-{}-{count}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".podarcis")).unwrap();
+        std::fs::create_dir_all(dir.join("workspace/finance")).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "").unwrap();
+        std::fs::write(dir.join(".podarcis/config.yaml"), "").unwrap();
+        std::fs::write(dir.join("workspace/finance/transactions.csv"), "a,b\n1,2\n").unwrap();
+
+        let cfg = Config::load(&dir);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut app = App::new(cfg, tx);
+        app.tree.expand(); // workspace
+        app.tree.rebuild();
+        app.tree.expand(); // finance
+        app.tree.rebuild();
+
+        for flavor in [crate::theme::Flavor::Terminal, crate::theme::Flavor::Latte] {
+            app.theme = crate::theme::Theme::new(flavor);
+            let backend = TestBackend::new(80, 20);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|f| tree(f, &mut app, f.area())).unwrap();
+
+            let buffer = terminal.backend().buffer();
+            let mut rendered = String::new();
+            let mut badge_bg = None;
+            for y in 0..buffer.area.height {
+                for x in 0..buffer.area.width {
+                    let cell = &buffer[(x, y)];
+                    // The badge is now bare letters on a colour block, so the
+                    // `C` of `CSV` is what identifies it rather than a bracket.
+                    let is_csv_head = cell.symbol() == "C"
+                        && x + 2 < buffer.area.width
+                        && buffer[(x + 1, y)].symbol() == "S"
+                        && buffer[(x + 2, y)].symbol() == "V";
+                    if is_csv_head && badge_bg.is_none() {
+                        badge_bg = Some(cell.bg);
+                    }
+                    rendered.push_str(cell.symbol());
+                }
+                rendered.push('\n');
+            }
+
+            assert!(rendered.contains(" CSV "), "{flavor:?} tree shows the csv badge: {rendered}");
+            assert!(!rendered.contains("[CSV]"), "{flavor:?} badge is a highlight, not brackets: {rendered}");
+            assert_eq!(
+                badge_bg,
+                Some(app.theme.ok),
+                "{flavor:?} badge keeps its highlight background (not reset by the flavor's `Color::Reset` bg): {rendered}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

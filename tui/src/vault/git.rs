@@ -54,12 +54,12 @@ impl GitStatus {
     }
 }
 
-/// Whether a collection folder is itself a git checkout, tracked by a parent
-/// repo, or not in git at all.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether a collection folder is itself a git checkout (with its current branch name),
+/// tracked by a parent repo, or not in git at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrackState {
-    /// Nested `.git` (submodule or its own repository).
-    Repo,
+    /// Nested `.git` (submodule or its own repository) with active branch or commit.
+    Repo(String),
     /// Paths under this folder are in a parent repository's index.
     Tracked,
     /// No git, ignored, or nothing in the index.
@@ -67,23 +67,57 @@ pub enum TrackState {
 }
 
 impl TrackState {
-    pub fn label(self) -> &'static str {
+    pub fn branch(&self) -> Option<&str> {
         match self {
-            Self::Repo => "git repo",
-            Self::Tracked => "git",
-            Self::Untracked => "no git",
+            Self::Repo(branch) => Some(branch.as_str()),
+            Self::Tracked | Self::Untracked => None,
         }
     }
 
-    pub fn tracked(self) -> bool {
+    pub fn label(&self) -> Option<&str> {
+        self.branch()
+    }
+
+    pub fn tracked(&self) -> bool {
         !matches!(self, Self::Untracked)
     }
+}
+
+/// Retrieve the active branch name for a git repository directory,
+/// falling back to a short commit SHA or "HEAD".
+pub fn git_branch(dir: &Path) -> Option<String> {
+    if let Ok(output) = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(dir)
+        .output()
+    {
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !branch.is_empty() {
+                return Some(branch);
+            }
+        }
+    }
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(dir)
+        .output()
+    {
+        if output.status.success() {
+            let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !sha.is_empty() {
+                return Some(sha);
+            }
+        }
+    }
+    None
 }
 
 /// Is `path` tracked by git (own repo or parent index)?
 pub fn track_state(path: &Path, root: &Path) -> TrackState {
     if path.join(".git").exists() {
-        return TrackState::Repo;
+        let branch = git_branch(path).unwrap_or_else(|| "HEAD".to_string());
+        return TrackState::Repo(branch);
     }
     let repo = git_toplevel(path).or_else(|| git_toplevel(root));
     let Some(repo) = repo else {
@@ -446,7 +480,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Command::new("git").args(["init"]).current_dir(&dir).output().unwrap();
-        assert_eq!(track_state(&dir, &dir), TrackState::Repo);
+        let state = track_state(&dir, &dir);
+        assert!(matches!(state, TrackState::Repo(_)));
+        assert!(state.branch().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn track_state_named_branch() {
+        let dir = std::env::temp_dir().join(format!("podarcis-track-named-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Command::new("git").args(["init"]).current_dir(&dir).output().unwrap();
+        Command::new("git").args(["checkout", "-b", "my-feature"]).current_dir(&dir).output().unwrap();
+        let state = track_state(&dir, &dir);
+        assert_eq!(state, TrackState::Repo("my-feature".to_string()));
+        assert_eq!(state.branch(), Some("my-feature"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -463,11 +512,13 @@ mod tests {
         Command::new("git").args(["add", "wiki/a.md"]).current_dir(&dir).output().unwrap();
         Command::new("git").args(["commit", "-m", "init"]).current_dir(&dir).output().unwrap();
         assert_eq!(track_state(&wiki, &dir), TrackState::Tracked);
+        assert_eq!(track_state(&wiki, &dir).branch(), None);
 
         let sources = dir.join("sources");
         std::fs::create_dir_all(&sources).unwrap();
         std::fs::write(sources.join("raw.md"), "x").unwrap();
         assert_eq!(track_state(&sources, &dir), TrackState::Untracked);
+        assert_eq!(track_state(&sources, &dir).branch(), None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

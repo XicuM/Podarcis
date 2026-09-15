@@ -22,9 +22,39 @@ pub fn is_root(path: &Path) -> bool {
         || (path.join("wiki").is_dir() && path.join("workspace").is_dir())
 }
 
+/// The registry's answer when the cwd walk finds nothing: the active project,
+/// then any registered project still on disk, then where the default project
+/// belongs. Never fails — see `find_root`.
+fn registry_fallback(
+    reg: &crate::project::ProjectRegistry,
+    cwd: &Path,
+    env_root: Option<&str>,
+) -> PathBuf {
+    if let Ok(proj) = reg.resolve(None, cwd, env_root) {
+        if is_root(&proj.root) {
+            return proj.root;
+        }
+    }
+    let mut names: Vec<&String> = reg.projects.keys().collect();
+    names.sort();
+    for name in names {
+        let candidate = &reg.projects[name].path;
+        if is_root(candidate) {
+            return candidate.clone();
+        }
+    }
+    crate::project::projects_dir().join("default")
+}
+
 /// Resolve the checkout: explicit `--root`, then `$PODARCIS_ROOT`, then walk up
-/// from `cwd`. A pinned path that is not a checkout is an error, with no walk
-/// fallback — the user asked for that specific path.
+/// from `cwd`, then the project registry. A pinned path that is not a checkout
+/// is an error, with no walk fallback — the user asked for that specific path.
+///
+/// Without a pin this never fails: projects are managed inside the app, so the
+/// front-end must always have somewhere to open rather than sending the user
+/// back to the shell to type a path. When nothing resolves, the answer is where
+/// the default project belongs (`~/.local/share/podarcis/projects/default`);
+/// the caller scaffolds it if it is not there yet.
 pub fn find_root(explicit: Option<&Path>, cwd: &Path, env_root: Option<&str>) -> Result<PathBuf> {
     let pinned = explicit
         .map(PathBuf::from)
@@ -43,7 +73,7 @@ pub fn find_root(explicit: Option<&Path>, cwd: &Path, env_root: Option<&str>) ->
             }
         }
         bail!(
-            "not a Podarcis checkout or project at {} (no AGENTS.md + .podarcis/config.yaml or podarcis.yaml). Pass --root.",
+            "not a Podarcis checkout or project at {} (no AGENTS.md + .podarcis/config.yaml or podarcis.yaml)",
             path.display()
         );
     }
@@ -57,15 +87,8 @@ pub fn find_root(explicit: Option<&Path>, cwd: &Path, env_root: Option<&str>) ->
         probe = dir.parent();
     }
 
-    // Fall back to active project in global registry
     let reg = crate::project::ProjectRegistry::load();
-    if let Ok(proj) = reg.resolve(None, cwd, env_root) {
-        if is_root(&proj.root) {
-            return Ok(proj.root);
-        }
-    }
-
-    bail!("not a Podarcis checkout (no AGENTS.md + .podarcis/config.yaml or podarcis.yaml). Pass --root.")
+    Ok(registry_fallback(&reg, cwd, env_root))
 }
 
 fn absolutize(path: &Path, cwd: &Path) -> PathBuf {
@@ -94,6 +117,10 @@ pub struct Config {
     /// Why semantic search is unavailable, phrased as the fix, or `None` when
     /// it works. We say this rather than spawning a search that will fail.
     pub qmd_off_reason: Option<&'static str>,
+    /// Why the Extensions overlay can't shell out to `apm`, or `None` when it
+    /// can. Same reasoning as `qmd_off_reason`: say so up front rather than
+    /// opening an overlay whose every action will fail.
+    pub apm_off_reason: Option<&'static str>,
     /// `repositories:` map from collection name to git URL, `local`, or `gdrive`.
     pub repositories: HashMap<String, String>,
     /// `oneliners:` splash lines shown in the status bar's right corner.
@@ -106,12 +133,12 @@ impl Config {
     }
 
     pub fn load_with_herdr_theme(root: &Path, herdr_flavor: Option<Flavor>) -> Self {
-        Self::load_parts(root, herdr_flavor, crate::search::qmd_on_path())
+        Self::load_parts(root, herdr_flavor, crate::search::qmd_on_path(), crate::extensions::apm_on_path())
     }
 
-    /// `qmd_present` is injected so the tests are not at the mercy of whatever
-    /// happens to be installed on the machine running them.
-    fn load_parts(root: &Path, herdr_flavor: Option<Flavor>, qmd_present: bool) -> Self {
+    /// `qmd_present`/`apm_present` are injected so the tests are not at the
+    /// mercy of whatever happens to be installed on the machine running them.
+    fn load_parts(root: &Path, herdr_flavor: Option<Flavor>, qmd_present: bool, apm_present: bool) -> Self {
         let pod_yaml = root.join("podarcis.yaml");
         let cfg_yaml = root.join(".podarcis").join("config.yaml");
         let doc_path = if pod_yaml.is_file() { pod_yaml } else { cfg_yaml };
@@ -143,6 +170,11 @@ impl Config {
                 None => Some(
                     "semantic search needs the qmd binary on PATH — install it, or set engines.qmd: true in .podarcis/config.yaml",
                 ),
+            },
+            apm_off_reason: if apm_present {
+                None
+            } else {
+                Some("the apm binary is not on PATH — install it (microsoft.github.io/apm) to manage extensions from the TUI")
             },
             repositories: doc
                 .get("repositories")
@@ -411,6 +443,31 @@ mod tests {
         assert!(err.to_string().contains("not a Podarcis checkout"));
     }
 
+    /// Projects are managed inside the app, so an unpinned launch must always
+    /// land somewhere instead of telling the user to go type a path.
+    #[test]
+    fn an_unpinned_miss_falls_back_to_the_registry_and_then_the_default_project() {
+        use crate::project::{ProjectEntry, ProjectRegistry};
+        use std::collections::HashMap;
+
+        let empty = ProjectRegistry { active: "default".into(), projects: HashMap::new() };
+        let miss = registry_fallback(&empty, Path::new("/"), None);
+        assert!(miss.ends_with("projects/default"), "got {}", miss.display());
+
+        let dir = scratch("registry-fallback");
+        let mut reg = ProjectRegistry { active: "gone".into(), projects: HashMap::new() };
+        reg.projects.insert(
+            "gone".into(),
+            ProjectEntry { path: PathBuf::from("/nope/not/here"), description: String::new() },
+        );
+        reg.projects.insert(
+            "real".into(),
+            ProjectEntry { path: dir.clone(), description: String::new() },
+        );
+        // The active project's directory is gone, so the surviving one wins.
+        assert_eq!(registry_fallback(&reg, Path::new("/"), None), dir);
+    }
+
     #[test]
     fn env_root_is_honoured_when_no_explicit_flag() {
         let dir = scratch("env");
@@ -583,24 +640,24 @@ mod tests {
 
         // No key, no binary: the reason names the binary, not a config line the
         // user never wrote.
-        let cfg = Config::load_parts(&dir, None, false);
+        let cfg = Config::load_parts(&dir, None, false, true);
         assert!(!cfg.qmd_enabled());
         assert!(cfg.qmd_off_reason.unwrap().contains("qmd binary on PATH"));
 
         // No key, binary present: nothing to enable.
-        assert!(Config::load_parts(&dir, None, true).qmd_enabled());
+        assert!(Config::load_parts(&dir, None, true, true).qmd_enabled());
 
         // An explicit `false` is a decision, and is reported as one even when
         // the binary is right there.
         std::fs::write(dir.join("podarcis.yaml"), "engines:\n  qmd: false\n").unwrap();
-        let cfg = Config::load_parts(&dir, None, true);
+        let cfg = Config::load_parts(&dir, None, true, true);
         assert!(!cfg.qmd_enabled());
         assert!(cfg.qmd_off_reason.unwrap().contains("engines.qmd: false"));
 
         // An explicit `true` wins over a missing binary: the run then fails
         // with qmd's own error, which is accurate.
         std::fs::write(dir.join("podarcis.yaml"), "engines:\n  qmd: true\n").unwrap();
-        assert!(Config::load_parts(&dir, None, false).qmd_enabled());
+        assert!(Config::load_parts(&dir, None, false, true).qmd_enabled());
         std::fs::remove_file(dir.join("podarcis.yaml")).unwrap();
     }
 

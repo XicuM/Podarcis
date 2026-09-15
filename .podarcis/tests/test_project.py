@@ -111,9 +111,25 @@ def test_unregister_project(mock_xdg):
     proj = new_project('temporary')
     assert 'temporary' in list_projects()
 
-    unregister_project('temporary', purge=True)
+    # Unregistering an internal project in projects_dir cleans up directory so it's not re-discovered
+    unregister_project('temporary', purge=False)
     assert 'temporary' not in list_projects()
     assert not proj.exists()
+
+
+def test_unregister_external_project_keeps_files(mock_xdg, tmp_path):
+    ext_dir = tmp_path / 'ext_project'
+    ext_dir.mkdir()
+    (ext_dir / 'wiki').mkdir()
+    (ext_dir / 'workspace').mkdir()
+
+    register_project('ext', ext_dir)
+    assert 'ext' in list_projects()
+
+    unregister_project('ext', purge=False)
+    assert 'ext' not in list_projects()
+    # External files are preserved
+    assert ext_dir.is_dir()
 
 
 def test_ensure_and_close_herdr_space(monkeypatch, tmp_path):

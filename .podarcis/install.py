@@ -126,17 +126,27 @@ def _create_podarcis_yaml() -> None:
 # ── global command ────────────────────────────────────────────────────────
 
 def _build_frontend() -> None:
-    '''Compile the Ratatui wiki front-end.
+    '''Compile the Ratatui frontend binary (`podarcis-tui`).
 
     Best effort: a checkout without a Rust toolchain is still a working
-    Podarcis, it just has no `podarcis wiki`. `podarcis status` says so.
+    Podarcis, it just has no frontend. `podarcis status` says so.
     '''
-    from podarcis.wiki import build, find_binary
-    _say('[#29b8db]Building the wiki frontend...[/#29b8db]')
-    if build(root, quiet=True):
-        _say(f'[bold green]✓ Built {find_binary(root)}[/bold green]\n')
+    manifest = root / 'tui' / 'Cargo.toml'
+    if not manifest.is_file():
+        return
+    cargo = shutil.which('cargo')
+    if cargo is None:
+        _say('[dim]cargo not found. Run `podarcis build` once cargo is available.[/dim]\n')
+        return
+    _say('[#29b8db]Building the frontend...[/#29b8db]')
+    ok = subprocess.run(
+        [cargo, 'build', '--release', '--manifest-path', str(manifest), '--quiet']
+    ).returncode == 0
+    binary = root / 'tui' / 'target' / 'release' / 'podarcis-tui'
+    if ok and binary.is_file():
+        _say(f'[bold green]✓ Built {binary}[/bold green]\n')
     else:
-        _say('[dim]Skipped. Run `podarcis wiki build` once cargo is available.[/dim]\n')
+        _say('[dim]Skipped. Run `podarcis build` once cargo is available.[/dim]\n')
 
 
 def _configure_global_command() -> None:

@@ -27,6 +27,8 @@ pub enum AppEvent {
     IndexReady(Box<Index>),
     /// A background job finished.
     JobDone(crate::actions::JobResult),
+    /// An agent asked the front-end to do something over the control socket.
+    Control(crate::control::Request),
     /// The herdr child produced output and the pane needs a repaint.
     PtyOutput,
     /// The herdr child exited.
@@ -47,7 +49,7 @@ impl Events {
     }
 
     /// Watch the content collections. Failures are not fatal — the app simply
-    /// stops auto-refreshing, and `r` still reloads by hand.
+    /// stops auto-refreshing.
     pub fn watch(&mut self, dirs: &[PathBuf]) -> Result<()> {
         let tx = self.tx.clone();
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
