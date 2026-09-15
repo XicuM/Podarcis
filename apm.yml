@@ -1,7 +1,7 @@
 name: podarcis
 version: 10.0.0
 description: OKF v0.2 research agent engine — consumer manifest for external agent context
-license: MIT
+license: GPL-3.0-or-later
 
 # Podarcis authors its own personas and skills under .agents/; this manifest is
 # strictly for context it does NOT author. Anything listed here is third-party

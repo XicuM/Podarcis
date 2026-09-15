@@ -1,10 +1,10 @@
 [package]
 name = "podarcis"
-version = "11.6.1"
+version = "11.6.2"
 edition = "2021"
 rust-version = "1.86"
 description = "Podarcis engine: the podarcis-tui wiki frontend and the podarcis CLI, one library"
-license = "MIT"
+license = "GPL-3.0-or-later"
 publish = false
 
 [lib]
