@@ -87,6 +87,12 @@ impl Tree {
         &self.collections
     }
 
+    /// Which collection row `i` belongs to.
+    pub fn section_of(&self, i: usize) -> Option<usize> {
+        (0..self.collections.len())
+            .find(|c| self.section_span(*c).is_some_and(|(start, end)| i >= start && i < end))
+    }
+
     /// Inclusive start and exclusive end of the rows that belong to collection `i`.
     pub fn section_span(&self, i: usize) -> Option<(usize, usize)> {
         let path = self.collections.get(i)?;

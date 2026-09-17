@@ -207,6 +207,14 @@ impl Pane {
     pub fn application_cursor(&self) -> bool {
         self.with_screen(|screen| screen.application_cursor()).unwrap_or(false)
     }
+
+    /// True while the child has DECSET 2004 set, and so expects a paste to
+    /// arrive wrapped in `ESC [ 200 ~` … `ESC [ 201 ~`. A child that has not
+    /// asked for it must get the bare text: the wrapper would otherwise be
+    /// typed into it literally.
+    pub fn bracketed_paste(&self) -> bool {
+        self.with_screen(vt100::Screen::bracketed_paste).unwrap_or(false)
+    }
 }
 
 impl Drop for Pane {

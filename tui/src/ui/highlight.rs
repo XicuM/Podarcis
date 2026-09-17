@@ -151,6 +151,128 @@ fn syntax_for(lang: &str) -> Option<Syntax> {
     })
 }
 
+const GENERIC_KEYWORDS: &[&str] = &[
+    "and", "as", "assert", "async", "await", "break", "case", "catch", "class", "const",
+    "continue", "crate", "def", "default", "del", "delete", "do", "elif", "else", "enum",
+    "except", "export", "extends", "false", "finally", "fn", "for", "from", "func", "function",
+    "global", "if", "impl", "import", "in", "interface", "is", "lambda", "let", "match",
+    "mod", "mut", "new", "nil", "none", "not", "null", "or", "pass", "pub", "raise", "return",
+    "self", "select", "static", "struct", "super", "switch", "this", "throw", "trait", "true",
+    "try", "type", "typeof", "unsafe", "use", "val", "var", "where", "while", "with", "yield",
+];
+
+fn generic_syntax() -> Syntax {
+    Syntax {
+        keywords: GENERIC_KEYWORDS,
+        line_comment: &["//", "#", "--"],
+        block_comment: Some(("/*", "*/")),
+        quotes: "\"'`",
+        keyed: false,
+    }
+}
+
+/// Detect a syntax when no fence language is declared, falling back to a generic syntax.
+fn detect_syntax(code: &str) -> Syntax {
+    let trimmed = code.trim();
+    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    {
+        if serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+            || (trimmed.contains("\":") || trimmed.contains("\": "))
+        {
+            if let Some(s) = syntax_for("json") {
+                return s;
+            }
+        }
+    }
+    if trimmed.starts_with("#!/") {
+        if trimmed.contains("python") {
+            if let Some(s) = syntax_for("python") {
+                return s;
+            }
+        }
+        if let Some(s) = syntax_for("bash") {
+            return s;
+        }
+    }
+
+    let mut python_score = 0;
+    let mut rust_score = 0;
+    let mut js_score = 0;
+    let mut sql_score = 0;
+    let mut c_score = 0;
+    let mut shell_score = 0;
+
+    for line in trimmed.lines() {
+        let l = line.trim();
+        if l.starts_with("def ")
+            || l.starts_with("import ")
+            || l.starts_with("from ")
+            || l.starts_with("class ")
+            || l.contains("print(")
+            || l.ends_with(':')
+        {
+            python_score += 2;
+        }
+        if l.starts_with("fn ")
+            || l.starts_with("let ")
+            || l.starts_with("let mut ")
+            || l.starts_with("pub ")
+            || l.starts_with("impl ")
+            || l.contains("println!")
+            || l.contains("::")
+        {
+            rust_score += 2;
+        }
+        if l.starts_with("const ")
+            || l.starts_with("function ")
+            || l.contains("console.log")
+            || l.contains("=>")
+        {
+            js_score += 2;
+        }
+        if l.starts_with("SELECT ")
+            || l.starts_with("select ")
+            || l.starts_with("INSERT ")
+            || l.starts_with("CREATE TABLE ")
+        {
+            sql_score += 3;
+        }
+        if l.starts_with("#include") || l.starts_with("int main(") {
+            c_score += 3;
+        }
+        if l.starts_with("$ ")
+            || l.starts_with("sudo ")
+            || l.starts_with("chmod ")
+            || l.starts_with("curl ")
+            || l.starts_with("git ")
+        {
+            shell_score += 2;
+        }
+    }
+
+    if python_score > 0 && python_score >= rust_score && python_score >= js_score && python_score >= sql_score {
+        if let Some(s) = syntax_for("python") { return s; }
+    }
+    if rust_score > 0 && rust_score >= js_score && rust_score >= sql_score {
+        if let Some(s) = syntax_for("rust") { return s; }
+    }
+    if js_score > 0 && js_score >= sql_score {
+        if let Some(s) = syntax_for("js") { return s; }
+    }
+    if sql_score > 0 {
+        if let Some(s) = syntax_for("sql") { return s; }
+    }
+    if c_score > 0 {
+        if let Some(s) = syntax_for("c") { return s; }
+    }
+    if shell_score > 0 {
+        if let Some(s) = syntax_for("bash") { return s; }
+    }
+
+    generic_syntax()
+}
+
 /// Tokenizes one code block, carrying the state a block comment or an unclosed
 /// string needs to survive across lines.
 pub struct Highlighter {
@@ -161,6 +283,15 @@ pub struct Highlighter {
 impl Highlighter {
     pub fn new(lang: &str) -> Self {
         Self { syntax: syntax_for(lang), in_block_comment: false }
+    }
+
+    pub fn for_code(lang: &str, code: &str) -> Self {
+        let syntax = if !lang.trim().is_empty() {
+            syntax_for(lang)
+        } else {
+            Some(detect_syntax(code))
+        };
+        Self { syntax, in_block_comment: false }
     }
 
     /// Split one line into styled runs. The runs always reassemble to the

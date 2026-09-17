@@ -37,6 +37,28 @@ pub enum Focus {
     Sidebar,
 }
 
+/// Which box inside `Focus::Doc` currently has the cursor: the reader itself,
+/// or the sources/backlinks inspector below it. The two are drawn as separate
+/// bordered panes, so Tab needs to be able to stop at each in turn instead of
+/// treating the whole column as one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocStop {
+    Content,
+    Sources,
+}
+
+/// One Tab-cycle stop: either a specific collection box in the tree column,
+/// one of the two boxes in the doc column, or the agents pane. Distinct from
+/// `Focus`, which only tracks the coarse column — this is what lets each
+/// visible bordered box get its own stop instead of grouping a whole column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stop {
+    TreeSection(usize),
+    DocContent,
+    DocSources,
+    Sidebar,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     Info,
@@ -67,6 +89,10 @@ pub struct Open {
     pub doc: markdown::Doc,
     pub doc_width: u16,
     pub scroll: usize,
+    /// Display columns panned off the left edge. Non-zero only for a table too
+    /// wide for the pane — a CSV with more columns than fit, or a broad
+    /// markdown table.
+    pub hscroll: usize,
     pub inspect_scroll: usize,
     pub link: Option<usize>,
     pub editor: Option<Editor>,
@@ -115,6 +141,7 @@ impl Open {
             doc,
             doc_width: width,
             scroll: 0,
+            hscroll: 0,
             inspect_scroll: 0,
             link: None,
             editor: None,
@@ -124,7 +151,7 @@ impl Open {
         })
     }
 
-    fn is_csv(path: &Path) -> bool {
+    pub(crate) fn is_csv(path: &Path) -> bool {
         path.extension().and_then(|e| e.to_str()) == Some("csv")
     }
 
@@ -146,6 +173,7 @@ impl Open {
             markdown::render(&self.page.body, width, theme)
         };
         self.doc_width = width;
+        self.hscroll = 0;
         self.scroll = self.doc.line_for_source(anchor);
     }
 
@@ -328,6 +356,18 @@ pub struct TreePane {
     /// Exclusive end of this collection's rows.
     pub end: usize,
     pub offset: usize,
+    /// The one cell that folds this collection away, or brings it back.
+    pub fold: Option<Rect>,
+    pub folded: bool,
+}
+
+/// A clickable backlink in the inspector pane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InspectorBacklink {
+    pub row: usize,
+    pub col_start: u16,
+    pub col_end: u16,
+    pub path: PathBuf,
 }
 
 /// Geometry from the last frame, so mouse events and the pty know where things
@@ -347,8 +387,14 @@ pub struct Areas {
     /// wrapping and scrolling), aligned to `inspector_body`, so a click can be
     /// mapped back to a source without re-deriving the layout.
     pub inspector_rows: Vec<Option<String>>,
+    /// Clickable backlinks in the visible inspector rows.
+    pub inspector_backlinks: Vec<InspectorBacklink>,
     /// Hit-testing for each collection pane inside the tree column.
     pub tree_panes: Vec<TreePane>,
+    /// Boundaries between stacked collection boxes, as `(index of the box
+    /// above, the row they meet on)`. The last box ends at the column's edge
+    /// and so has none.
+    pub collection_dividers: Vec<(usize, u16)>,
     /// Column of the tree/document divider, when the tree is shown.
     pub tree_divider: Option<u16>,
     /// Column of the document/agents divider, when the agents pane is shown.
@@ -368,6 +414,8 @@ pub struct Areas {
     pub nav_back: Option<Rect>,
     /// Navigation arrow to go forward (reverse) in history.
     pub nav_forward: Option<Rect>,
+    /// Clickable edit button on the document header.
+    pub doc_edit: Option<Rect>,
     /// Clickable project selector badge on the bottom bar.
     pub project_selector: Option<Rect>,
     /// The narrow-terminal tab strip: one clickable rect per pane, labelled,
@@ -380,6 +428,8 @@ pub struct Areas {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Divider {
     Tree,
+    /// The boundary under collection box `usize` in the tree column.
+    Collection(usize),
     Sidebar,
     Inspector,
 }
@@ -389,6 +439,19 @@ pub enum Divider {
 pub enum ScrollbarDrag {
     Doc,
     Inspector,
+}
+
+/// A place the reader can be.
+///
+/// `Home` is the screen with the mark on it. It is a destination in its own
+/// right, not the absence of one, which is why the history holds this rather
+/// than a bare path: while it held paths, opening your first page pushed
+/// nothing, so back had nowhere to go and home was unreachable for the rest
+/// of the session.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Spot {
+    Home,
+    Page(PathBuf),
 }
 
 pub struct App {
@@ -401,6 +464,7 @@ pub struct App {
     pub components: platform::Components,
     pub open: Option<Open>,
     pub focus: Focus,
+    pub doc_stop: DocStop,
     pub overlay: Option<Overlay>,
     /// The in-page find bar, open over the reader.
     pub find: Option<PageFind>,
@@ -412,8 +476,8 @@ pub struct App {
     pub show_sidebar: bool,
     pub show_inspector: bool,
     pub zoom: bool,
-    pub back: Vec<PathBuf>,
-    pub forward: Vec<PathBuf>,
+    pub back: Vec<Spot>,
+    pub forward: Vec<Spot>,
     pub pending: Option<char>,
     pub finder_engine: search::Engine,
     pub quit: bool,
@@ -438,6 +502,9 @@ pub struct App {
     /// it to the clipboard.
     selecting_right: bool,
     pub indexing: bool,
+    /// When this instance started. The spinner phase is read off it, so every
+    /// spinner on screen turns together regardless of redraw cadence.
+    started: Instant,
     /// Source-line ranges an agent asked the reader to mark, by page. In
     /// memory only: an agent pointing at a passage must never edit it.
     pub marks: HashMap<PathBuf, Vec<Mark>>,
@@ -504,6 +571,7 @@ impl App {
             components,
             open: None,
             focus: Focus::Tree,
+            doc_stop: DocStop::Content,
             overlay: None,
             find: None,
             toasts: Vec::new(),
@@ -529,6 +597,7 @@ impl App {
             oneline,
             project_name,
             indexing: true,
+            started: Instant::now(),
             marks: HashMap::new(),
             deferred: Vec::new(),
             control_socket: None,
@@ -552,6 +621,36 @@ impl App {
             return self.tree.rows.get(pane.header).map(|r| r.label.clone());
         }
         None
+    }
+
+    /// The collections in the tree column, by name, in the order they are drawn.
+    ///
+    /// The name is the directory's own — `wiki`, `workspace`, `sources` — which
+    /// is what `collection_heights` and `collapsed_collections` are keyed by,
+    /// so the geometry survives a checkout moving.
+    pub fn collection_names(&self) -> Vec<String> {
+        self.tree
+            .collection_paths()
+            .iter()
+            .map(|p| p.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// Fold or unfold the collection the tree cursor is in.
+    fn toggle_collection(&mut self) {
+        if let Some(i) = self.tree.section_of(self.tree.selected) {
+            self.fold_collection(i);
+        }
+    }
+
+    /// Fold or unfold collection `i`. The handle and the key both land here.
+    pub fn fold_collection(&mut self, i: usize) {
+        let names = self.collection_names();
+        let Some(name) = names.get(i).cloned() else { return };
+        if !self.cfg.collapsed_collections.remove(&name) {
+            self.cfg.collapsed_collections.insert(name);
+        }
+        self.persist_widths();
     }
 
     fn hit_tree_row(&self, x: u16, y: u16) -> Option<usize> {
@@ -626,6 +725,29 @@ impl App {
 
     pub fn expire_toasts(&mut self) {
         self.toasts.retain(|t| t.at.elapsed() < TOAST_TTL);
+    }
+
+    // -------------------------------------------------------------- motion
+
+    /// Is anything on screen driven by time rather than by input?
+    ///
+    /// The answer decides whether a `Tick` costs a frame. A static `◐` beside
+    /// a running job reads as a hung process, so background work spins — but
+    /// an idle reader has nothing moving and must not repaint four times a
+    /// second for the rest of the session.
+    pub fn animating(&self) -> bool {
+        self.indexing || !self.jobs.labels().is_empty() || !self.toasts.is_empty()
+    }
+
+    /// The current frame of the app's one spinner.
+    ///
+    /// Driven by the wall clock rather than a counter, so every spinner on
+    /// screen is in step and none of them depends on how often we happened to
+    /// redraw.
+    pub fn spinner(&self) -> char {
+        const FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠇'];
+        let ms = self.started.elapsed().as_millis() as usize;
+        FRAMES[(ms / 120) % FRAMES.len()]
     }
 
     // --------------------------------------------------------------- agents
@@ -795,8 +917,20 @@ impl App {
     // ------------------------------------------------------------- documents
 
     pub fn doc_width(&self) -> u16 {
-        // Two columns of border plus one of padding on each side.
-        self.areas.doc.width.saturating_sub(4).max(20).min(crate::ui::markdown::MAX_WIDTH)
+        self.measure(self.open.as_ref().is_some_and(Open::csv))
+    }
+
+    /// Width a page is laid out at. Two columns of border plus one of padding
+    /// on each side; prose is then capped at the reading measure, but a CSV is
+    /// a table and takes the whole pane — capping it would pan columns that
+    /// had room to be drawn.
+    pub fn measure(&self, csv: bool) -> u16 {
+        let inner = self.areas.doc.width.saturating_sub(4).max(20);
+        if csv {
+            inner
+        } else {
+            inner.min(crate::ui::markdown::MAX_WIDTH)
+        }
     }
 
     pub fn open_path(&mut self, path: &Path, push_history: bool) {
@@ -810,19 +944,21 @@ impl App {
             }
             return;
         }
-        if let Some(current) = self.open.as_ref().map(|o| o.page.path.clone()) {
-            if current == path {
-                return;
-            }
-            if push_history {
-                self.back.push(current);
-                self.forward.clear();
-            }
+        let here = self.here();
+        if here == Spot::Page(path.to_path_buf()) {
+            return;
         }
-        match Open::load(path, &self.cfg.root, self.doc_width(), &self.theme) {
+        // Pushed even when leaving home, so the first page you open has
+        // somewhere to go back to.
+        if push_history {
+            self.back.push(here);
+            self.forward.clear();
+        }
+        match Open::load(path, &self.cfg.root, self.measure(Open::is_csv(path)), &self.theme) {
             Some(open) => {
                 self.open = Some(open);
                 self.focus = Focus::Doc;
+                self.doc_stop = DocStop::Content;
             }
             None => self.toast(Level::Bad, format!("could not read {}", path.display())),
         }
@@ -853,7 +989,8 @@ impl App {
         }
         let (path, anchor, inspect_scroll) =
             (open.page.path.clone(), open.doc.source_for_line(open.scroll), open.inspect_scroll);
-        if let Some(mut fresh) = Open::load(&path, &self.cfg.root, self.doc_width(), &self.theme) {
+        let width = self.measure(Open::is_csv(&path));
+        if let Some(mut fresh) = Open::load(&path, &self.cfg.root, width, &self.theme) {
             fresh.scroll = fresh.doc.line_for_source(anchor);
             fresh.inspect_scroll = inspect_scroll;
             self.open = Some(fresh);
@@ -957,7 +1094,10 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         return false;
     }
     let right_border = area.x + area.width.saturating_sub(1);
-    (x == right_border || x == right_border.saturating_sub(1))
+    let reach = if area.width >= 10 { 2 } else { 1 };
+    let left_edge = right_border.saturating_sub(reach);
+    x >= left_edge
+        && x <= right_border
         && y > area.y
         && y < area.y + area.height.saturating_sub(1)
 }
@@ -1031,6 +1171,15 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                 self.select_tab(*focus);
                 return;
             }
+            if let Some(i) = self
+                .areas
+                .tree_panes
+                .iter()
+                .position(|p| p.fold.is_some_and(|r| r.x == x && r.y == y))
+            {
+                self.fold_collection(i);
+                return;
+            }
             if self.areas.tree_toggle.is_some_and(|r| r.x == x && r.y == y) {
                 self.run(Cmd::ToggleTree);
                 return;
@@ -1055,6 +1204,11 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             if self.areas.nav_forward.is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
                 self.set_focus(Focus::Doc);
                 self.run(Cmd::Forward);
+                return;
+            }
+            if self.areas.doc_edit.is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+                self.set_focus(Focus::Doc);
+                self.run(Cmd::Edit);
                 return;
             }
 
@@ -1176,10 +1330,28 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.set_focus(Focus::Doc);
                     let body = self.areas.inspector_body;
-                    if body.is_empty() || y < body.y || y >= body.y + body.height {
+                    if body.is_empty()
+                        || y < body.y
+                        || y >= body.y + body.height
+                        || x < body.x
+                        || x >= body.x + body.width
+                    {
                         return;
                     }
                     let row = (y - body.y) as usize;
+                    let col = (x - body.x) as u16;
+
+                    if let Some(link) = self
+                        .areas
+                        .inspector_backlinks
+                        .iter()
+                        .find(|b| b.row == row && col >= b.col_start && col < b.col_end)
+                    {
+                        let path = link.path.clone();
+                        self.open_path(&path, true);
+                        return;
+                    }
+
                     if let Some(Some(id)) = self.areas.inspector_rows.get(row).cloned() {
                         let now = Instant::now();
                         let double = match self.last_inspector_click.replace((now, row, self.mouse_down)) {
@@ -1205,7 +1377,30 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         }
 
         if inside(self.areas.doc) {
+            // The editor resolves the pointer itself, against the text area it
+            // recorded at render time: click to place the cursor, drag to
+            // select, wheel to scroll. Without this the pointer does nothing
+            // at all in the one pane where typing happens.
+            if self.open.as_ref().is_some_and(Open::editing) {
+                if matches!(mouse.kind, MouseEventKind::Down(_)) {
+                    self.set_focus(Focus::Doc);
+                }
+                if let Some(editor) = self.open.as_mut().and_then(|o| o.editor.as_mut()) {
+                    editor.mouse(mouse);
+                }
+                return;
+            }
             match mouse.kind {
+                // Shift+wheel is how a terminal reports a sideways scroll on a
+                // mouse that has no tilt; a trackpad sends it directly.
+                MouseEventKind::ScrollDown if mouse.modifiers.contains(KeyModifiers::SHIFT) => {
+                    self.pan(Self::PAN_STEP)
+                }
+                MouseEventKind::ScrollUp if mouse.modifiers.contains(KeyModifiers::SHIFT) => {
+                    self.pan(-Self::PAN_STEP)
+                }
+                MouseEventKind::ScrollRight => self.pan(Self::PAN_STEP),
+                MouseEventKind::ScrollLeft => self.pan(-Self::PAN_STEP),
                 MouseEventKind::ScrollDown => self.scroll(3),
                 MouseEventKind::ScrollUp => self.scroll(-3),
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -1341,6 +1536,20 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         let near = |pos: Option<u16>, coord: u16| {
             pos.is_some_and(|p| coord.abs_diff(p) <= crate::ui::GRAB)
         };
+        let tree = self.areas.tree;
+        if !tree.is_empty() && x >= tree.x && x < tree.x + tree.width {
+            // Checked before the vertical dividers: inside the tree column a
+            // horizontal boundary is the likelier target, and the two only
+            // overlap on the corner cell.
+            if let Some((i, _)) = self
+                .areas
+                .collection_dividers
+                .iter()
+                .find(|(_, edge)| y.abs_diff(*edge) <= crate::ui::GRAB)
+            {
+                return Some(Divider::Collection(*i));
+            }
+        }
         if y >= body.y && y < body.y + body.height {
             if near(self.areas.tree_divider, x) {
                 return Some(Divider::Tree);
@@ -1380,6 +1589,30 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                 let max = total.saturating_sub(min_doc + self.areas.tree.width);
                 let width = (origin + total).saturating_sub(x);
                 self.cfg.sidebar_width = width.clamp(MIN_PANE, max.max(MIN_PANE));
+            }
+            Divider::Collection(i) => {
+                let Some(pane) = self.areas.tree_panes.get(i) else { return };
+                // A folded box is one row by definition; there is nothing to
+                // drag, and writing a height here would silently resize it the
+                // moment it was unfolded.
+                if pane.folded {
+                    return;
+                }
+                let names = self.collection_names();
+                let Some(name) = names.get(i).cloned() else { return };
+                // The divider sits on the first row of the box below, so the
+                // box above keeps every row up to it.
+                let rows = y.saturating_sub(pane.area.y);
+                let max = self
+                    .areas
+                    .tree
+                    .height
+                    .saturating_sub(crate::ui::panes::MIN_COLLECTION_ROWS);
+                let rows = rows.clamp(
+                    crate::ui::panes::MIN_COLLECTION_ROWS,
+                    max.max(crate::ui::panes::MIN_COLLECTION_ROWS),
+                );
+                self.cfg.collection_heights.insert(name, rows);
             }
             Divider::Inspector => {
                 let doc_bottom = self.areas.doc.y + self.areas.doc.height;
@@ -1478,6 +1711,48 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             Focus::Tree => Ctx::Tree,
             _ if self.open.as_ref().is_some_and(Open::editing) => Ctx::Edit,
             Focus::Doc | Focus::Sidebar => Ctx::Doc,
+        }
+    }
+
+    /// A paste, delivered whole by bracketed paste rather than as a burst of
+    /// key events. Where it lands depends on what has focus, because only some
+    /// of these surfaces take text at all.
+    pub fn on_paste(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        // Text inputs read `Char` keys, which is exactly what they were being
+        // fed before bracketed paste was enabled. Control characters are
+        // dropped: a newline in a pasted query would submit the prompt
+        // halfway through the paste.
+        if self.overlay.is_some() || self.find.is_some() {
+            for ch in text.chars().filter(|c| !c.is_control()) {
+                self.on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+            return;
+        }
+        match self.ctx() {
+            Ctx::Sidebar => {
+                let bracketed = self.sidebar.as_ref().is_some_and(herdr::pty::Pane::bracketed_paste);
+                let bytes = if bracketed {
+                    format!("\x1b[200~{text}\x1b[201~").into_bytes()
+                } else {
+                    text.as_bytes().to_vec()
+                };
+                if let Some(pane) = self.sidebar.as_mut() {
+                    pane.send(&bytes);
+                }
+            }
+            Ctx::Edit => {
+                self.with_editor(|editor| editor.paste(text));
+                // Typing again means the warning has to be re-earned.
+                self.discard_armed = false;
+                self.overwrite_armed = false;
+                self.refresh_completion();
+            }
+            // Nothing in the reader or the tree takes text, and replaying the
+            // characters as keys would run each one as a command.
+            _ => self.toast(Level::Info, "nothing here takes a paste — press e to edit"),
         }
     }
 
@@ -1783,7 +2058,12 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                     self.focus = Focus::Doc;
                 }
             }
-            Cmd::ToggleInspector => self.show_inspector = !self.show_inspector,
+            Cmd::ToggleInspector => {
+                self.show_inspector = !self.show_inspector;
+                if !self.show_inspector {
+                    self.doc_stop = DocStop::Content;
+                }
+            }
             Cmd::ShrinkInspector => self.adjust_inspector_height(-2),
             Cmd::GrowInspector => self.adjust_inspector_height(2),
             Cmd::ZoomPane => self.zoom = !self.zoom,
@@ -1793,10 +2073,12 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             Cmd::WidenTree => self.adjust_tree_width(4),
             Cmd::ShrinkSidebar => self.adjust_sidebar_width(-4),
             Cmd::WidenSidebar => self.adjust_sidebar_width(4),
-            Cmd::LeaveSidebar => self.set_focus(Focus::Doc),
+            Cmd::LeaveSidebar => self.cycle_focus(1),
 
             Cmd::Back => self.go_back(),
             Cmd::Forward => self.go_forward(),
+            Cmd::Home => self.go_home(),
+            Cmd::ToggleCollection => self.toggle_collection(),
             Cmd::RevealInTree => self.reveal_open(),
             Cmd::NextFinding => self.jump_finding(1),
             Cmd::PrevFinding => self.jump_finding(-1),
@@ -1828,6 +2110,8 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             Cmd::PageUp => self.scroll(-self.page_step()),
             Cmd::DocTop => self.scroll(isize::MIN / 2),
             Cmd::DocBottom => self.scroll(isize::MAX / 2),
+            Cmd::PanLeft => self.pan(-Self::PAN_STEP),
+            Cmd::PanRight => self.pan(Self::PAN_STEP),
             Cmd::NextLink => self.move_link(true),
             Cmd::PrevLink => self.move_link(false),
             Cmd::FollowLink => self.follow_link(),
@@ -1848,6 +2132,8 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                 self.with_editor(crate::editor::Editor::insert_link);
                 self.refresh_completion();
             }
+            Cmd::Undo => self.with_editor(crate::editor::Editor::undo),
+            Cmd::Redo => self.with_editor(crate::editor::Editor::redo),
 
             Cmd::Lint => self.run_lint(),
             Cmd::SyncRepos => self.run_sync_repos(),
@@ -1891,20 +2177,86 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
             }
             self.focus = next;
         }
+        if next == Focus::Doc {
+            // A direct jump (a number key, a tab-bar click, opening a page)
+            // always means the reader, never the sources box a previous
+            // Tab-cycle happened to leave selected.
+            self.doc_stop = DocStop::Content;
+        }
         self.zoom = false;
     }
 
-    fn cycle_focus(&mut self, delta: isize) {
-        let mut order = vec![Focus::Doc];
+    /// Every Tab-cycle stop currently on screen, in order: each tree
+    /// collection box, the reader, the sources box (only once it is actually
+    /// rendered — the layout can collapse it on a short terminal even with
+    /// `show_inspector` set), then the agents pane.
+    fn stops(&self) -> Vec<Stop> {
+        let mut out = Vec::new();
         if self.show_tree {
-            order.insert(0, Focus::Tree);
+            out.extend((0..self.tree.collection_paths().len()).map(Stop::TreeSection));
+        }
+        out.push(Stop::DocContent);
+        if self.open.is_some() && self.show_inspector && !self.areas.inspector.is_empty() {
+            out.push(Stop::DocSources);
         }
         if self.show_sidebar && self.sidebar.is_some() {
-            order.push(Focus::Sidebar);
+            out.push(Stop::Sidebar);
         }
-        let at = order.iter().position(|f| *f == self.focus).unwrap_or(0) as isize;
-        let n = order.len() as isize;
-        self.focus = order[(((at + delta) % n + n) % n) as usize];
+        out
+    }
+
+    fn current_stop(&self) -> Stop {
+        match self.focus {
+            Focus::Tree => {
+                let i = (0..self.tree.collection_paths().len())
+                    .find(|&i| {
+                        self.tree
+                            .section_span(i)
+                            .is_some_and(|(start, end)| self.tree.selected >= start && self.tree.selected < end)
+                    })
+                    .unwrap_or(0);
+                Stop::TreeSection(i)
+            }
+            Focus::Sidebar => Stop::Sidebar,
+            Focus::Doc => match self.doc_stop {
+                DocStop::Content => Stop::DocContent,
+                DocStop::Sources => Stop::DocSources,
+            },
+        }
+    }
+
+    fn goto_stop(&mut self, stop: Stop) {
+        match stop {
+            Stop::TreeSection(i) => {
+                self.focus = Focus::Tree;
+                if let Some((start, end)) = self.tree.section_span(i) {
+                    if !(self.tree.selected >= start && self.tree.selected < end) {
+                        self.tree.selected = start;
+                    }
+                }
+            }
+            Stop::DocContent => {
+                self.focus = Focus::Doc;
+                self.doc_stop = DocStop::Content;
+            }
+            Stop::DocSources => {
+                self.focus = Focus::Doc;
+                self.doc_stop = DocStop::Sources;
+            }
+            Stop::Sidebar => self.focus = Focus::Sidebar,
+        }
+    }
+
+    fn cycle_focus(&mut self, delta: isize) {
+        let stops = self.stops();
+        if stops.is_empty() {
+            return;
+        }
+        let cur = self.current_stop();
+        let at = stops.iter().position(|s| *s == cur).unwrap_or(0) as isize;
+        let n = stops.len() as isize;
+        let next = stops[(((at + delta) % n + n) % n) as usize];
+        self.goto_stop(next);
     }
 
     /// Rows of document the reader can actually show. The sources pane sits
@@ -1927,7 +2279,39 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         self.viewport_height() as isize
     }
 
+    /// Columns a single pan moves. Wide enough to make progress across a broad
+    /// table, narrow enough that you can still line a column up under the edge.
+    const PAN_STEP: isize = 8;
+
+    /// Pan a table wider than the pane. Clamped to the doc's own width, so the
+    /// right edge of the box is as far as it goes and a prose page — never
+    /// wider than its measure — cannot be panned at all.
+    fn pan(&mut self, delta: isize) {
+        let view = self.viewport_width();
+        if let Some(open) = self.open.as_mut() {
+            let last = open.doc.width.saturating_sub(view);
+            open.hscroll = (open.hscroll as isize + delta).clamp(0, last as isize) as usize;
+        }
+    }
+
+    pub(crate) fn viewport_width(&self) -> usize {
+        let cols = if self.areas.doc_body.width > 0 {
+            self.areas.doc_body.width
+        } else {
+            self.areas.doc.width.saturating_sub(4)
+        };
+        cols.max(1) as usize
+    }
+
     fn scroll(&mut self, delta: isize) {
+        if self.focus == Focus::Doc && self.doc_stop == DocStop::Sources {
+            // The inspector clamps this against its own row count at render
+            // time, so an out-of-range value here is harmless.
+            if let Some(open) = self.open.as_mut() {
+                open.inspect_scroll = (open.inspect_scroll as isize + delta).max(0) as usize;
+            }
+            return;
+        }
         let height = self.viewport_height();
         if let Some(open) = self.open.as_mut() {
             let last = open.doc.height().saturating_sub(height.min(open.doc.height()));
@@ -2096,7 +2480,9 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         let line = &open.doc.lines[line_idx];
         let plain = line.plain_text();
 
-        let rel_x = (x as isize - body.x as isize).max(0) as usize;
+        // The pan moved the text under the pointer, so the clicked cell is
+        // that many columns further into the line than the pane suggests.
+        let rel_x = (x as isize - body.x as isize).max(0) as usize + open.hscroll;
         let mut cur_col = 0usize;
         let mut char_idx = 0usize;
         for c in plain.chars() {
@@ -2281,20 +2667,55 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         }
     }
 
+    /// Where the reader is right now.
+    pub fn here(&self) -> Spot {
+        match self.open.as_ref() {
+            Some(open) => Spot::Page(open.page.path.clone()),
+            None => Spot::Home,
+        }
+    }
+
+    /// Go to a destination without touching the history — the caller has
+    /// already recorded whatever move it is making.
+    fn go_to(&mut self, spot: Spot) {
+        match spot {
+            Spot::Home => self.show_home(),
+            Spot::Page(path) => self.open_path(&path, false),
+        }
+    }
+
+    /// Close the open page and show the home screen.
+    ///
+    /// The find bar belongs to the page that was open, so it closes with it;
+    /// leaving it up would search a page that is no longer on screen.
+    fn show_home(&mut self) {
+        self.open = None;
+        self.find = None;
+        self.focus = Focus::Doc;
+        self.doc_stop = DocStop::Content;
+    }
+
+    /// The `home` command: go to the mark, recording the move so `forward`
+    /// brings you back to the page you left.
+    fn go_home(&mut self) {
+        if self.open.is_none() {
+            return;
+        }
+        self.back.push(self.here());
+        self.forward.clear();
+        self.show_home();
+    }
+
     fn go_back(&mut self) {
         let Some(previous) = self.back.pop() else { return };
-        if let Some(current) = self.open.as_ref().map(|o| o.page.path.clone()) {
-            self.forward.push(current);
-        }
-        self.open_path(&previous, false);
+        self.forward.push(self.here());
+        self.go_to(previous);
     }
 
     fn go_forward(&mut self) {
         let Some(next) = self.forward.pop() else { return };
-        if let Some(current) = self.open.as_ref().map(|o| o.page.path.clone()) {
-            self.back.push(current);
-        }
-        self.open_path(&next, false);
+        self.back.push(self.here());
+        self.go_to(next);
     }
 
     fn jump_finding(&mut self, delta: isize) {
@@ -2829,6 +3250,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
         self.index = Index::build(path, &self.collection_dirs());
         self.components = platform::discover_components(path);
         self.open = None;
+        self.doc_stop = DocStop::Content;
 
         if let Some(pane) = self.sidebar.as_mut() {
             pane.switch_project(name, path);
@@ -3175,6 +3597,7 @@ fn is_on_scrollbar(area: Rect, x: u16, y: u16) -> bool {
                 });
                 if open_under {
                     self.open = None;
+                    self.doc_stop = DocStop::Content;
                 }
                 self.reload_everything();
                 self.toast(Level::Good, format!("deleted {rel}"));
@@ -3593,6 +4016,7 @@ pub fn test_app(root: &Path) -> (App, std::sync::mpsc::Receiver<AppEvent>) {
         inspector_body: Rect::default(),
         inspector_rows: Vec::new(),
         tree_panes: Vec::new(),
+        collection_dividers: Vec::new(),
         tree_divider: Some(29),
         sidebar_divider: Some(90),
         inspector_divider: Some(30),
@@ -3823,6 +4247,94 @@ mod tests {
     }
 
     #[test]
+    fn a_wide_csv_pans_to_its_last_column_instead_of_clipping_it() {
+        let v = Vault::new("csv-wide");
+        let cols: Vec<String> = (0..14).map(|i| format!("col_{i}")).collect();
+        let vals: Vec<String> = (0..14).map(|i| format!("v{i:02}")).collect();
+        v.write("workspace/finance/wide.csv", &format!("{}\n{}\n", cols.join(","), vals.join(",")));
+        let mut app = v.app();
+        app.open_path(&v.path("workspace/finance/wide.csv"), true);
+
+        let view = app.viewport_width();
+        let visible = |app: &App| -> String {
+            let open = app.open.as_ref().unwrap();
+            let over = markdown::Overlays { hscroll: open.hscroll, ..Default::default() };
+            open.doc
+                .to_lines(&app.theme, &over, 0, open.doc.height())
+                .iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                        .chars()
+                        .take(view)
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        // The box is wider than the pane — that is the bug: the tail columns
+        // were drawn past the right edge and clipped away with no way back.
+        assert!(app.open.as_ref().unwrap().doc.width > view, "the table overflows the pane");
+        assert!(!visible(&app).contains("col_13"), "the last column starts off screen");
+
+        // Panning right reaches it, and never scrolls past the right edge.
+        for _ in 0..40 {
+            app.run(Cmd::PanRight);
+        }
+        let open = app.open.as_ref().unwrap();
+        assert_eq!(open.hscroll, open.doc.width - view, "the pan stops at the right edge");
+        let shown = visible(&app);
+        assert!(shown.contains("col_13") && shown.contains("v13"), "{shown}");
+
+        // And back again, clamped at zero rather than going negative.
+        for _ in 0..40 {
+            app.run(Cmd::PanLeft);
+        }
+        assert_eq!(app.open.as_ref().unwrap().hscroll, 0);
+        assert!(visible(&app).contains("col_0"));
+    }
+
+    #[test]
+    fn prose_never_pans_and_a_reflow_drops_the_pan() {
+        let v = Vault::new("csv-pan-reset");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.run(Cmd::PanRight);
+        assert_eq!(
+            app.open.as_ref().unwrap().hscroll,
+            0,
+            "prose is wrapped to the measure, so there is nothing to pan to"
+        );
+
+        let cols: Vec<String> = (0..14).map(|i| format!("col_{i}")).collect();
+        v.write("workspace/finance/wide.csv", &format!("{}\n", cols.join(",")));
+        app.open_path(&v.path("workspace/finance/wide.csv"), true);
+        app.run(Cmd::PanRight);
+        assert!(app.open.as_ref().unwrap().hscroll > 0);
+        // A narrower pane re-lays the table out, so the old offset addresses
+        // columns that no longer sit there.
+        app.areas.doc.width = 40;
+        app.areas.doc_body.width = 36;
+        app.reflow();
+        assert_eq!(app.open.as_ref().unwrap().hscroll, 0, "a reflow starts from the left edge");
+    }
+
+    #[test]
+    fn a_csv_is_laid_out_across_the_whole_pane_not_the_reading_measure() {
+        let v = Vault::new("csv-measure");
+        v.write("workspace/finance/quotes.csv", "symbol,price\nAAPL,232.1\n");
+        let mut app = v.app();
+        app.areas.doc.width = crate::ui::markdown::MAX_WIDTH + 40;
+        app.open_path(&v.path("workspace/finance/quotes.csv"), true);
+        assert_eq!(app.doc_width(), crate::ui::markdown::MAX_WIDTH + 36);
+        app.open_path(&v.path("wiki/a.md"), true);
+        assert_eq!(app.doc_width(), crate::ui::markdown::MAX_WIDTH, "prose keeps the measure");
+    }
+
+    #[test]
     fn opening_a_pdf_hands_off_to_the_system_viewer_instead_of_rendering_it() {
         let v = Vault::new("pdf");
         v.write("sources/literature/smith2024/original.pdf", "%PDF-1.4");
@@ -3945,6 +4457,23 @@ mod tests {
     }
 
     #[test]
+    fn clicking_edit_button_enters_editor() {
+        let v = Vault::new("click-edit-btn");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        assert!(!app.open.as_ref().unwrap().editing());
+
+        app.areas.doc_edit = Some(Rect::new(85, 0, 3, 1));
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 86,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.open.as_ref().unwrap().editing());
+    }
+
+    #[test]
     fn a_single_click_on_a_source_row_selects_it_and_a_double_one_opens_it() {
         let v = Vault::new("citation");
         v.write(
@@ -3989,6 +4518,42 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_backlink_in_inspector_opens_the_page() {
+        let v = Vault::new("backlinks-click");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Alpha");
+
+        app.areas.inspector = Rect::new(30, 30, 60, 10);
+        app.areas.inspector_body = Rect::new(31, 31, 58, 8);
+        app.areas.inspector_divider = None;
+        app.areas.inspector_rows = vec![None];
+        app.areas.inspector_backlinks = vec![
+            InspectorBacklink {
+                row: 0,
+                col_start: 2,
+                col_end: 20,
+                path: v.path("wiki/b.md"),
+            },
+        ];
+
+        let click = |col: u16, row: u16| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        // Clicking on "← " (column 31 or 32, i.e. col 0 or 1 inside body) does not open the page
+        app.on_mouse(click(31, 31));
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Alpha");
+
+        // Clicking inside the backlink title (column 34, i.e. col 3 inside body) opens wiki/b.md
+        app.on_mouse(click(34, 31));
+        assert_eq!(app.open.as_ref().unwrap().page.title(), "Beta");
+    }
+
+    #[test]
     fn following_a_broken_link_says_so_instead_of_navigating() {
         let v = Vault::new("broken");
         let mut app = v.app();
@@ -4005,8 +4570,109 @@ mod tests {
         let v = Vault::new("dedupe");
         let mut app = v.app();
         app.open_path(&v.path("wiki/a.md"), true);
+        // Leaving home is a move like any other, so the first open records it.
+        assert_eq!(app.back, vec![Spot::Home]);
         app.open_path(&v.path("wiki/a.md"), true);
+        assert_eq!(app.back, vec![Spot::Home], "re-opening the same page adds nothing");
+    }
+
+    /// Dragging the boundary under a collection resizes it, and the size
+    /// survives a reload — geometry the user set is theirs, not the session's.
+    #[test]
+    fn a_collection_boundary_drags_and_the_height_persists() {
+        let v = Vault::new("collection-drag");
+        let mut app = v.app();
+        app.areas.tree = Rect::new(0, 0, 30, 30);
+        app.areas.tree_panes = vec![
+            TreePane { area: Rect::new(0, 0, 30, 10), ..Default::default() },
+            TreePane { area: Rect::new(0, 10, 30, 10), ..Default::default() },
+            TreePane { area: Rect::new(0, 20, 30, 10), ..Default::default() },
+        ];
+        app.areas.collection_dividers = vec![(0, 10), (1, 20)];
+
+        // The boundary under the first box is grabbable where it is drawn.
+        assert_eq!(app.divider_at(4, 10), Some(Divider::Collection(0)));
+        assert_eq!(app.divider_at(4, 20), Some(Divider::Collection(1)));
+
+        app.resize_to(Divider::Collection(0), 4, 16);
+        assert_eq!(app.cfg.collection_heights.get("wiki").copied(), Some(16));
+
+        app.persist_widths();
+        let reloaded = crate::config::Config::load_with_herdr_theme(&v.0, None);
+        assert_eq!(reloaded.collection_heights.get("wiki").copied(), Some(16));
+    }
+
+    /// A folded box is one row by definition, so its boundary is not a handle.
+    /// Writing a height there would resize it behind your back on unfold.
+    #[test]
+    fn dragging_a_folded_collections_boundary_does_nothing() {
+        let v = Vault::new("collection-drag-folded");
+        let mut app = v.app();
+        app.areas.tree = Rect::new(0, 0, 30, 30);
+        app.areas.tree_panes = vec![
+            TreePane { area: Rect::new(0, 0, 30, 1), folded: true, ..Default::default() },
+            TreePane { area: Rect::new(0, 1, 30, 29), ..Default::default() },
+        ];
+        app.resize_to(Divider::Collection(0), 4, 12);
+        assert!(app.cfg.collection_heights.is_empty());
+    }
+
+    /// Folding is remembered too, and both the handle and the key reach it.
+    #[test]
+    fn folding_a_collection_persists_and_the_key_toggles_it() {
+        let v = Vault::new("collection-fold");
+        let mut app = v.app();
+        app.fold_collection(0);
+        assert!(app.cfg.collapsed_collections.contains("wiki"));
+        let reloaded = crate::config::Config::load_with_herdr_theme(&v.0, None);
+        assert!(reloaded.collapsed_collections.contains("wiki"));
+
+        // The key acts on whichever collection the cursor is in.
+        app.tree.selected = 0;
+        app.run(Cmd::ToggleCollection);
+        assert!(!app.cfg.collapsed_collections.contains("wiki"), "the same key unfolds it");
+    }
+
+    /// Home is reachable again once you have left it — by the `home` command,
+    /// by walking the history back, and by the arrows that drive both.
+    #[test]
+    fn home_is_a_destination_you_can_navigate_back_to() {
+        let v = Vault::new("home");
+        let mut app = v.app();
+        assert_eq!(app.here(), Spot::Home, "the session opens on the mark");
+
+        app.open_path(&v.path("wiki/a.md"), true);
+        assert!(matches!(app.here(), Spot::Page(_)));
+
+        // Back from the first page lands on home rather than doing nothing.
+        app.run(Cmd::Back);
+        assert_eq!(app.here(), Spot::Home);
+        assert!(app.open.is_none(), "the home screen is what gets drawn");
+
+        // And forward returns to the page that was left.
+        app.run(Cmd::Forward);
+        assert_eq!(app.here(), Spot::Page(v.path("wiki/a.md")));
+
+        // The command gets there in one step. Like opening a page, it is a
+        // fresh navigation and so clears the forward stack — `back` is what
+        // returns you, exactly as it would after following a link.
+        app.run(Cmd::Home);
+        assert_eq!(app.here(), Spot::Home);
+        assert!(app.forward.is_empty(), "a new navigation drops the forward stack");
+        app.run(Cmd::Back);
+        assert_eq!(app.here(), Spot::Page(v.path("wiki/a.md")));
+    }
+
+    /// `home` while already home must not stack a history entry, or repeated
+    /// presses bury the page you came from under copies of the mark.
+    #[test]
+    fn home_from_home_is_a_no_op() {
+        let v = Vault::new("home-idempotent");
+        let mut app = v.app();
+        app.run(Cmd::Home);
+        app.run(Cmd::Home);
         assert!(app.back.is_empty());
+        assert_eq!(app.here(), Spot::Home);
     }
 
     #[test]
@@ -4093,15 +4759,49 @@ mod tests {
         let mut app = v.app();
         app.show_sidebar = false;
         app.focus = Focus::Tree;
+        assert_eq!(app.tree.collection_paths().len(), 2, "fixture has a wiki and a workspace collection");
+
+        // Each collection box is its own stop before Tab moves on to the doc.
+        app.run(Cmd::CycleFocus);
+        assert_eq!(app.focus, Focus::Tree, "steps into the second collection box first");
+        let (second_start, _) = app.tree.section_span(1).unwrap();
+        assert_eq!(app.tree.selected, second_start);
+
         app.run(Cmd::CycleFocus);
         assert_eq!(app.focus, Focus::Doc);
         app.run(Cmd::CycleFocus);
-        assert_eq!(app.focus, Focus::Tree, "no sidebar to visit");
+        assert_eq!(app.focus, Focus::Tree, "no sidebar to visit, wraps back to the first collection");
 
         app.show_tree = false;
         app.focus = Focus::Doc;
         app.run(Cmd::CycleFocus);
         assert_eq!(app.focus, Focus::Doc);
+    }
+
+    #[test]
+    fn cycling_stops_at_the_sources_box_when_the_inspector_is_open() {
+        let v = Vault::new("cycle-sources");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.show_sidebar = false;
+        app.show_tree = false;
+        app.show_inspector = true;
+        // The renderer sizes this normally; set it directly so `stops()` sees
+        // the inspector as actually on screen without a full layout pass.
+        app.areas.inspector = Rect::new(0, 30, 60, 10);
+        app.focus = Focus::Doc;
+        app.doc_stop = DocStop::Content;
+
+        app.run(Cmd::CycleFocus);
+        assert_eq!(app.focus, Focus::Doc);
+        assert_eq!(app.doc_stop, DocStop::Sources, "the sources box gets its own stop");
+
+        app.run(Cmd::CycleFocus);
+        assert_eq!(app.focus, Focus::Doc);
+        assert_eq!(app.doc_stop, DocStop::Content, "wraps back with tree and sidebar both hidden");
+
+        app.run(Cmd::CycleFocusBack);
+        assert_eq!(app.doc_stop, DocStop::Sources, "shift+tab steps backward through the same stops");
     }
 
     #[test]
@@ -4124,6 +4824,23 @@ mod tests {
     }
 
     #[test]
+    fn leaving_the_sidebar_advances_instead_of_stepping_back() {
+        let v = Vault::new("leave-sidebar");
+        let mut app = v.app();
+        app.show_sidebar = true;
+        let cmd = portable_pty::CommandBuilder::new("/bin/sh");
+        let (tx, _rx) = std::sync::mpsc::channel();
+        app.sidebar = Some(crate::herdr::pty::Pane::spawn_command(cmd, 10, 40, tx, None).unwrap());
+        app.focus = Focus::Sidebar;
+
+        // F12 ("leave agents pane") used to always land on Doc, one step
+        // *back* in Tree → Doc → Sidebar order. It should behave like Tab:
+        // advance forward, wrapping to Tree.
+        app.run(Cmd::LeaveSidebar);
+        assert_eq!(app.focus, Focus::Tree, "f12 advances forward, wrapping past doc to the tree");
+    }
+
+    #[test]
     fn the_editor_opens_at_the_line_being_read_and_saves() {
         let v = Vault::new("edit");
         let mut app = v.app();
@@ -4138,6 +4855,77 @@ mod tests {
 
         app.run(Cmd::Save);
         assert!(app.toasts.last().unwrap().text.starts_with("saved"));
+    }
+
+    #[test]
+    fn a_paste_into_the_editor_lands_verbatim() {
+        let v = Vault::new("paste-edit");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.run(Cmd::Edit);
+        let row = app.open.as_ref().unwrap().editor.as_ref().unwrap().cursor_line();
+
+        // A list, which as a burst of key events would have had every marker
+        // doubled by `continue_block`, and a tab, which would have indented.
+        app.on_paste("- one\n- two\n\ttail");
+
+        let editor = app.open.as_ref().unwrap().editor.as_ref().unwrap();
+        let lines: Vec<String> = editor.text().lines().map(str::to_string).collect();
+        assert_eq!(lines[row], "- one");
+        assert_eq!(lines[row + 1], "- two");
+        // What the cursor was sitting in front of rides on the last pasted
+        // line, the way splitting a line always works.
+        assert_eq!(lines[row + 2], "\ttail# Alpha");
+        assert_eq!(editor.cursor_line(), row + 2);
+        assert_eq!(editor.cursor_col(), "\ttail".chars().count(), "cursor sits at the end of the paste");
+    }
+
+    /// Before bracketed paste, a paste reached the reader as one key event per
+    /// character, so pasting prose containing `L` ran the linter and `P` opened
+    /// the project switcher.
+    #[test]
+    fn undo_and_redo_walk_the_buffer_back_and_forward() {
+        let v = Vault::new("undo");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.run(Cmd::Edit);
+        let before = app.open.as_ref().unwrap().editor.as_ref().unwrap().text();
+
+        app.on_key(ch('x'));
+        assert!(app.open.as_ref().unwrap().editor.as_ref().unwrap().dirty());
+
+        app.on_key(ctrl('z'));
+        assert_eq!(app.open.as_ref().unwrap().editor.as_ref().unwrap().text(), before, "undo restored the buffer");
+
+        app.on_key(ctrl('r'));
+        assert_ne!(app.open.as_ref().unwrap().editor.as_ref().unwrap().text(), before, "redo put the edit back");
+    }
+
+    #[test]
+    fn a_paste_into_the_reader_runs_no_commands() {
+        let v = Vault::new("paste-reader");
+        let mut app = v.app();
+        app.open_path(&v.path("wiki/a.md"), true);
+        app.focus = Focus::Doc;
+
+        app.on_paste("Lint P / text");
+
+        assert!(app.overlay.is_none(), "no command ran");
+        assert!(app.find.is_none());
+        assert!(!app.open.as_ref().unwrap().editing());
+    }
+
+    #[test]
+    fn a_paste_into_a_prompt_is_typed_into_it() {
+        let v = Vault::new("paste-prompt");
+        let mut app = v.app();
+        app.run(Cmd::FindFiles);
+        app.on_paste("alpha\nbeta");
+        match app.overlay.as_ref() {
+            // The newline is dropped rather than submitting the finder midway.
+            Some(Overlay::Finder(f)) => assert_eq!(f.query, "alphabeta"),
+            _ => panic!("expected the finder to still be open"),
+        }
     }
 
     #[test]
@@ -4426,6 +5214,8 @@ mod tests {
             start: 1,
             end: app.tree.rows.len(),
             offset: 0,
+            fold: None,
+            folded: false,
         }];
         app.on_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -5028,6 +5818,27 @@ mod tests {
         assert!(app.open.as_ref().unwrap().scroll > 0);
         release(&mut app, 119, 20);
         assert!(app.dragging_scrollbar.is_none());
+    }
+
+    #[test]
+    fn clicking_doc_scrollbar_at_inner_columns() {
+        let v = Vault::new("scrollbar-inner");
+        let mut app = laid_out(&v);
+        let long_body = (0..100).map(|i| format!("Line {i}\n\n")).collect::<String>();
+        let path = v.write(
+            "wiki/long_doc.md",
+            &format!("---\ntitle: LD\ntype: concept\ncategory: c\n---\n{long_body}"),
+        );
+        app.open_path(&path, false);
+        // Column 118 is right_border - 1 (inner thumb column)
+        press(&mut app, 118, 20);
+        assert_eq!(app.dragging_scrollbar, Some(ScrollbarDrag::Doc));
+        release(&mut app, 118, 20);
+
+        // Column 117 is right_border - 2 (reach leeway column)
+        press(&mut app, 117, 20);
+        assert_eq!(app.dragging_scrollbar, Some(ScrollbarDrag::Doc));
+        release(&mut app, 117, 20);
     }
 
     #[test]

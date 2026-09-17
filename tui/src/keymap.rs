@@ -45,6 +45,8 @@ pub enum Cmd {
 
     // Navigation
     Back,
+    Home,
+    ToggleCollection,
     Forward,
     RevealInTree,
     NextFinding,
@@ -71,6 +73,8 @@ pub enum Cmd {
     PageUp,
     DocTop,
     DocBottom,
+    PanLeft,
+    PanRight,
     NextLink,
     PrevLink,
     FollowLink,
@@ -86,6 +90,8 @@ pub enum Cmd {
     Bold,
     Italic,
     Link,
+    Undo,
+    Redo,
 
     // Engine
     Lint,
@@ -123,6 +129,8 @@ impl Cmd {
                 | Cmd::PageUp
                 | Cmd::DocTop
                 | Cmd::DocBottom
+                | Cmd::PanLeft
+                | Cmd::PanRight
                 | Cmd::NextLink
                 | Cmd::PrevLink
                 | Cmd::ClearSelection
@@ -135,6 +143,8 @@ impl Cmd {
                 | Cmd::Bold
                 | Cmd::Italic
                 | Cmd::Link
+                | Cmd::Undo
+                | Cmd::Redo
         )
     }
 }
@@ -199,6 +209,7 @@ pub const BINDINGS: &[Binding] = &[
     // Navigation
     b(&["ctrl+o", "["], Cmd::Back, "back", "navigate", Ctx::Global),
     b(&["]"], Cmd::Forward, "forward", "navigate", Ctx::Global),
+    b(&["g h"], Cmd::Home, "home", "navigate", Ctx::Global),
     b(&["g r"], Cmd::RevealInTree, "reveal in tree", "navigate", Ctx::Global),
     b(&["n"], Cmd::NextFinding, "next finding", "navigate", Ctx::Global),
     b(&["N"], Cmd::PrevFinding, "previous finding", "navigate", Ctx::Global),
@@ -211,6 +222,7 @@ pub const BINDINGS: &[Binding] = &[
     b(&["}"], Cmd::TreeNextSibling, "next sibling", "tree", Ctx::Tree),
     b(&["{"], Cmd::TreePrevSibling, "previous sibling", "tree", Ctx::Tree),
     b(&["H"], Cmd::TreeCollapseAll, "collapse all", "tree", Ctx::Tree),
+    b(&["-"], Cmd::ToggleCollection, "fold collection", "tree", Ctx::Tree),
     b(&["g g"], Cmd::TreeTop, "first", "tree", Ctx::Tree),
     b(&["G"], Cmd::TreeBottom, "last", "tree", Ctx::Tree),
     b(&["<", "shift+left"], Cmd::ShrinkTree, "shrink tree", "tree", Ctx::Tree),
@@ -222,6 +234,8 @@ pub const BINDINGS: &[Binding] = &[
     b(&["ctrl+u"], Cmd::HalfPageUp, "half page up", "page", Ctx::Doc),
     b(&["pagedown"], Cmd::PageDown, "page down", "page", Ctx::Doc),
     b(&["pageup"], Cmd::PageUp, "page up", "page", Ctx::Doc),
+    b(&["alt+left"], Cmd::PanLeft, "pan left", "page", Ctx::Doc),
+    b(&["alt+right"], Cmd::PanRight, "pan right", "page", Ctx::Doc),
     b(&["g g"], Cmd::DocTop, "top", "page", Ctx::Doc),
     b(&["G"], Cmd::DocBottom, "bottom", "page", Ctx::Doc),
     b(&["l", "right"], Cmd::NextLink, "next link", "page", Ctx::Doc),
@@ -238,6 +252,12 @@ pub const BINDINGS: &[Binding] = &[
     b(&["ctrl+b"], Cmd::Bold, "bold", "edit", Ctx::Edit),
     b(&["alt+i"], Cmd::Italic, "italic", "edit", Ctx::Edit),
     b(&["ctrl+l"], Cmd::Link, "insert link", "edit", Ctx::Edit),
+    // edtui's emacs map already undoes on `ctrl+u`, but that is readline's
+    // kill-to-start-of-line everywhere else, and nobody finds it by guessing.
+    // These are the keys people actually reach for, and being bindings they
+    // are listed in the help overlay rather than hidden inside the crate.
+    b(&["ctrl+z"], Cmd::Undo, "undo", "edit", Ctx::Edit),
+    b(&["ctrl+r"], Cmd::Redo, "redo", "edit", Ctx::Edit),
     // Keys the agents pane intercepts before forwarding to the child.
     // Everything else, ctrl+space included, belongs to the child.
     b(&["f12"], Cmd::LeaveSidebar, "leave agents pane", "layout", Ctx::Sidebar),

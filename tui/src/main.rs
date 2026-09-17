@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -147,6 +149,7 @@ impl Drop for Guard {
     /// user in raw mode with no echo, which is a genuinely hostile way to fail.
     fn drop(&mut self) {
         let _ = disable_raw_mode();
+        let _ = stdout().execute(DisableBracketedPaste);
         let _ = stdout().execute(DisableMouseCapture);
         let _ = stdout().execute(LeaveAlternateScreen);
     }
@@ -156,9 +159,14 @@ fn enter() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableMouseCapture)?;
+    // Without this the terminal delivers a paste as a burst of ordinary key
+    // events: every character would run as a command in the reader, and in
+    // the editor each newline would re-trigger list continuation.
+    stdout().execute(EnableBracketedPaste)?;
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
+        let _ = stdout().execute(DisableBracketedPaste);
         let _ = stdout().execute(DisableMouseCapture);
         let _ = stdout().execute(LeaveAlternateScreen);
         hook(info);
@@ -168,6 +176,7 @@ fn enter() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
 
 fn leave(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
+    stdout().execute(DisableBracketedPaste)?;
     stdout().execute(DisableMouseCapture)?;
     stdout().execute(LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -194,12 +203,7 @@ fn run(
                     redraw = true;
                 }
                 AppEvent::Paste(text) => {
-                    for ch in text.chars() {
-                        app.on_key(crossterm::event::KeyEvent::new(
-                            crossterm::event::KeyCode::Char(ch),
-                            crossterm::event::KeyModifiers::NONE,
-                        ));
-                    }
+                    app.on_paste(&text);
                     redraw = true;
                 }
                 AppEvent::Mouse(mouse) => {
@@ -228,6 +232,9 @@ fn run(
                 }
                 AppEvent::PtyOutput => redraw = true,
                 AppEvent::PtyExited => redraw = true,
+                // Time passing is only a reason to redraw when something on
+                // screen is actually driven by time.
+                AppEvent::Tick => redraw |= app.animating(),
             }
         }
 

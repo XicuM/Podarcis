@@ -2,8 +2,15 @@
 //!
 //! Terminal input, filesystem changes, background job output and the herdr PTY
 //! all arrive on the same channel, so the main loop blocks on a single receive
-//! and never polls. There is no tick: a frame is drawn because something
-//! happened, not because time passed.
+//! and never polls.
+//!
+//! There is one timed event, `Tick`, and it is deliberately not a frame: the
+//! input thread's poll has to time out anyway to notice a closed channel, so
+//! the timeout is published rather than thrown away. Only work that is
+//! genuinely time-based — a spinner, an expiring toast — redraws on it, and
+//! `App::animating` is what decides. It used to send `PtyOutput` instead,
+//! which meant the app repainted four times a second forever, herdr pane or
+//! not, while this comment claimed there was no tick at all.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -31,6 +38,8 @@ pub enum AppEvent {
     Control(crate::control::Request),
     /// The herdr child produced output and the pane needs a repaint.
     PtyOutput,
+    /// The input poll timed out. Time passed; nothing else happened.
+    Tick,
     /// The herdr child exited.
     PtyExited,
 }
@@ -102,7 +111,7 @@ fn spawn_input(tx: Sender<AppEvent>) {
         match crossterm::event::poll(Duration::from_millis(250)) {
             Ok(true) => {}
             Ok(false) => {
-                if tx.send(AppEvent::PtyOutput).is_err() {
+                if tx.send(AppEvent::Tick).is_err() {
                     return;
                 }
                 continue;

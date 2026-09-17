@@ -101,6 +101,25 @@ impl Index {
         self.by_rel.get(rel).map(|i| &self.entries[*i])
     }
 
+    /// Vault-wide findings, as `(errors, warnings)`.
+    ///
+    /// Counted per finding rather than per page, because a page with six
+    /// broken links is six things to fix, and directory-level findings are
+    /// warnings that belong to no page at all.
+    pub fn finding_counts(&self) -> (usize, usize) {
+        let mut errors = 0;
+        let mut warns = 0;
+        for finding in self.entries.iter().flat_map(|e| &e.findings) {
+            match super::lint::severity(finding.code) {
+                Severity::Error => errors += 1,
+                Severity::Warn => warns += 1,
+                Severity::Clean => {}
+            }
+        }
+        warns += self.dir_findings.len();
+        (errors, warns)
+    }
+
     /// Pages that link *to* `rel`, sorted by title.
     pub fn backlinks(&self, rel: &str) -> Vec<&Entry> {
         let mut out: Vec<&Entry> = self

@@ -75,10 +75,27 @@ fn split_body(body: Rect, app: &App) -> Areas {
     } else {
         (Vec::new(), body)
     };
-    // On a narrow terminal only the focused side pane survives, so the reader
-    // never gets squeezed into a column too thin to read.
-    let show_tree = app.show_tree && (!narrow || app.focus == Focus::Tree);
-    let show_sidebar = app.show_sidebar && (!narrow || app.focus == Focus::Sidebar);
+    // Below the threshold the panes stop sharing the row entirely: the tab
+    // strip is the only way to switch, so exactly one pane is showing at a
+    // time and it gets the full width. Splitting here would leave the reader
+    // in a column too thin to read beside a tree it did not ask to see.
+    if narrow {
+        let focus = match app.focus {
+            Focus::Tree if !app.show_tree => Focus::Doc,
+            Focus::Sidebar if !app.show_sidebar => Focus::Doc,
+            other => other,
+        };
+        let mut areas = match focus {
+            Focus::Tree => Areas { tree: body, ..Default::default() },
+            Focus::Sidebar => Areas { sidebar: body, ..Default::default() },
+            Focus::Doc => Areas { doc: body, ..Default::default() },
+        };
+        areas.tab_bar = tab_bar;
+        return areas;
+    }
+
+    let show_tree = app.show_tree;
+    let show_sidebar = app.show_sidebar;
 
     let min_doc = 30u16;
     let min_pane = 12u16;
@@ -174,7 +191,8 @@ fn split_body(body: Rect, app: &App) -> Areas {
 /// a hidden pane's tab is still a legitimate switch target, it just reopens
 /// the pane on click (`App::select_tab`).
 fn tab_layout(bar: Rect) -> Vec<(Focus, &'static str, Rect)> {
-    const TABS: [(Focus, &str); 3] = [(Focus::Tree, "Tree"), (Focus::Doc, "Doc"), (Focus::Sidebar, "Agents")];
+    const TABS: [(Focus, &str); 3] =
+        [(Focus::Tree, "tree"), (Focus::Doc, "page"), (Focus::Sidebar, "agent")];
     if bar.width == 0 {
         return Vec::new();
     }
@@ -235,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_terminal_keeps_only_the_focused_side_pane() {
+    fn a_narrow_terminal_shows_exactly_the_focused_pane_and_nothing_else() {
         let mut a = app_in("narrow");
         a.focus = Focus::Doc;
         let areas = split_body(Rect::new(0, 0, 80, 40), &a);
@@ -245,8 +263,34 @@ mod tests {
 
         a.focus = Focus::Tree;
         let areas = split_body(Rect::new(0, 0, 80, 40), &a);
-        assert!(!areas.tree.is_empty());
+        assert_eq!(areas.tree.width, 80);
+        assert!(areas.doc.is_empty(), "the page does not sit beside the tree when narrow");
         assert!(areas.sidebar.is_empty());
+
+        a.focus = Focus::Sidebar;
+        let areas = split_body(Rect::new(0, 0, 80, 40), &a);
+        assert_eq!(areas.sidebar.width, 80);
+        assert!(areas.doc.is_empty());
+        assert!(areas.tree.is_empty());
+    }
+
+    #[test]
+    fn a_narrow_terminal_falls_back_to_the_page_when_the_focused_pane_is_closed() {
+        let mut a = app_in("narrow-closed");
+        a.focus = Focus::Tree;
+        a.show_tree = false;
+        let areas = split_body(Rect::new(0, 0, 80, 40), &a);
+        assert_eq!(areas.doc.width, 80);
+        assert!(areas.tree.is_empty());
+    }
+
+    #[test]
+    fn a_narrow_terminal_draws_no_dividers_or_handles() {
+        let mut a = app_in("narrow-handles");
+        a.focus = Focus::Doc;
+        let areas = split_body(Rect::new(0, 0, 80, 40), &a);
+        assert!(areas.tree_divider.is_none() && areas.sidebar_divider.is_none());
+        assert!(areas.tree_toggle.is_none() && areas.sidebar_toggle.is_none());
     }
 
     #[test]
@@ -266,7 +310,7 @@ mod tests {
         assert_eq!(areas.doc.y, areas.tab_bar[0].2.y + 1);
 
         let labels: Vec<&str> = areas.tab_bar.iter().map(|(_, l, _)| *l).collect();
-        assert_eq!(labels, ["Tree", "Doc", "Agents"]);
+        assert_eq!(labels, ["tree", "page", "agent"]);
 
         let total: u16 = areas.tab_bar.iter().map(|(_, _, r)| r.width).sum();
         assert_eq!(total, 80, "the tabs fill the whole width, no leftover sliver");

@@ -379,6 +379,57 @@ impl Editor {
         }
     }
 
+    /// Insert pasted text at the cursor, verbatim.
+    ///
+    /// Not edtui's own paste handler: that one is Vim's `p`, which appends
+    /// *after* the character under the cursor and leaves the cursor one short.
+    /// In a modeless editor the cursor sits between characters, so a paste
+    /// belongs exactly where it is. `\r\n` is normalized — a paste from a
+    /// browser otherwise leaves a stray CR at every line end.
+    pub fn paste(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let Some((first, rest)) = text.split_once('\n') else {
+            return self.insert_at_cursor(&text);
+        };
+
+        // Split the current line at the cursor, keeping the tail for the last
+        // pasted line to carry.
+        let row = self.state.cursor.row;
+        let chars: Vec<char> = self.line_text(row).chars().collect();
+        let col = self.state.cursor.col.min(chars.len());
+        let head: String = chars[..col].iter().collect();
+        let tail: String = chars[col..].iter().collect();
+        self.set_line(row, &format!("{head}{first}"));
+
+        let lines: Vec<&str> = rest.split('\n').collect();
+        let last = lines.len() - 1;
+        for (i, line) in lines.iter().enumerate() {
+            let text = if i == last { format!("{line}{tail}") } else { (*line).to_string() };
+            self.state.lines.insert(RowIndex::new(row + 1 + i), text.chars().collect::<Vec<char>>());
+        }
+        self.state.cursor = Index2::new(row + 1 + last, lines[last].chars().count());
+    }
+
+    pub fn undo(&mut self) {
+        self.state.undo();
+        self.completion = None;
+    }
+
+    pub fn redo(&mut self) {
+        self.state.redo();
+        self.completion = None;
+    }
+
+    /// Hand a mouse event to edtui, which resolves it against the text area it
+    /// recorded at render time — so this takes screen coordinates, untouched,
+    /// and events outside that area are ignored by the handler itself.
+    pub fn mouse(&mut self, event: crossterm::event::MouseEvent) {
+        self.events.on_mouse_event(event, &mut self.state);
+        // A click lands in whatever the pointer hit, which is rarely still
+        // inside the construct being completed.
+        self.completion = None;
+    }
+
     /// Recompute the completion popup from the text before the cursor.
     pub fn refresh_completion(&mut self, page: &Page, index: &Index, root: &Path) {
         if self.state.mode != EditorMode::Insert {

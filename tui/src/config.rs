@@ -6,7 +6,7 @@
 //! (`tui:`, `repositories:`) and leaves every other byte alone — see its own
 //! doc comment for why a full YAML round-trip would be wrong.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -123,8 +123,18 @@ pub struct Config {
     pub apm_off_reason: Option<&'static str>,
     /// `repositories:` map from collection name to git URL, `local`, or `gdrive`.
     pub repositories: HashMap<String, String>,
-    /// `oneliners:` splash lines shown in the status bar's right corner.
+    /// `oneliners:` splash lines shown on the home screen.
     pub oneliners: Vec<String>,
+    /// Rows each collection's box gets in the tree column, by collection name.
+    ///
+    /// A name that is absent takes an even share. The *last* open collection
+    /// always absorbs whatever is left over, so its entry — if any — is
+    /// ignored; that is what keeps the column exactly full at any terminal
+    /// height without storing a fraction.
+    pub collection_heights: HashMap<String, u16>,
+    /// Collections folded down to their header row. A folded collection keeps
+    /// its height here, so unfolding returns it to the size it had.
+    pub collapsed_collections: BTreeSet<String>,
 }
 
 impl Config {
@@ -187,6 +197,22 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
+            collection_heights: tui
+                .and_then(|t| t.get("collection_heights"))
+                .and_then(Value::as_mapping)
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| {
+                            Some((k.as_str()?.to_string(), v.as_u64()?.min(u16::MAX as u64) as u16))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            collapsed_collections: tui
+                .and_then(|t| t.get("collapsed_collections"))
+                .and_then(Value::as_sequence)
+                .map(|s| s.iter().filter_map(|v| Some(v.as_str()?.to_string())).collect())
+                .unwrap_or_default(),
             oneliners: doc
                 .get("oneliners")
                 .and_then(Value::as_sequence)
@@ -243,13 +269,27 @@ impl Config {
     /// PyYAML then loads a `datetime`, which `podarcis status --json` cannot
     /// serialize.
     pub fn save_tui(&self) -> Result<()> {
-        let block = format!(
+        let mut block = format!(
             "tui:\n  tree_width: {}\n  sidebar_width: {}\n  inspector_height: {}\n  theme: {}\n",
             self.tree_width,
             self.sidebar_width,
             self.inspector_height,
             self.flavor.as_str(),
         );
+        // Sorted, so the file does not churn between saves just because a hash
+        // map iterated in a different order.
+        let mut heights: Vec<(&String, &u16)> = self.collection_heights.iter().collect();
+        heights.sort();
+        if !heights.is_empty() {
+            block.push_str("  collection_heights:\n");
+            for (name, rows) in heights {
+                block.push_str(&format!("    {name}: {rows}\n"));
+            }
+        }
+        if !self.collapsed_collections.is_empty() {
+            let names: Vec<&str> = self.collapsed_collections.iter().map(String::as_str).collect();
+            block.push_str(&format!("  collapsed_collections: [{}]\n", names.join(", ")));
+        }
         self.rewrite_block("tui", &block)
     }
 
@@ -483,10 +523,10 @@ mod tests {
     }
 
     #[test]
-    fn config_defaults_to_latte_and_reads_overrides() {
+    fn config_defaults_to_the_house_palette_and_reads_overrides() {
         let dir = scratch("config");
         let cfg = Config::load_with_herdr_theme(&dir, None);
-        assert_eq!(cfg.flavor, Flavor::Latte);
+        assert_eq!(cfg.flavor, Flavor::Podarcis);
         assert!(cfg.qmd_enabled());
         assert_eq!(cfg.tree_width, 30);
 
@@ -630,7 +670,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("podarcis-empty-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = Config::load_with_herdr_theme(&dir, None);
-        assert_eq!(cfg.flavor, Flavor::Latte);
+        assert_eq!(cfg.flavor, Flavor::Podarcis);
     }
 
     #[test]

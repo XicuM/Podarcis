@@ -11,15 +11,17 @@ use pulldown_cmark::{
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::Theme;
 use crate::vault::links::LinkKind;
 
 /// Prose past this column count is harder to track line-to-line, so the
 /// reader and edit preview never wrap wider than this even on an ultra-wide
-/// pane.
-pub const MAX_WIDTH: u16 = 120;
+/// pane. Typography's usual advice is 45-90 characters a line; 89 sits at the
+/// top of that range, which suits reference prose full of long identifiers
+/// without letting the eye lose its place on the return sweep.
+pub const MAX_WIDTH: u16 = 89;
 
 #[derive(Clone, Debug)]
 pub struct Seg {
@@ -114,11 +116,15 @@ pub struct Overlays<'a> {
     /// Index into `finds` of the hit the find bar is on.
     pub current_find: usize,
     pub marks: &'a [Mark],
+    /// Display columns scrolled off the left edge. A table wider than the pane
+    /// is laid out at its true width and panned, rather than squeezed until
+    /// every cell is an ellipsis.
+    pub hscroll: usize,
 }
 
 impl<'a> Overlays<'a> {
     pub fn new(link: Option<usize>, selection: Option<Selection>, finds: &'a Finds, marks: &'a [Mark]) -> Self {
-        Self { link, selection, finds: &finds.hits, current_find: finds.current, marks }
+        Self { link, selection, finds: &finds.hits, current_find: finds.current, marks, hscroll: 0 }
     }
 }
 
@@ -160,6 +166,14 @@ pub struct Doc {
     /// short `[1]` where the source writes `[^atarodi_2024_…]` and the
     /// inspector can number the same sources identically.
     pub citations: Vec<String>,
+    /// Display column each table column ends at, for a doc that is one table
+    /// (a CSV). Empty for prose: a page with several tables has no single
+    /// column geometry to report.
+    pub col_stops: Vec<usize>,
+    /// Widest rendered line, in display columns. Kept as the lines are pushed:
+    /// the reader asks for it on every frame, and a long CSV would otherwise
+    /// re-measure thousands of lines to answer.
+    pub width: usize,
 }
 
 impl Doc {
@@ -180,6 +194,17 @@ impl Doc {
 impl Doc {
     pub fn height(&self) -> usize {
         self.lines.len()
+    }
+
+    /// Table columns wholly left of `hscroll`, and those starting beyond
+    /// `hscroll + view` — what a pan is hiding on either side.
+    pub fn hidden_columns(&self, hscroll: usize, view: usize) -> (usize, usize) {
+        if self.col_stops.is_empty() {
+            return (0, 0);
+        }
+        let left = self.col_stops.iter().filter(|stop| **stop <= hscroll).count();
+        let right = self.col_stops.iter().filter(|stop| **stop > hscroll + view).count();
+        (left, right)
     }
 
     /// Extract selected text as a string, preserving line breaks.
@@ -396,10 +421,49 @@ impl Doc {
                         ));
                     }
                 }
-                Line::from(spans)
+                Line::from(shift(spans, over.hscroll))
             })
             .collect()
     }
+}
+
+/// Drop `offset` display columns off the front of a rendered line.
+///
+/// Applied after styling, so selections, find hits and marks — all addressed in
+/// whole-line character columns — stay on the text they were computed for. A
+/// double-width glyph straddling the cut is dropped and replaced by a space, or
+/// every column right of it would sit one cell late.
+fn shift(spans: Vec<Span<'static>>, offset: usize) -> Vec<Span<'static>> {
+    if offset == 0 {
+        return spans;
+    }
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len());
+    let mut used = 0usize;
+    for span in spans {
+        if used >= offset {
+            out.push(span);
+            continue;
+        }
+        let w = span.content.width();
+        if used + w <= offset {
+            used += w;
+            continue;
+        }
+        let mut rest = String::new();
+        for ch in span.content.chars() {
+            if used >= offset {
+                rest.push(ch);
+            } else {
+                used += ch.to_string().width();
+            }
+        }
+        if used > offset {
+            out.push(Span::styled(" ".repeat(used - offset), span.style));
+        }
+        out.push(Span::styled(rest, span.style));
+        used = offset.max(used);
+    }
+    out
 }
 
 pub fn render(body: &str, width: u16, theme: &Theme) -> Doc {
@@ -425,6 +489,7 @@ pub fn render(body: &str, width: u16, theme: &Theme) -> Doc {
         w.event(event);
     }
     w.flush();
+    w.push_blank();
     w.doc
 }
 
@@ -668,6 +733,8 @@ impl<'a> Writer<'a> {
                 }
             }
         }
+        let width = segs.iter().map(|s| s.text.width()).sum();
+        self.doc.width = self.doc.width.max(width);
         self.doc.lines.push(DocLine { segs, src_line: self.src_line });
     }
 
@@ -1172,12 +1239,18 @@ impl<'a> Writer<'a> {
     fn draw_code(&mut self, lang: &str, code: &str, from: usize) {
         let indent = self.indent();
         let band = self.width.saturating_sub(indent).max(8);
-        // gutter, one space, and a trailing space of breathing room.
-        let avail = band.saturating_sub(3);
         let surface = Style::default().bg(self.theme.surface);
-        let mut hl = crate::ui::highlight::Highlighter::new(lang);
+        let mut hl = crate::ui::highlight::Highlighter::for_code(lang, code);
 
-        let row = |this: &mut Self, body: Vec<Seg>| {
+        let lines: Vec<&str> = code.trim_end_matches('\n').lines().collect();
+        let total_lines = lines.len().max(1);
+        let num_width = total_lines.to_string().len().max(2);
+        // gutter: "▎" (1) + " " (1) + num (num_width) + " " (1) + "│" (1) + " " (1) = num_width + 5
+        let gutter_w = num_width + 5;
+        // Gutter plus at least 1 trailing space of breathing room
+        let avail = band.saturating_sub(gutter_w + 1).max(1);
+
+        let row = |this: &mut Self, line_num: Option<usize>, body: Vec<Seg>| {
             let mut segs = Vec::new();
             if indent > 0 {
                 segs.push(Seg { text: " ".repeat(indent), style: Style::default(), link: None });
@@ -1188,54 +1261,95 @@ impl<'a> Writer<'a> {
                 link: None,
             });
             segs.push(Seg { text: " ".to_string(), style: surface, link: None });
+            let num_text = match line_num {
+                Some(n) => format!("{:>width$}", n, width = num_width),
+                None => " ".repeat(num_width),
+            };
+            segs.push(Seg {
+                text: num_text,
+                style: surface.fg(this.theme.faint),
+                link: None,
+            });
+            segs.push(Seg { text: " ".to_string(), style: surface, link: None });
+            segs.push(Seg {
+                text: "│".to_string(),
+                style: surface.fg(this.theme.faint),
+                link: None,
+            });
+            segs.push(Seg { text: " ".to_string(), style: surface, link: None });
+
             let used: usize = body.iter().map(|s| s.text.width()).sum();
             segs.extend(body);
             segs.push(Seg {
-                text: " ".repeat(band.saturating_sub(used + 2)),
+                text: " ".repeat(band.saturating_sub(used + gutter_w)),
                 style: surface,
                 link: None,
             });
             this.push_line(segs);
         };
 
-        if !lang.trim().is_empty() {
-            let chip = Seg {
-                text: lang.trim().to_string(),
-                style: surface.fg(self.theme.faint).add_modifier(Modifier::ITALIC),
-                link: None,
-            };
-            row(self, vec![chip]);
-        }
-
         let start = self.src_line;
-        for (n, line) in code.trim_end_matches('\n').lines().enumerate() {
+        if lines.is_empty() {
+            row(self, Some(1), Vec::new());
+        }
+        for (n, line) in lines.iter().enumerate() {
             // Source lines map one to one here, unlike prose, so the editor
             // lands on the line you were looking at inside the block.
             self.src_line = from + n;
             let expanded = line.replace('\t', "    ");
+            if expanded.is_empty() {
+                row(self, Some(n + 1), Vec::new());
+                continue;
+            }
             let mut used = 0usize;
             let mut body = Vec::new();
+            let mut first_row = true;
             for (text, tok) in hl.line(&expanded) {
                 let style = surface.patch(self.token_style(tok));
-                let w = text.width();
-                if used + w <= avail {
-                    used += w;
-                    body.push(Seg { text, style, link: None });
-                    continue;
+                let mut remaining = text;
+                while !remaining.is_empty() {
+                    let room = avail.saturating_sub(used);
+                    if room == 0 {
+                        let l_num = if first_row { Some(n + 1) } else { None };
+                        first_row = false;
+                        row(self, l_num, std::mem::take(&mut body));
+                        used = 0;
+                        continue;
+                    }
+                    let w = remaining.width();
+                    if w <= room {
+                        used += w;
+                        body.push(Seg { text: remaining, style, link: None });
+                        break;
+                    }
+                    let (head, tail) = split_at_width(&remaining, room);
+                    if head.is_empty() {
+                        if used > 0 {
+                            let l_num = if first_row { Some(n + 1) } else { None };
+                            first_row = false;
+                            row(self, l_num, std::mem::take(&mut body));
+                            used = 0;
+                            continue;
+                        }
+                        let mut chars = remaining.chars();
+                        let head = chars.next().map(String::from).unwrap_or_default();
+                        let tail: String = chars.collect();
+                        let head_w = head.width();
+                        used += head_w;
+                        body.push(Seg { text: head, style, link: None });
+                        remaining = tail;
+                    } else {
+                        let head_w = head.width();
+                        used += head_w;
+                        body.push(Seg { text: head, style, link: None });
+                        remaining = tail;
+                    }
                 }
-                // Code is never wrapped: a broken line reads as a different
-                // program. What does not fit is cut with an ellipsis, and the
-                // editor is one keypress away.
-                let room = avail.saturating_sub(used + 1);
-                if room > 0 {
-                    let (head, _) = split_at_width(&text, room);
-                    body.push(Seg { text: format!("{head}…"), style, link: None });
-                } else if used < avail {
-                    body.push(Seg { text: "…".to_string(), style, link: None });
-                }
-                break;
             }
-            row(self, body);
+            if !body.is_empty() {
+                let l_num = if first_row { Some(n + 1) } else { None };
+                row(self, l_num, body);
+            }
         }
         self.src_line = start;
     }
@@ -1313,16 +1427,24 @@ impl<'a> Writer<'a> {
         // rendered line to the parse line keeps the reader's editor entry on
         // the table.
         let src = self.src_line;
-        self.render_table_rows(rows, aligns, |_| src);
+        self.render_table_rows(rows, aligns, Fit::Wrap, |_| src);
     }
 
     /// Like `render_table`, but each rendered line maps back to the source line
     /// `src(row)` suggested for the grid row it draws — how a CSV table keeps
     /// the editor cursor on the raw file row it mirrors.
-    fn render_table_rows(&mut self, rows: &[Row], aligns: &[Alignment], src: impl Fn(usize) -> usize) {
+    /// Draws the box and returns the display column each table column ends at,
+    /// measured from the left edge of the box.
+    fn render_table_rows(
+        &mut self,
+        rows: &[Row],
+        aligns: &[Alignment],
+        fit: Fit,
+        src: impl Fn(usize) -> usize,
+    ) -> Vec<usize> {
         let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
         if cols == 0 {
-            return;
+            return Vec::new();
         }
         let indent = self.indent();
         let mut widths = vec![0usize; cols];
@@ -1331,9 +1453,18 @@ impl<'a> Writer<'a> {
                 widths[i] = widths[i].max(seg_width(cell));
             }
         }
+        if fit == Fit::Grid {
+            for w in widths.iter_mut() {
+                *w = (*w).min(MAX_GRID_COL);
+            }
+        }
         // `│ ` before every cell plus a closing `│`.
         let overhead = 3 * cols + 1;
-        shrink_to(&mut widths, self.width.saturating_sub(indent + overhead), self.width / 8);
+        let floor = match fit {
+            Fit::Grid => MIN_GRID_COL,
+            Fit::Wrap => self.width / 8,
+        };
+        shrink_to(&mut widths, self.width.saturating_sub(indent + overhead), floor);
 
         let frame = Style::default().fg(self.theme.faint);
         let pad = Seg { text: " ".repeat(indent), style: Style::default(), link: None };
@@ -1350,13 +1481,21 @@ impl<'a> Writer<'a> {
         let head = Style::default().fg(self.theme.accent).add_modifier(Modifier::BOLD);
         for (r, row) in rows.iter().enumerate() {
             self.src_line = src(r);
-            // Cells wrap rather than truncate: a table of prose in a narrow
-            // pane is all ellipsis otherwise, and a tall table still says
-            // something where a clipped one says nothing.
+            // In a grid every data row is one line — `fit_segs` truncates what
+            // does not reach — but the header still wraps: a column you cannot
+            // name is a column you cannot read, and there is only one of it.
+            let one_line = fit == Fit::Grid && r > 0;
             let cells: Vec<Vec<Vec<Seg>>> = widths
                 .iter()
                 .enumerate()
-                .map(|(i, width)| wrap(row.get(i).cloned().unwrap_or_default(), *width))
+                .map(|(i, width)| {
+                    let cell = row.get(i).cloned().unwrap_or_default();
+                    if one_line {
+                        vec![cell]
+                    } else {
+                        wrap(cell, *width)
+                    }
+                })
                 .collect();
             let height = cells.iter().map(Vec::len).max().unwrap_or(1);
             for line in 0..height {
@@ -1382,6 +1521,14 @@ impl<'a> Writer<'a> {
         self.src_line = src(rows.len().saturating_sub(1));
         self.push_line(vec![pad, Seg { text: rule("└", "┴", "┘"), style: frame, link: None }]);
         self.push_blank();
+        // `│ cell ` per column, so a column ends 3 cells past its content.
+        widths
+            .iter()
+            .scan(indent, |x, w| {
+                *x += w + 3;
+                Some(*x)
+            })
+            .collect()
     }
 }
 
@@ -1396,14 +1543,29 @@ pub fn render_grid(rows: &[Vec<String>], width: u16, theme: &Theme) -> Doc {
         .iter()
         .map(|row| {
             row.iter()
-                .map(|cell| vec![Seg { text: cell.clone(), style: Style::default(), link: None }])
+                .map(|cell| {
+                    // Never more than the cap can draw. A char is at least one
+                    // column wide, so this many of them always fills the widest
+                    // a grid column may be — and the runaway cell a stray quote
+                    // produces is not copied, measured or wrapped in full on
+                    // every frame of a resize.
+                    let end = cell
+                        .char_indices()
+                        .nth(MAX_GRID_COL + 1)
+                        .map_or(cell.len(), |(i, _)| i);
+                    // A quoted cell may hold newlines. One record is one row
+                    // here, so they become spaces; the editor has the original.
+                    let text = cell[..end].replace('\n', " ");
+                    vec![Seg { text, style: Style::default(), link: None }]
+                })
                 .collect()
         })
         .collect();
     let cols = grid.iter().map(Vec::len).max().unwrap_or(0);
     let aligns = vec![Alignment::None; cols];
     let mut w = Writer::new(width, theme);
-    w.render_table_rows(&grid, &aligns, |r| r);
+    let stops = w.render_table_rows(&grid, &aligns, Fit::Grid, |r| r);
+    w.doc.col_stops = stops;
     w.doc
 }
 
@@ -1433,6 +1595,31 @@ fn trim_segs(mut segs: Vec<Seg>) -> Vec<Seg> {
     segs.retain(|s| !s.text.is_empty());
     segs
 }
+
+/// How a table treats a cell too wide for its column.
+///
+/// Prose wraps: a markdown table of sentences is all ellipsis otherwise, and a
+/// tall table still says something where a clipped one says nothing. A data
+/// grid does the opposite — one line per record is what makes it scannable, and
+/// a cell wrapped to four lines drags every other column's row down with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fit {
+    Wrap,
+    Grid,
+}
+
+/// Widest a grid column may grow to. Past this a cell is prose rather than a
+/// field: it is truncated here and read in full in the editor. Without a cap a
+/// single runaway cell — everything after a stray quote in a CSV lands in one —
+/// would make the pan thousands of columns long with nothing in them.
+const MAX_GRID_COL: usize = 40;
+
+/// Narrowest a grid column is squeezed to before the table gives up on fitting
+/// and is panned instead. A fixed width because legibility is a property of the
+/// text, not of the terminal: prose scales its floor with the measure, since a
+/// wrapped sentence still reads at any width, but a field cut to seven cells is
+/// gone whatever the pane is doing.
+const MIN_GRID_COL: usize = 12;
 
 /// Shrink the widest column repeatedly until the row fits, never below a width
 /// that can still show something.
@@ -1874,29 +2061,37 @@ fn wrap(segs: Vec<Seg>, avail: usize) -> Vec<Vec<Seg>> {
             used += width;
             continue;
         }
+        // Walked by byte index rather than by splitting off a fresh tail per
+        // line: the tail was re-collected into a new String on every wrap, so a
+        // long unbroken token — a base64 blob, a data URI, everything after a
+        // stray quote in a CSV — cost O(n²) and could freeze the reader for
+        // tens of seconds.
         for piece in token.pieces {
-            let mut text = piece.text;
-            while !text.is_empty() {
-                let (mut head, mut tail) = split_at_width(&text, avail - used);
-                if head.is_empty() {
-                    if used > 0 {
-                        newline(&mut out, &mut used);
-                        continue;
-                    }
-                    // A single character wider than the line: take it anyway
-                    // rather than spin.
-                    let mut chars = text.chars();
-                    head = chars.next().map(String::from).unwrap_or_default();
-                    tail = chars.collect();
-                }
-                used += head.width();
-                out.last_mut()
-                    .unwrap()
-                    .push(Seg { text: head, style: piece.style, link: piece.link });
-                text = tail;
-                if used >= avail && !text.is_empty() {
+            let text = piece.text;
+            let mut start = 0usize;
+            let mut chunk = 0usize;
+            let emit = |out: &mut Vec<Vec<Seg>>, range: std::ops::Range<usize>| {
+                out.last_mut().unwrap().push(Seg {
+                    text: text[range].to_string(),
+                    style: piece.style,
+                    link: piece.link,
+                });
+            };
+            for (i, ch) in text.char_indices() {
+                let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+                // `chunk > 0` is what keeps a single character wider than the
+                // whole line from spinning: it is taken anyway.
+                if chunk > 0 && used + chunk + w > avail {
+                    emit(&mut out, start..i);
+                    start = i;
+                    chunk = 0;
                     newline(&mut out, &mut used);
                 }
+                chunk += w;
+            }
+            if start < text.len() {
+                emit(&mut out, start..text.len());
+                used += chunk;
             }
         }
     }
@@ -2067,12 +2262,12 @@ mod tests {
         let d = render("```rust\nlet x = 1;\n```\n", 40, &theme);
         let band: Vec<&DocLine> =
             d.lines.iter().filter(|l| l.plain_text().contains('▎')).collect();
-        assert_eq!(band.len(), 2, "the chip and the one line");
+        assert_eq!(band.len(), 1, "the one line without chip header");
         for line in &band {
             assert_eq!(line.plain_text().width(), 40, "the band is the full width");
             assert!(line.segs.iter().all(|s| s.style.bg == Some(theme.surface)));
         }
-        let keyword = band[1].segs.iter().find(|s| s.text == "let").expect("a keyword run");
+        let keyword = band[0].segs.iter().find(|s| s.text == "let").expect("a keyword run");
         assert_eq!(keyword.style.fg, Some(theme.accent));
     }
 
@@ -2118,7 +2313,7 @@ mod tests {
         let out = plain(&doc("- one\n- two\n  - deep\n  - deeper\n- three\n", 40));
         assert_eq!(
             out,
-            vec!["", "• one", "• two", "  ◦ deep", "  ◦ deeper", "", "• three"],
+            vec!["", "• one", "• two", "  ◦ deep", "  ◦ deeper", "", "• three", ""],
             "{out:?}"
         );
     }
@@ -2126,16 +2321,32 @@ mod tests {
     #[test]
     fn a_list_of_one_line_entries_gets_no_gaps_at_all() {
         let out = plain(&doc("- alpha\n- beta\n- gamma\n", 40));
-        assert_eq!(out, vec!["", "• alpha", "• beta", "• gamma"], "{out:?}");
+        assert_eq!(out, vec!["", "• alpha", "• beta", "• gamma", ""], "{out:?}");
     }
 
     #[test]
     fn a_wrapped_item_is_not_split_by_the_gap() {
         let out = plain(&doc("- one that is long enough to wrap twice over\n- two\n", 20));
-        // The leading blank plus the single inter-item gap — never one inside an item.
+        // The leading blank, trailing blank, plus the single inter-item gap — never one inside an item.
         let blanks = out.iter().filter(|l| l.is_empty()).count();
-        assert_eq!(blanks, 2, "one doc lead, one between the items: {out:?}");
-        assert_eq!(out.last().unwrap(), "• two");
+        assert_eq!(blanks, 3, "one doc lead, one trailing, one between the items: {out:?}");
+        assert_eq!(out[out.len() - 2], "• two");
+        assert_eq!(out.last().unwrap(), "");
+    }
+
+    #[test]
+    fn doc_ends_with_an_empty_line_for_aesthetics() {
+        for body in [
+            "Just prose.",
+            "# Heading only",
+            "- List item",
+            "```rust\ncode\n```",
+            "> Quote",
+        ] {
+            let out = plain(&doc(body, 40));
+            assert_eq!(out.last().unwrap(), "", "must end with blank line for: {body:?}");
+            assert_ne!(out[out.len() - 2], "", "must not have duplicate trailing blank line for: {body:?}");
+        }
     }
 
     #[test]
@@ -2263,6 +2474,176 @@ mod tests {
     }
 
     #[test]
+    fn a_wide_grid_keeps_its_columns_and_reports_where_they_end() {
+        let cols: Vec<String> = (0..12).map(|i| format!("col_{i}")).collect();
+        let rows = vec![cols.clone(), (0..12).map(|i| format!("v{i:02}")).collect()];
+        let d = render_grid(&rows, 80, &Theme::default());
+        // Twelve columns cannot be squeezed into eighty cells without turning
+        // every cell into an ellipsis, so the box is laid out wide and panned.
+        assert!(d.width > 80, "the box keeps its natural width: {}", d.width);
+        assert!(plain(&d).iter().any(|l| l.contains("col_11")), "every column is drawn");
+        assert_eq!(d.col_stops.len(), 12);
+        assert_eq!(*d.col_stops.last().unwrap(), d.width - 1, "the last column ends at the frame");
+
+        // With eighty columns in view from the left edge, the tail is hidden
+        // and nothing is off to the left yet.
+        let (left, right) = d.hidden_columns(0, 80);
+        assert_eq!(left, 0);
+        assert!(right > 0, "the pane hides the tail columns");
+        assert_eq!(d.hidden_columns(d.width, 80), (12, 0), "panned past the end, all are behind you");
+    }
+
+    #[test]
+    fn a_pan_drops_columns_off_the_left_and_keeps_the_rest_aligned() {
+        let theme = Theme::default();
+        let rows = vec![
+            vec!["alpha".to_string(), "beta".to_string()],
+            vec!["one".to_string(), "two".to_string()],
+        ];
+        let d = render_grid(&rows, 80, &theme);
+        let at = |hscroll: usize| -> Vec<String> {
+            d.to_lines(&theme, &Overlays { hscroll, ..Overlays::default() }, 0, d.height())
+                .iter()
+                .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                .collect()
+        };
+        let panned = at(4);
+        let flush = at(0);
+        for (a, b) in panned.iter().zip(&flush).filter(|(_, b)| !b.is_empty()) {
+            assert_eq!(a.width() + 4, b.width(), "every drawn line loses exactly four columns: {b:?}");
+        }
+        assert!(panned.iter().any(|l| l.contains("beta")), "{panned:?}");
+        assert!(!panned.iter().any(|l| l.contains("alpha")), "the first column is behind the edge");
+    }
+
+    #[test]
+    fn a_pan_through_a_wide_glyph_keeps_the_columns_lined_up() {
+        let theme = Theme::default();
+        // The cut lands in the middle of a two-cell glyph, which cannot be half
+        // drawn: it is replaced by a space so the rest stays on its column.
+        let rows = vec![vec!["日本".to_string(), "x".to_string()]];
+        let d = render_grid(&rows, 80, &theme);
+        let line = |hscroll: usize| -> String {
+            d.to_lines(&theme, &Overlays { hscroll, ..Overlays::default() }, 2, 1)[0]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect()
+        };
+        assert_eq!(line(0).width(), line(3).width() + 3);
+        assert!(line(3).starts_with(' '), "the split glyph becomes padding: {:?}", line(3));
+    }
+
+    #[test]
+    fn a_grid_keeps_one_line_per_record_and_truncates_what_overflows() {
+        let rows = vec![
+            vec!["date".to_string(), "description".to_string()],
+            vec!["2026-01-03".to_string(), "groceries at the market stall by the station".to_string()],
+            vec!["2026-01-04".to_string(), "rent".to_string()],
+        ];
+        let out = plain(&render_grid(&rows, 76, &Theme::default()));
+        let records: Vec<&String> = out.iter().filter(|l| l.contains("2026-01-")).collect();
+        assert_eq!(records.len(), 2, "one line per record, however long a cell is: {out:?}");
+        assert!(records[0].contains('…'), "the long cell is cut, not wrapped: {:?}", records[0]);
+        assert!(records[0].contains("groceries at the market"), "{:?}", records[0]);
+    }
+
+    #[test]
+    fn a_grid_header_still_wraps_because_a_column_must_be_nameable() {
+        let rows = vec![
+            vec!["a very long column heading indeed".to_string(), "b".to_string()],
+            vec!["1".to_string(), "2".to_string()],
+        ];
+        let out = plain(&render_grid(&rows, 28, &Theme::default()));
+        let head = out.iter().filter(|l| l.contains("column") || l.contains("heading")).count();
+        assert!(head > 1, "the heading wraps rather than losing its tail: {out:?}");
+        assert!(!out.iter().any(|l| l.contains("head…")), "{out:?}");
+    }
+
+    #[test]
+    fn a_grid_column_stops_growing_at_the_cap() {
+        let rows = vec![
+            vec!["note".to_string()],
+            vec!["z".repeat(500)],
+        ];
+        let d = render_grid(&rows, 400, &Theme::default());
+        // Without a cap the column would be 500 wide and the pan would cross
+        // hundreds of columns of one cell.
+        assert_eq!(d.width, MAX_GRID_COL + 4, "one column, its frame, and nothing more");
+    }
+
+    #[test]
+    fn a_narrow_pane_pans_a_grid_rather_than_squeezing_it_to_nothing() {
+        let head: Vec<String> = ["date", "category", "amount", "balance", "account", "tags"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let row: Vec<String> = ["2026-01-03", "food", "-42.10", "1932.44", "current", "weekly"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let d = render_grid(&[head, row], 56, &Theme::default());
+        let out = plain(&d);
+        let record = out.iter().find(|l| l.contains("2026")).expect("the record is drawn");
+        assert!(record.contains("2026-01-03"), "a date is not worth showing in part: {record:?}");
+        assert!(record.contains("1932.44"), "nor a balance: {record:?}");
+        assert!(d.width > 56, "the table outgrows the pane and is panned instead");
+        // The prose floor would have squeezed every column toward 56/8 = 7
+        // cells, leaving an ellipsis with a hint of date in front of it. The
+        // grid floor stops well short of that, so nothing here is cut at all.
+        assert!(!record.contains('…'), "every field fits its own column: {record:?}");
+    }
+
+    #[test]
+    fn a_runaway_cell_costs_the_grid_nothing() {
+        // Everything after a stray quote in a CSV lands in a single cell. It
+        // used to be copied, measured and wrapped in full on every frame.
+        let rows = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["x".repeat(2_000_000), "y".to_string()],
+        ];
+        let start = std::time::Instant::now();
+        let d = render_grid(&rows, 76, &Theme::default());
+        let elapsed = start.elapsed();
+        assert_eq!(d.height(), 7, "one record, not forty thousand wrapped lines");
+        assert!(elapsed < std::time::Duration::from_millis(500), "{elapsed:?}");
+    }
+
+    #[test]
+    fn a_long_unbroken_token_wraps_in_linear_time() {
+        // The old `wrap` re-collected the remaining text on every line, so this
+        // took tens of seconds; the bound is loose enough to be about the shape
+        // of the algorithm rather than about this machine.
+        let segs = vec![Seg { text: "x".repeat(400_000), style: Style::default(), link: None }];
+        let start = std::time::Instant::now();
+        let lines = wrap(segs, 49);
+        let elapsed = start.elapsed();
+        assert_eq!(lines.len(), 8164);
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+    }
+
+    #[test]
+    fn a_quoted_newline_stays_on_its_record() {
+        let rows = vec![
+            vec!["note".to_string(), "amt".to_string()],
+            vec!["refund for the thing\nthat broke".to_string(), "12".to_string()],
+        ];
+        let out = plain(&render_grid(&rows, 76, &Theme::default()));
+        let record = out.iter().find(|l| l.contains("refund")).expect("the record is drawn");
+        assert!(record.contains("thing that broke"), "the break becomes a space: {record:?}");
+        assert_eq!(out.iter().filter(|l| l.contains("broke")).count(), 1);
+    }
+
+    #[test]
+    fn a_markdown_table_still_wraps_its_prose() {
+        let table = "| when | what |\n| --- | --- |\n| today | a sentence long enough to need more than one line of a narrow pane |\n";
+        let out = plain(&doc(table, 46));
+        assert!(!out.iter().any(|l| l.contains('…')), "prose wraps rather than truncating: {out:?}");
+        let body = out.iter().filter(|l| l.contains('│') && !l.contains("what")).count();
+        assert_eq!(body, 3, "the one record spans three lines: {out:?}");
+    }
+
+    #[test]
     fn a_mermaid_block_is_drawn_not_printed() {
         let out = plain(&doc("```mermaid\nflowchart TD\n  A[Root] --> B[Leaf]\n```\n", 80)).join("\n");
         assert!(out.contains("Root") && out.contains("Leaf"));
@@ -2293,12 +2674,69 @@ mod tests {
         let out = plain(&doc("```python\nx = 1\ny = 2\n```\n", 80));
         assert!(out.iter().any(|l| l.contains("x = 1")), "{out:?}");
         assert!(out.iter().any(|l| l.contains("y = 2")), "{out:?}");
-        assert!(out.iter().any(|l| l.contains("python")), "the chip names the language: {out:?}");
+        // Line numbers are shown in the gutter with separator
+        assert!(out.iter().any(|l| l.contains("1 │ x = 1")), "{out:?}");
+        assert!(out.iter().any(|l| l.contains("2 │ y = 2")), "{out:?}");
         // Every band row is the same width, gutter included, or the slab has a
         // ragged edge.
         let band: Vec<usize> = out.iter().filter(|l| l.contains('▎')).map(|l| l.width()).collect();
-        assert_eq!(band.len(), 3, "chip plus two lines: {out:?}");
+        assert_eq!(band.len(), 2, "two lines: {out:?}");
         assert!(band.windows(2).all(|w| w[0] == w[1]), "{band:?}");
+    }
+
+    #[test]
+    fn code_blocks_number_lines_and_omit_header_chip() {
+        let out = plain(&doc("```python\nx = 1\ny = 2\nz = 3\n```\n", 80));
+        // No header chip displaying language or line count
+        assert!(!out.iter().any(|l| l.contains("python") || l.contains("lines")), "{out:?}");
+        // Line numbers are shown with │ divider
+        assert!(out.iter().any(|l| l.contains("1 │ x = 1")), "{out:?}");
+        assert!(out.iter().any(|l| l.contains("2 │ y = 2")), "{out:?}");
+        assert!(out.iter().any(|l| l.contains("3 │ z = 3")), "{out:?}");
+    }
+
+    #[test]
+    fn code_blocks_highlight_when_language_is_omitted() {
+        let theme = Theme::default();
+        let d = render("```\nfn add(x: i32) -> i32 {\n  return x + 1;\n}\n```\n", 80, &theme);
+        // "fn" and "return" should be highlighted as keywords even with no fence language
+        let has_keyword = d.lines.iter().any(|l| {
+            l.segs.iter().any(|s| (s.text == "fn" || s.text == "return") && s.style.fg == Some(theme.accent))
+        });
+        assert!(has_keyword, "keywords must be highlighted when language is omitted");
+    }
+
+    #[test]
+    fn code_blocks_wrap_lines_without_truncation() {
+        let long_code = "```python\na_very_long_expression_that_will_definitely_exceed_narrow_viewport = 42\n```\n";
+        let d = doc(long_code, 30);
+        let out = plain(&d);
+
+        // Does not truncate with ellipsis
+        assert!(!out.iter().any(|l| l.contains('…')), "must not truncate with ...: {out:?}");
+
+        // All wrapped content survives (stripped of gutter and band padding)
+        let content: String = out
+            .iter()
+            .map(|l| {
+                if let Some((_, code_part)) = l.split_once('│') {
+                    code_part.trim()
+                } else {
+                    l.trim()
+                }
+            })
+            .collect();
+        let normalized = content.replace(' ', "");
+        assert!(normalized.contains("a_very_long_expression_that_will_definitely_exceed_narrow_viewport=42"),
+            "got content: {content:?}");
+
+        // Multiple band lines are produced for the wrapped line
+        let band: Vec<&DocLine> = d.lines.iter().filter(|l| l.plain_text().contains('▎')).collect();
+        assert!(band.len() >= 2, "at least 2 wrapped lines: {out:?}");
+        for line in &band {
+            assert_eq!(line.plain_text().width(), 30, "every band line maintains full width");
+            assert_eq!(line.src_line, 1);
+        }
     }
 
     #[test]

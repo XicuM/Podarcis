@@ -4,6 +4,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 use ratatui::Frame;
 
 use crate::app::{App, ExtensionAction, Level, Overlay};
@@ -44,6 +45,26 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Some(Overlay::Menu(_)) => menu(frame, app),
         None => {}
     }
+}
+
+/// The footer of an overlay: what each key does, in one voice.
+///
+/// Every popup used to build this by hand, which produced three different key
+/// styles and two different separators across the app. One helper is the only
+/// way a vocabulary this small stays consistent.
+fn hints(theme: &Theme, pairs: &[(&str, &str)]) -> Line<'static> {
+    let mut spans = Vec::with_capacity(pairs.len() * 3);
+    for (i, (key, label)) in pairs.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", theme.faint_style()));
+        }
+        spans.push(Span::styled(
+            key.to_string(),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(format!(" {label}"), theme.dim()));
+    }
+    Line::from(spans)
 }
 
 /// A query line with a block cursor, so it reads as an input rather than text.
@@ -137,17 +158,13 @@ fn finder(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(Paragraph::new(lines), list);
     }
 
-    let hints = Line::from(vec![
-        Span::styled("ctrl+s ", theme.faint_style()),
-        Span::styled("mode   ", theme.dim()),
-        Span::styled("ctrl+l ", theme.faint_style()),
-        Span::styled("scope   ", theme.dim()),
-        Span::styled("enter ", theme.faint_style()),
-        Span::styled("open   ", theme.dim()),
-        Span::styled("esc ", theme.faint_style()),
-        Span::styled("close", theme.dim()),
-    ]);
-    frame.render_widget(Paragraph::new(hints), hint);
+    frame.render_widget(
+        Paragraph::new(hints(
+            theme,
+            &[("ctrl+s", "mode"), ("ctrl+l", "scope"), ("enter", "open"), ("esc", "close")],
+        )),
+        hint,
+    );
 }
 
 /// The theme picker. Each row is painted in its own theme, so the list is the
@@ -194,15 +211,10 @@ fn themes(frame: &mut Frame, app: &App, area: Rect, selected: usize) {
         .collect();
     frame.render_widget(Paragraph::new(lines), list);
 
-    let hints = Line::from(vec![
-        Span::styled("j/k ", theme.faint_style()),
-        Span::styled("preview   ", theme.dim()),
-        Span::styled("enter ", theme.faint_style()),
-        Span::styled("keep   ", theme.dim()),
-        Span::styled("esc ", theme.faint_style()),
-        Span::styled("cancel", theme.dim()),
-    ]);
-    frame.render_widget(Paragraph::new(hints), hint);
+    frame.render_widget(
+        Paragraph::new(hints(theme, &[("j/k", "preview"), ("enter", "keep"), ("esc", "cancel")])),
+        hint,
+    );
 }
 
 /// Where the projects popup sits: hanging off the status-bar selector badge it
@@ -263,34 +275,34 @@ fn projects(
         .collect();
     frame.render_widget(Paragraph::new(lines), list);
 
-    let hints = Line::from(vec![
-        Span::styled("j/k ", theme.faint_style()),
-        Span::styled("navigate   ", theme.dim()),
-        Span::styled("enter ", theme.faint_style()),
-        Span::styled("switch   ", theme.dim()),
-        Span::styled("n ", theme.faint_style()),
-        Span::styled("new   ", theme.dim()),
-        Span::styled("r ", theme.faint_style()),
-        Span::styled("rename   ", theme.dim()),
-        Span::styled("d ", theme.faint_style()),
-        Span::styled("delete   ", theme.dim()),
-        Span::styled("esc ", theme.faint_style()),
-        Span::styled("cancel", theme.dim()),
-    ]);
-    frame.render_widget(Paragraph::new(hints), hint);
+    frame.render_widget(
+        Paragraph::new(hints(
+            theme,
+            &[
+                ("j/k", "navigate"),
+                ("enter", "switch"),
+                ("n", "new"),
+                ("r", "rename"),
+                ("d", "delete"),
+                ("esc", "cancel"),
+            ],
+        )),
+        hint,
+    );
 }
 
 fn palette(frame: &mut Frame, app: &App, area: Rect) {
     let Some(Overlay::Palette(state)) = app.overlay.as_ref() else { return };
     let theme = &app.theme;
-    let height = (state.items.len() as u16 + 4).min(20);
+    let height = (state.items.len() as u16 + 5).min(20);
     let box_area = crate::ui::centered(area, area.width.saturating_sub(20).min(76), height);
     let inner = popup(frame, theme, box_area, "commands");
     if inner.is_empty() {
         return;
     }
 
-    let [query, list] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
+    let [query, list, hint] =
+        Layout::vertical([Constraint::Length(2), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
     frame.render_widget(Paragraph::new(query_line(theme, "› ", &state.query)), query);
 
     let height = list.height as usize;
@@ -312,6 +324,11 @@ fn palette(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), list);
+    // Every other overlay says how to leave; this one used to be the exception.
+    frame.render_widget(
+        Paragraph::new(hints(theme, &[("\u{2191}\u{2193}", "choose"), ("enter", "run"), ("esc", "close")])),
+        hint,
+    );
 }
 
 fn help(frame: &mut Frame, app: &App, area: Rect, scroll: usize) {
@@ -348,19 +365,52 @@ fn help(frame: &mut Frame, app: &App, area: Rect, scroll: usize) {
     )));
 
     let max = lines.len().saturating_sub(inner.height as usize);
-    frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max) as u16, 0)), inner);
+    let scroll = scroll.min(max);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+
+    // The overlay scrolls but never said so, so a reader who did not guess saw
+    // only the first screenful of the key list and assumed that was all of it.
+    if max > 0 && inner.height > 0 {
+        let more = if scroll == 0 {
+            "  \u{25be} more".to_string()
+        } else if scroll >= max {
+            "  \u{25b4} more".to_string()
+        } else {
+            "  \u{25b4}\u{25be} more".to_string()
+        };
+        let row = Rect { y: inner.y + inner.height - 1, height: 1, ..inner };
+        let pad = inner.width.saturating_sub(more.chars().count() as u16);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("{}{more}", " ".repeat(pad as usize)),
+                Style::default().fg(theme.accent).bg(theme.overlay),
+            ))),
+            row,
+        );
+    }
 }
 
 fn outline(frame: &mut Frame, app: &App, area: Rect, selected: usize) {
     let Some(open) = app.open.as_ref() else { return };
     let theme = &app.theme;
-    let height = (open.doc.headings.len() as u16 + 2).min(24);
+    let height = (open.doc.headings.len() as u16 + 3).clamp(4, 24);
     let box_area = crate::ui::centered(area, area.width.saturating_sub(20).min(70), height);
     let inner = popup(frame, theme, box_area, "outline");
     if inner.is_empty() {
         return;
     }
     let selected = selected.min(open.doc.headings.len().saturating_sub(1));
+
+    let [list, hint] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let rows = list.height as usize;
+    // A long page's outline used to stop at the bottom of the box: the lower
+    // headings were unreachable and the cursor walked off-screen with nothing
+    // to show where it had gone. Scroll with the selection, as every other
+    // list in the app does.
+    let start = selected
+        .saturating_sub(rows / 3)
+        .min(open.doc.headings.len().saturating_sub(rows.max(1)));
+
     // Indented by level: the outline is there to show the shape of the page,
     // and a flat list of titles shows only its length.
     let lines: Vec<Line> = open
@@ -368,7 +418,8 @@ fn outline(frame: &mut Frame, app: &App, area: Rect, selected: usize) {
         .headings
         .iter()
         .enumerate()
-        .take(inner.height as usize)
+        .skip(start)
+        .take(rows)
         .map(|(i, (_, level, text))| {
             let on = i == selected;
             let style = if on { theme.selection(true) } else { theme.heading(*level) };
@@ -376,7 +427,12 @@ fn outline(frame: &mut Frame, app: &App, area: Rect, selected: usize) {
             Line::from(Span::styled(format!(" {indent}{text} "), style))
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), list);
+
+    let position = format!("{}/{}", selected + 1, open.doc.headings.len());
+    let mut footer = hints(theme, &[("\u{2191}\u{2193}", "choose"), ("enter", "jump"), ("esc", "close")]);
+    footer.spans.push(Span::styled(format!("   {position}"), theme.faint_style()));
+    frame.render_widget(Paragraph::new(footer), hint);
 }
 
 fn repo_config(frame: &mut Frame, app: &App, area: Rect) {
@@ -425,10 +481,7 @@ fn repo_config(frame: &mut Frame, app: &App, area: Rect) {
             theme.faint_style(),
         )));
     }
-    lines.push(Line::from(Span::styled(
-        "↑↓ choose · enter apply · esc cancel",
-        theme.faint_style(),
-    )));
+    lines.push(hints(theme, &[("↑↓", "choose"), ("enter", "apply"), ("esc", "cancel")]));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -463,10 +516,10 @@ fn ask(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(option.clone(), style),
         ]));
     }
-    lines.push(Line::from(Span::styled(
-        "↑↓ choose · 1-9 pick · enter answer · esc dismiss",
-        theme.faint_style(),
-    )));
+    lines.push(hints(
+        theme,
+        &[("↑↓", "choose"), ("1-9", "pick"), ("enter", "answer"), ("esc", "dismiss")],
+    ));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -519,7 +572,7 @@ fn extensions(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
-            Line::from(Span::styled("  y to confirm · any other key to cancel", theme.faint_style())),
+            hints(theme, &[("y", "confirm"), ("any other key", "cancel")]),
         ];
         frame.render_widget(Paragraph::new(lines), inner);
         return;
@@ -575,19 +628,19 @@ fn extensions(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(Paragraph::new(lines), log);
     }
 
-    let hints = Line::from(vec![
-        Span::styled("j/k ", theme.faint_style()),
-        Span::styled("navigate   ", theme.dim()),
-        Span::styled("i ", theme.faint_style()),
-        Span::styled("install   ", theme.dim()),
-        Span::styled("u ", theme.faint_style()),
-        Span::styled("update   ", theme.dim()),
-        Span::styled("d ", theme.faint_style()),
-        Span::styled("uninstall   ", theme.dim()),
-        Span::styled("esc ", theme.faint_style()),
-        Span::styled("close", theme.dim()),
-    ]);
-    frame.render_widget(Paragraph::new(hints), hint);
+    frame.render_widget(
+        Paragraph::new(hints(
+            theme,
+            &[
+                ("j/k", "navigate"),
+                ("i", "install"),
+                ("u", "update"),
+                ("d", "uninstall"),
+                ("esc", "close"),
+            ],
+        )),
+        hint,
+    );
 }
 
 fn menu(frame: &mut Frame, app: &App) {
@@ -617,7 +670,7 @@ fn menu(frame: &mut Frame, app: &App) {
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
 
-    let hint = Line::from(Span::styled("↑↓ choose · enter run · esc close", theme.faint_style()));
+    let hint = hints(theme, &[("↑↓", "choose"), ("enter", "run"), ("esc", "close")]);
     frame.render_widget(Paragraph::new(hint), Rect {
         x: inner.x,
         y: inner.y + inner.height.saturating_sub(1),
@@ -637,7 +690,7 @@ fn prompt(frame: &mut Frame, app: &App, area: Rect) {
     let lines = vec![
         Line::from(""),
         query_line(theme, "› ", &state.value),
-        Line::from(Span::styled("enter to confirm · esc to cancel", theme.faint_style())),
+        hints(theme, &[("enter", "confirm"), ("esc", "cancel")]),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -652,15 +705,24 @@ pub fn toasts(frame: &mut Frame, app: &App, area: Rect) {
     let mut y = area.y + area.height;
 
     for toast in app.toasts.iter().rev() {
-        let colour = match toast.level {
-            Level::Info => theme.link,
-            Level::Good => theme.ok,
-            Level::Warn => theme.warn,
-            Level::Bad => theme.err,
+        // Level is carried by a glyph as well as the border colour. Colour
+        // alone excludes a colourblind reader outright, and even a reader who
+        // can see it has to compare two borders to rank them.
+        let (colour, glyph) = match toast.level {
+            Level::Info => (theme.link, "\u{2139}"),
+            Level::Good => (theme.ok, "\u{2713}"),
+            Level::Warn => (theme.warn, "\u{25b2}"),
+            Level::Bad => (theme.err, "\u{2716}"),
         };
-        let text = Paragraph::new(Line::from(Span::styled(toast.text.clone(), Style::default().fg(theme.text))))
-            .wrap(Wrap { trim: true });
-        let lines = (toast.text.len() as u16).div_ceil(width.saturating_sub(4).max(1)).max(1);
+        let text = Paragraph::new(Line::from(vec![
+            Span::styled(format!("{glyph} "), Style::default().fg(colour).add_modifier(Modifier::BOLD)),
+            Span::styled(toast.text.clone(), Style::default().fg(theme.text)),
+        ]))
+        .wrap(Wrap { trim: true });
+        // Measured in display cells, not bytes: a toast carrying a path with
+        // any non-ASCII in it used to be allotted a box taller than its text.
+        let cells = UnicodeWidthStr::width(toast.text.as_str()) as u16 + 2;
+        let lines = cells.div_ceil(width.saturating_sub(4).max(1)).max(1);
         let height = lines + 2;
         if y < area.y + height {
             break;
