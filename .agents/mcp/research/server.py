@@ -13,11 +13,13 @@ Set PROJECT_ROOT env var to the repository root.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
 import shutil
 import ssl
+import warnings
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -149,6 +151,7 @@ class PaperMetadata:
     year: int | str = "Unknown"
     pdf_url: str | None = None
     doi: str | None = None
+    arxiv_id: str | None = None
     url: str | None = None
     publication_types: list[str] = field(default_factory=list)
     local_path: str | None = None   # set for local: paper IDs
@@ -175,13 +178,27 @@ async def _fetch_semantic_scholar(paper_id: str) -> PaperMetadata | None:
                 data = resp.json()
                 pdf_info = data.get("openAccessPdf") or {}
                 ext = data.get("externalIds") or {}
+                arxiv_id = (
+                    ext.get("ArXiv")
+                    or ext.get("ARXIV")
+                    or ext.get("arxiv")
+                )
+                doi = ext.get("DOI")
+                pdf_url = pdf_info.get("url")
+                if not pdf_url and arxiv_id:
+                    pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+                if pdf_url:
+                    pdf_url = _normalize_pdf_url(pdf_url)
+                if not doi and arxiv_id:
+                    doi = f"10.48550/arXiv.{arxiv_id}"
                 return PaperMetadata(
                     title=data.get("title") or "Unknown Title",
                     abstract=data.get("abstract") or "No abstract available.",
                     authors=data.get("authors") or [],
                     year=data.get("year") or "Unknown",
-                    pdf_url=pdf_info.get("url"),
-                    doi=ext.get("DOI"),
+                    pdf_url=pdf_url,
+                    doi=doi,
+                    arxiv_id=arxiv_id,
                     url=data.get("url"),
                     publication_types=data.get("publicationTypes") or [],
                 )
@@ -191,45 +208,56 @@ async def _fetch_semantic_scholar(paper_id: str) -> PaperMetadata | None:
 
 
 async def _fetch_arxiv(arxiv_id: str) -> PaperMetadata | None:
-    raw = arxiv_id.removeprefix("arXiv:")
-    url = f"http://export.arxiv.org/api/query?id_list={raw}"
+    raw = re.sub(r"^arxiv:\s*", "", arxiv_id, flags=re.IGNORECASE).strip()
+    url = f"https://export.arxiv.org/api/query?id_list={raw}"
     _check_domain(url)
     async with _make_client() as client:
-        try:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            root = ET.fromstring(resp.text)
-            ns = {"atom": "http://www.w3.org/2005/Atom"}
-            entry = root.find("atom:entry", ns)
-            if entry is None:
-                return None
-            title = (entry.findtext("atom:title", namespaces=ns) or "").replace("\n", " ").strip()
-            summary = (entry.findtext("atom:summary", namespaces=ns) or "").replace("\n", " ").strip()
-            year_text = entry.findtext("atom:published", namespaces=ns) or ""
-            year = int(year_text[:4]) if year_text[:4].isdigit() else "Unknown"
-            authors = [
-                {"name": a.findtext("atom:name", namespaces=ns)}
-                for a in entry.findall("atom:author", ns)
-            ]
-            pdf_url = next(
-                (
-                    lnk.get("href")
-                    for lnk in entry.findall("atom:link", ns)
-                    if lnk.get("title") == "pdf" or lnk.get("type") == "application/pdf"
-                ),
-                None,
-            )
-            return PaperMetadata(
-                title=title,
-                abstract=summary,
-                authors=authors,
-                year=year,
-                pdf_url=pdf_url,
-                url=f"https://arxiv.org/abs/{raw}",
-                publication_types=["preprint"],
-            )
-        except Exception:
-            return None
+        for attempt in range(3):
+            try:
+                resp = await client.get(url)
+                if resp.status_code in (406, 429) or resp.status_code >= 500:
+                    await asyncio.sleep(2 ** attempt + 1)
+                    continue
+                resp.raise_for_status()
+                root = ET.fromstring(resp.text)
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+                entry = root.find("atom:entry", ns)
+                if entry is None:
+                    return None
+                title = (entry.findtext("atom:title", namespaces=ns) or "").replace("\n", " ").strip()
+                summary = (entry.findtext("atom:summary", namespaces=ns) or "").replace("\n", " ").strip()
+                year_text = entry.findtext("atom:published", namespaces=ns) or ""
+                year = int(year_text[:4]) if year_text[:4].isdigit() else "Unknown"
+                authors = [
+                    {"name": a.findtext("atom:name", namespaces=ns)}
+                    for a in entry.findall("atom:author", ns)
+                ]
+                pdf_url = next(
+                    (
+                        lnk.get("href")
+                        for lnk in entry.findall("atom:link", ns)
+                        if lnk.get("title") == "pdf" or lnk.get("type") == "application/pdf"
+                    ),
+                    None,
+                )
+                if pdf_url:
+                    pdf_url = _normalize_pdf_url(pdf_url)
+                else:
+                    pdf_url = f"https://arxiv.org/pdf/{raw}.pdf"
+                return PaperMetadata(
+                    title=title,
+                    abstract=summary,
+                    authors=authors,
+                    year=year,
+                    pdf_url=pdf_url,
+                    doi=f"10.48550/arXiv.{raw}",
+                    arxiv_id=raw,
+                    url=f"https://arxiv.org/abs/{raw}",
+                    publication_types=["preprint"],
+                )
+            except Exception:
+                await asyncio.sleep(2 ** attempt)
+        return None
 
 
 async def _fetch_openalex(work_id: str) -> PaperMetadata | None:
@@ -263,6 +291,19 @@ async def _fetch_openalex(work_id: str) -> PaperMetadata | None:
             )
             doi_url = work.get("doi") or ""
             doi = doi_url.replace("https://doi.org/", "").lower() or None
+            ids = work.get("ids") or {}
+            arxiv_url = ids.get("arxiv") or ""
+            arxiv_id = None
+            if arxiv_url:
+                m_ax = re.search(r"arxiv\.org/(?:abs|pdf)/([^\s/?#]+)", arxiv_url, re.IGNORECASE)
+                if m_ax:
+                    arxiv_id = m_ax.group(1)
+            if not pdf_url and arxiv_id:
+                pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+            if pdf_url:
+                pdf_url = _normalize_pdf_url(pdf_url)
+            if not doi and arxiv_id:
+                doi = f"10.48550/arXiv.{arxiv_id}"
             return PaperMetadata(
                 title=work.get("title") or "Unknown Title",
                 abstract=abstract or "No abstract available.",
@@ -270,6 +311,7 @@ async def _fetch_openalex(work_id: str) -> PaperMetadata | None:
                 year=work.get("publication_year") or "Unknown",
                 pdf_url=pdf_url,
                 doi=doi,
+                arxiv_id=arxiv_id,
                 url=work.get("doi") or work.get("id"),
                 publication_types=[work.get("type", "journal-article")],
             )
@@ -418,10 +460,12 @@ _PMC_LANDING_RE = re.compile(
     r"^https?://(?:www\.)?(?:pmc\.ncbi\.nlm\.nih\.gov|ncbi\.nlm\.nih\.gov/pmc)/articles/(PMC)?(\d+)/?$",
     re.IGNORECASE,
 )
+_ARXIV_ID_PATTERN = r"(?:\d{4}\.\d{4,5}(?:v\d+)?|[a-zA-Z\-]+(?:\.[a-zA-Z]{2})?/\d{7}(?:v\d+)?)"
+_ARXIV_ID_RE = re.compile(rf"^(?:arxiv:)?({_ARXIV_ID_PATTERN})$", re.IGNORECASE)
 
 
 def _normalize_pdf_url(url: str | None) -> str | None:
-    """Rewrite known landing-page URLs to their direct PDF path.
+    """Rewrite known landing-page URLs and insecure schemes to their direct PDF path.
 
     Unpaywall frequently returns a PMC *article* URL in `url` where the PDF lives
     one segment deeper. Fetching the landing page yields HTML, which the content
@@ -429,9 +473,17 @@ def _normalize_pdf_url(url: str | None) -> str | None:
     """
     if not url:
         return url
-    m = _PMC_LANDING_RE.match(url.strip())
+    url_stripped = url.strip()
+    m = _PMC_LANDING_RE.match(url_stripped)
     if m:
         return f"https://pmc.ncbi.nlm.nih.gov/articles/PMC{m.group(2)}/pdf/"
+
+    # arXiv URLs: upgrade http to https, rewrite /abs/ to /pdf/
+    if "arxiv.org" in url_stripped.lower():
+        norm = re.sub(r"^http://", "https://", url_stripped, flags=re.IGNORECASE)
+        norm = re.sub(r"arxiv\.org/abs/", "arxiv.org/pdf/", norm, flags=re.IGNORECASE)
+        return norm
+
     return url
 
 
@@ -469,7 +521,15 @@ async def _fetch_local(paper_id: str) -> PaperMetadata | None:
     )
 
 
+# Characters that make files binary to grep/file(1) or represent illegal UTF-8.
+# Strips ASCII control chars (including \x00) except \t (0x09), \n (0x0a), \r (0x0d).
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
 def _sanitize(text: str) -> str:
+    """Sanitize extracted text into clean, searchable, valid UTF-8 prose."""
+    text = text.encode("utf-8", errors="replace").decode("utf-8")
+    text = _CONTROL_CHAR_RE.sub("", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -478,13 +538,17 @@ def _sanitize(text: str) -> str:
 async def _resolve_metadata(paper_id: str) -> PaperMetadata:
     """Resolve paper ID (accepts URLs, raw DOIs, search queries, or provider prefixes), then fetch metadata."""
     paper_id = paper_id.strip()
-    
+
+    # Fast-path: bare or prefixed arXiv ID
+    m_arxiv_bare = _ARXIV_ID_RE.match(paper_id)
+    if m_arxiv_bare:
+        paper_id = f"arXiv:{m_arxiv_bare.group(1)}"
+
     # 1. Resolve URLs
     if paper_id.startswith("http://") or paper_id.startswith("https://"):
-        if "arxiv.org/abs/" in paper_id or "arxiv.org/pdf/" in paper_id:
-            m = re.search(r"arxiv.org/(?:abs|pdf)/([\d.]+)(?:\.pdf)?", paper_id)
-            if m:
-                paper_id = f"arXiv:{m.group(1)}"
+        m_arxiv_url = re.search(r"arxiv\.org/(?:abs|pdf)/([^\s/?#]+?)(?:\.pdf)?(?:$|[?#])", paper_id, re.IGNORECASE)
+        if m_arxiv_url:
+            paper_id = f"arXiv:{m_arxiv_url.group(1)}"
         elif "pubmed.ncbi.nlm.nih.gov/" in paper_id:
             m = re.search(r"pubmed.ncbi.nlm.nih.gov/(\d+)", paper_id)
             if m:
@@ -497,16 +561,20 @@ async def _resolve_metadata(paper_id: str) -> PaperMetadata:
             m = re.search(r"doi.org/(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", paper_id, re.IGNORECASE)
             if m:
                 paper_id = f"DOI:{m.group(1)}"
-                
+
     # 2. Check if raw DOI
     if re.match(r"^10\.\d{4,9}/", paper_id):
         paper_id = f"DOI:{paper_id}"
+
+    # If DOI is an arXiv DOI, normalize to arXiv ID
+    if paper_id.lower().startswith("doi:10.48550/arxiv."):
+        paper_id = f"arXiv:{paper_id[19:]}"
 
     # 3. If paper_id has no prefix and is not a 40-char hex string (Semantic Scholar ID),
     # treat it as a search query
     is_hex_id = bool(re.match(r"^[0-9a-fA-F]{40}$", paper_id))
     has_prefix = ":" in paper_id
-    
+
     if not has_prefix and not is_hex_id:
         print(f"Title or search query detected: '{paper_id}'. Searching literature...")
         search_results = await literature_search(paper_id, limit=1)
@@ -538,7 +606,7 @@ async def _resolve_metadata(paper_id: str) -> PaperMetadata:
         meta = await _fetch_google_books(paper_id)
     elif paper_id.startswith("local:"):
         meta = await _fetch_local(paper_id)
-    elif paper_id.startswith("arXiv:"):
+    elif paper_id.lower().startswith("arxiv:"):
         meta = await _fetch_semantic_scholar(paper_id)
         if not meta:
             meta = await _fetch_arxiv(paper_id)
@@ -546,25 +614,35 @@ async def _resolve_metadata(paper_id: str) -> PaperMetadata:
         # Raw Semantic Scholar hash or DOI:xxx
         meta = await _fetch_semantic_scholar(paper_id)
 
+    # Fallback to arXiv API if Semantic Scholar returned nothing for an arXiv ID
+    if meta is None and paper_id.lower().startswith("arxiv:"):
+        meta = await _fetch_arxiv(paper_id)
+
     if meta is None:
         raise ValueError(f"Could not fetch metadata for '{paper_id}' from any provider.")
 
-    # arXiv fallback for PDF URL
-    if (
-        not meta.local_path
-        and not meta.pdf_url
-        and (paper_id.startswith("arXiv:") or "arxiv" in (meta.url or "").lower())
-    ):
-        arxiv_id = paper_id if paper_id.startswith("arXiv:") else None
-        if not arxiv_id and meta.url:
-            m = re.search(r"arxiv.org/abs/([\d.]+)", meta.url)
+    # Determine or refine arXiv ID
+    if not meta.arxiv_id:
+        if paper_id.lower().startswith("arxiv:"):
+            meta.arxiv_id = re.sub(r"^arxiv:\s*", "", paper_id, flags=re.IGNORECASE).strip()
+        elif meta.doi:
+            m = re.search(r"10\.48550/arxiv\.([^\s/]+)", meta.doi, re.IGNORECASE)
             if m:
-                arxiv_id = m.group(1)
-        if arxiv_id:
-            ax = await _fetch_arxiv(arxiv_id)
-            if ax and ax.pdf_url:
-                meta.pdf_url = ax.pdf_url
-                meta.abstract = meta.abstract or ax.abstract
+                meta.arxiv_id = m.group(1)
+        elif meta.url and "arxiv.org" in meta.url:
+            m = re.search(r"arxiv\.org/(?:abs|pdf)/([^\s/?#]+?)(?:\.pdf)?(?:$|[?#])", meta.url, re.IGNORECASE)
+            if m:
+                meta.arxiv_id = m.group(1)
+
+    # arXiv fallback for PDF URL and DOI
+    if meta.arxiv_id:
+        if not meta.pdf_url:
+            meta.pdf_url = f"https://arxiv.org/pdf/{meta.arxiv_id}.pdf"
+        if not meta.doi:
+            meta.doi = f"10.48550/arXiv.{meta.arxiv_id}"
+
+    if meta.pdf_url:
+        meta.pdf_url = _normalize_pdf_url(meta.pdf_url)
 
     return meta
 
@@ -578,6 +656,10 @@ def _publisher_oa_url(doi: str) -> str | None:
     if not doi:
         return None
     doi = doi.removeprefix("DOI:").removeprefix("doi:")
+    # arXiv DOI — https://arxiv.org/pdf/<id>.pdf
+    m = re.search(r"10\.48550/arxiv\.([^\s/]+)", doi, re.IGNORECASE)
+    if m:
+        return f"https://arxiv.org/pdf/{m.group(1)}.pdf"
     article_id = doi.split("/", 1)[-1] if "/" in doi else doi
     # Nature family journals — https://www.nature.com/articles/<id>.pdf
     if any(d in doi.lower() for d in ("10.1038/", "10.1037/")):
@@ -641,32 +723,43 @@ async def _download_pdf_playwright(url: str, dest: Path) -> bool:
     return False
 
 
-async def _download_pdf(url: str | None, dest: Path, doi: str | None = None) -> str:
+async def _download_pdf(
+    url: str | None,
+    dest: Path,
+    doi: str | None = None,
+    arxiv_id: str | None = None,
+) -> str:
     """Stream a PDF to disk with retries; return the URL that actually served it.
 
     Falls back to Playwright on 403/bot-block.
 
     Candidates are tried in order: the publisher-native OA URL derived from the DOI,
-    the resolver-supplied URL, then every Unpaywall mirror. Every candidate here is
-    vetted by an OA resolver (Semantic Scholar / OpenAlex / Unpaywall / arXiv), so the
-    publisher allow-list that guards the API endpoints is deliberately not applied —
+    the direct arXiv URL (if arXiv ID is known), the resolver-supplied URL, then every Unpaywall mirror.
+    Every candidate here is vetted by an OA resolver (Semantic Scholar / OpenAlex / Unpaywall / arXiv),
+    so the publisher allow-list that guards the API endpoints is deliberately not applied —
     it cannot enumerate the long tail of institutional repositories and was rejecting
     legitimate open-access hosts. HTTPS and PDF magic bytes are enforced instead,
     which is a stronger guarantee than a hostname list: it verifies the content.
     """
     publisher_url = _publisher_oa_url(doi) if doi else None
+    arxiv_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf" if arxiv_id else None
     urls_to_try: list[str] = []
-    for candidate in (publisher_url, url):
-        if candidate and candidate not in urls_to_try:
-            urls_to_try.append(candidate)
+    for candidate in (publisher_url, arxiv_url, url):
+        if candidate:
+            candidate = _normalize_pdf_url(candidate)
+            if candidate and candidate not in urls_to_try:
+                urls_to_try.append(candidate)
     if doi:
         for mirror in await _fetch_unpaywall_pdfs(doi):
-            if mirror not in urls_to_try:
+            mirror = _normalize_pdf_url(mirror)
+            if mirror and mirror not in urls_to_try:
                 urls_to_try.append(mirror)
 
     attempts: list[str] = []
     async with _make_client() as client:
         for try_url in urls_to_try:
+            if try_url.lower().startswith("http://arxiv.org/"):
+                try_url = "https://" + try_url[7:]
             if not try_url.lower().startswith("https://"):
                 attempts.append(f"{try_url} → skipped (not https)")
                 continue
@@ -761,14 +854,20 @@ async def _ingest_paper(
             # Try Unpaywall — take the best mirror; _download_pdf tries the rest.
             mirrors = await _fetch_unpaywall_pdfs(meta.doi)
             meta.pdf_url = mirrors[0] if mirrors else None
-        if not meta.pdf_url and not meta.doi:
+        if not meta.pdf_url and meta.arxiv_id:
+            meta.pdf_url = f"https://arxiv.org/pdf/{meta.arxiv_id}.pdf"
+        if not meta.pdf_url and not meta.doi and not meta.arxiv_id:
             shutil.rmtree(paper_dir, ignore_errors=True)
             raise ValueError(
                 "No open-access PDF found via any provider. "
                 "Please supply the PDF manually and use a local: paper_id."
             )
         try:
-            pdf_source_url = await _download_pdf(meta.pdf_url, pdf_path, doi=meta.doi)
+            sig = inspect.signature(_download_pdf)
+            if "arxiv_id" in sig.parameters:
+                pdf_source_url = await _download_pdf(meta.pdf_url, pdf_path, doi=meta.doi, arxiv_id=meta.arxiv_id)
+            else:
+                pdf_source_url = await _download_pdf(meta.pdf_url, pdf_path, doi=meta.doi)
         except Exception:
             # Never leave a half-built stub behind — a directory without both
             # original.pdf and raw.md is not an ingested source (CLAUDE.md §No Stubs).
@@ -780,19 +879,40 @@ async def _ingest_paper(
     md_converter = MarkItDown()
     try:
         result = md_converter.convert(str(pdf_path))
-        body = _sanitize(result.text_content)
+        raw_text = result.text_content or ""
     except Exception as exc:
         shutil.rmtree(paper_dir, ignore_errors=True)
         raise RuntimeError(f"PDF text extraction failed: {exc}") from exc
+
+    # Validate UTF-8 and strip offending binary/control characters (e.g. null bytes from PDF fonts)
+    offending_count = len(_CONTROL_CHAR_RE.findall(raw_text))
+    surrogates = sum(1 for ch in raw_text if "\ud800" <= ch <= "\udfff")
+    total_offending = offending_count + surrogates
+    body = _sanitize(raw_text)
+
+    if total_offending > 0:
+        warning_msg = (
+            f"Stripped {total_offending} binary/control character(s) (including null bytes) "
+            f"from extracted text for {filename_base} to ensure valid UTF-8."
+        )
+        if ctx:
+            try:
+                await ctx.warning(warning_msg)
+            except Exception:
+                pass
+        warnings.warn(warning_msg, UserWarning, stacklevel=2)
 
     if not body:
         shutil.rmtree(paper_dir, ignore_errors=True)
         raise RuntimeError("PDF extraction returned empty text. The PDF may be scanned/image-only.")
 
-    raw_path.write_text(
-        f"---\nsource_url: {pdf_source_url}\nstatus: raw\n---\n\n{body}\n",
-        encoding="utf-8",
-    )
+    raw_content = f"---\nsource_url: {pdf_source_url}\nstatus: raw\n---\n\n{body}\n"
+    raw_bytes = raw_content.encode("utf-8", errors="replace")
+    if b"\x00" in raw_bytes:
+        raw_bytes = raw_bytes.replace(b"\x00", b"")
+    # Verify valid UTF-8 before writing
+    raw_bytes.decode("utf-8")
+    raw_path.write_bytes(raw_bytes)
 
     # ── Step 3: write metadata.md ────────────────────────────────────────────
     await ctx.report_progress(3, 4, "Writing metadata…")
@@ -989,8 +1109,8 @@ async def literature_download(
         str,
         "Paper identifier. Accepted formats: "
         "'openalex:<W…>', 'pmid:<id>', 'pmcid:<id>', 'googlebooks:<id>', 'arXiv:<id>', "
-        "'DOI:<10.xxx/yyy>', 'https://doi.org/…', 'https://arxiv.org/abs/…', "
-        "'https://pubmed.ncbi.nlm.nih.gov/<id>/', 'https://openalex.org/W…', "
+        "'<arxiv_id>' (e.g. '2305.16291'), 'DOI:<10.xxx/yyy>', 'https://doi.org/…', "
+        "'https://arxiv.org/abs/…', 'https://pubmed.ncbi.nlm.nih.gov/<id>/', 'https://openalex.org/W…', "
         "'local:</absolute/path/to/file.pdf>', or a raw 40-char Semantic Scholar hash. "
         "Plain text titles or keywords are also accepted and will trigger an automatic search.",
     ],

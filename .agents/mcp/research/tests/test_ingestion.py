@@ -87,7 +87,13 @@ def test_resolve_paths_default_when_no_config():
 # Text sanitization (mirrors server._sanitize)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Characters that make files binary to grep/file(1) or represent illegal UTF-8.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
 def _sanitize(text: str) -> str:
+    text = text.encode("utf-8", errors="replace").decode("utf-8")
+    text = _CONTROL_CHAR_RE.sub("", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -110,6 +116,25 @@ def test_sanitize_trims():
 
 def test_sanitize_preserves_single_newline():
     assert _sanitize("line1\nline2") == "line1\nline2"
+
+
+def test_sanitize_strips_null_bytes():
+    """Null bytes must be stripped so grep and file(1) do not treat raw.md as binary."""
+    assert _sanitize("hello\x00world\x00") == "helloworld"
+
+
+def test_sanitize_strips_control_characters():
+    """Non-printable control characters from PDF fonts must be stripped."""
+    assert _sanitize("text\x03with\x13control\x1bchars\x7f") == "textwithcontrolchars"
+
+
+def test_sanitize_handles_surrogates():
+    """Surrogate code points that break utf-8 encoding must be safely replaced."""
+    result = _sanitize("text\ud800with\udfffbad code points")
+    assert "\ud800" not in result
+    assert "\udfff" not in result
+    # Valid utf-8 encoding
+    result.encode("utf-8")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
