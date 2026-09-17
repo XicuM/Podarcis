@@ -13,7 +13,7 @@ onboarding = false
 # Substituted from the app's active flavour so the sidebar matches the app.
 name = "@THEME@"
 auto_switch = false
-
+@THEME_CUSTOM@
 [terminal]
 # Matches -c "#{pane_current_path}" on every split, window, and session
 new_cwd = "follow"

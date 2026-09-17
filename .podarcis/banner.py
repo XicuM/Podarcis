@@ -13,21 +13,24 @@ from itertools import zip_longest
 from pathlib import Path
 
 # Local imports
-from podarcis.common import load_one_liners, load_version_info, get_config_value
+from podarcis.common import load_one_liners, load_version_info
 from podarcis.components import discover_components, get_enabled_mcp_servers
 from podarcis.console import console
 from podarcis.repos import get_repo_status
 from rich.cells import cell_len
 from rich.text import Text
 
-BORDER_STYLE = 'bold #29b8db'
-ACCENT = '#29b8db'
+# The house accent, the same green the front-end's `podarcis` theme uses. The
+# cyan this used to be now lives on as that theme's `link` colour, so the CLI
+# and the TUI read as one product instead of two.
+ACCENT = '#2f7d4f'
+BORDER_STYLE = f'bold {ACCENT}'
+# Two tones: the animal in the accent, the strokes it sits against quieter
+# behind it. Mirrors `brand::is_body` in the Rust front end.
+LOGO_FRAME_STYLE = f'dim {ACCENT}'
 
 LEFT_W, COL_GAP, RIGHT_W = 26, 4, 38
 INNER_W = LEFT_W + COL_GAP + RIGHT_W
-
-_FRONTEND_DISPLAY = {'tui': 'Wiki TUI', 'vscode': 'VSCode', 'obsidian': 'Obsidian'}
-
 
 def _pad(text: str, width: int) -> str:
     '''Pad or trim to an exact terminal cell width, honouring Braille/Unicode widths.'''
@@ -72,23 +75,46 @@ def _centered(t: Text, width: int) -> Text:
     return Text(' ' * left) + t + Text(' ' * (pad - left))
 
 
+def _logo_text(line: str, width: int) -> Text:
+    '''One padded, two-tone logo row.
+
+    The mark is drawn from block elements; every other glyph in it is the frame
+    around the body. Mirrors `brand::is_body` in the Rust front end — the two
+    draw the same file and must draw it the same way.
+    '''
+    out = Text()
+    for ch in _pad(line, width):
+        body = 0x2580 <= ord(ch) <= 0x259F
+        out.append(ch, style=ACCENT if body else LOGO_FRAME_STYLE)
+    return out
+
+
+def _brand() -> tuple[str, str]:
+    '''The wordmark and tagline, read from the file the front end compiles in.
+
+    One declaration: `.podarcis/brand.txt` is the only place either string is
+    written down, so the two front ends cannot disagree about what this is.
+    '''
+    path = Path(__file__).resolve().parent/'brand.txt'
+    lines = path.read_text('utf-8').splitlines() if path.exists() else []
+    name = lines[0].strip() if lines else 'Podarcis'
+    tagline = lines[1].strip() if len(lines) > 1 else ''
+    return name, tagline
+
+
 def _subtitle(root_dir: Path) -> Text:
-    frontend = _FRONTEND_DISPLAY.get(get_config_value(root_dir, 'frontend'), 'No frontend')
     path_str = str(root_dir).replace(str(Path.home()), '~')
-    return (Text()
-        .append(frontend, style='white')
-        .append(' · ', style=ACCENT)
-        .append(path_str, style='white')
-    )
+    return Text().append(path_str, style='white')
 
 
 def _print_header(root_dir: Path, splash: str | None) -> None:
-    '''Render the title border, splash one-liner, and frontend/path subtitle.
+    '''Render the title border, splash one-liner, and path subtitle.
 
     Shared by the project and install banners so the two cannot drift.
     '''
     version, date_str = load_version_info(root_dir)
-    title = f' Podarcis — The Research Agent v{version} ({date_str}) '
+    name, tagline = _brand()
+    title = f' {name} v{version} ({date_str}) — {tagline} '
     dashes = max(4, (INNER_W + 2) - len(title))
 
     console.print(Text()
@@ -238,8 +264,7 @@ def display_project_banner(root_dir: Path, splash: str | None = None) -> None:
 
     rows = _status_rows(root_dir)
     for logo_line, row in zip_longest(logo_lines, rows, fillvalue=None):
-        _row(Text()
-            .append(_pad(logo_line or '', LEFT_W), style=ACCENT)
+        _row(_logo_text(logo_line or '', LEFT_W)
             .append(' ' * COL_GAP)
             .append(_render_status(row or ('empty',)))
         )

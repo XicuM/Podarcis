@@ -17,7 +17,13 @@ const fn rgb(hex: u32) -> Color {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Flavor {
+    /// The house palette. Every other flavour here is someone else's identity
+    /// borrowed; this one is the product's own, so it is the default.
     #[default]
+    Podarcis,
+    /// The same palette after dark. Same green, same roles, night stone
+    /// instead of sunlit stone.
+    PodarcisDark,
     Latte,
     Frappe,
     Macchiato,
@@ -47,6 +53,8 @@ impl Flavor {
         let raw = name.trim().to_ascii_lowercase();
         let key = raw.strip_prefix("catppuccin-").unwrap_or(&raw);
         match key {
+            "podarcis" | "house" | "podarcis-light" => Some(Self::Podarcis),
+            "podarcis-dark" | "podarcis_dark" | "house-dark" => Some(Self::PodarcisDark),
             "latte" | "catppuccin-latte" | "light" => Some(Self::Latte),
             "frappe" | "catppuccin-frappe" | "frappé" => Some(Self::Frappe),
             "macchiato" | "catppuccin-macchiato" => Some(Self::Macchiato),
@@ -73,7 +81,9 @@ impl Flavor {
         }
     }
 
-    pub const ALL: [Flavor; 20] = [
+    pub const ALL: [Flavor; 22] = [
+        Flavor::Podarcis,
+        Flavor::PodarcisDark,
         Flavor::Latte,
         Flavor::Frappe,
         Flavor::Macchiato,
@@ -98,6 +108,8 @@ impl Flavor {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Podarcis => "podarcis",
+            Self::PodarcisDark => "podarcis-dark",
             Self::Latte => "latte",
             Self::Frappe => "frappe",
             Self::Macchiato => "macchiato",
@@ -124,6 +136,8 @@ impl Flavor {
     #[allow(dead_code)]
     pub fn display_name(self) -> &'static str {
         match self {
+            Self::Podarcis => "podarcis",
+            Self::PodarcisDark => "podarcis dark",
             Self::Latte => "catppuccin latte",
             Self::Frappe => "catppuccin frappe",
             Self::Macchiato => "catppuccin macchiato",
@@ -150,6 +164,11 @@ impl Flavor {
     /// The `[theme] name` value the embedded herdr expects.
     pub fn herdr_name(self) -> &'static str {
         match self {
+            // Herdr has no podarcis theme; latte and mocha are the closest
+            // light and dark grounds, so the embedded pane sits at roughly the
+            // same value as the app either way.
+            Self::Podarcis => "catppuccin-latte",
+            Self::PodarcisDark => "catppuccin",
             Self::Latte => "catppuccin-latte",
             // Herdr only ships catppuccin-latte and catppuccin (mocha) for Catppuccin;
             // mapping frappe and macchiato to "catppuccin" avoids an unknown theme warning.
@@ -175,6 +194,47 @@ impl Flavor {
         }
     }
 
+    /// Herdr `[theme.custom]` tokens for flavours herdr does not ship.
+    ///
+    /// `None` for borrowed flavours: those map onto a built-in name and must
+    /// not leave house-palette leftovers on top of nord (etc.).
+    pub fn herdr_custom_tokens(self) -> Option<Vec<(&'static str, String)>> {
+        match self {
+            Self::Podarcis | Self::PodarcisDark => {
+                let t = Theme::new(self);
+                let hex = |c: Color| color_hex(c).expect("house palette is rgb");
+                Some(vec![
+                    ("panel_bg", hex(t.bg)),
+                    ("sidebar_bg", hex(t.bg)),
+                    ("surface0", hex(t.surface)),
+                    ("active_row_bg", hex(t.surface)),
+                    ("selection_bg", hex(t.surface)),
+                    ("surface1", hex(t.surface)),
+                    ("overlay0", hex(t.overlay)),
+                    ("surface_dim", hex(t.overlay)),
+                    ("text", hex(t.text)),
+                    ("subtext0", hex(t.subtext)),
+                    ("overlay1", hex(t.faint)),
+                    ("accent", hex(t.accent)),
+                    ("mauve", hex(t.accent)),
+                    ("blue", hex(t.link)),
+                    ("teal", hex(t.link)),
+                    ("green", hex(t.ok)),
+                    ("yellow", hex(t.warn)),
+                    ("red", hex(t.err)),
+                    ("peach", hex(t.literal)),
+                ])
+            }
+            _ => None,
+        }
+    }
+}
+
+fn color_hex(c: Color) -> Option<String> {
+    match c {
+        Color::Rgb(r, g, b) => Some(format!("#{r:02x}{g:02x}{b:02x}")),
+        _ => None,
+    }
 }
 
 /// Semantic colour tokens. Named by role, never by hue.
@@ -213,6 +273,49 @@ impl Default for Theme {
 impl Theme {
     pub fn new(flavor: Flavor) -> Self {
         match flavor {
+            // Sunlit limestone, the rock a wall lizard actually lives on: a
+            // warm off-white ground, olive ink, and the lizard's own green as
+            // the accent. The cyan the CLI banner has always used survives as
+            // `link`, so the two front ends read as one product.
+            //
+            // `accent` and `ok` are both green and must not blur: the accent is
+            // a deep emerald reserved for focus and selection, `ok` a lighter
+            // moss kept for state (git-added, a cited source). Different hue
+            // angle and different lightness, so they separate at glyph size.
+            Flavor::Podarcis => Self {
+                flavor,
+                bg: rgb(0xfaf7f0),
+                surface: rgb(0xeae3d5),
+                overlay: rgb(0xf1ebdf),
+                text: rgb(0x2f3a2e),
+                subtext: rgb(0x596653),
+                faint: rgb(0x9aa694),
+                accent: rgb(0x2f7d4f),
+                link: rgb(0x17829c),
+                ok: rgb(0x6f8f21),
+                warn: rgb(0xb07d0a),
+                err: rgb(0xb33a3a),
+                literal: rgb(0xa35a1f),
+            },
+            // The house palette after dark. Basalt rather than limestone, and
+            // the two greens both lifted to carry on a dark ground while
+            // keeping the same gap between them: the accent stays the deeper,
+            // bluer green for focus, `ok` the lighter moss for state.
+            Flavor::PodarcisDark => Self {
+                flavor,
+                bg: rgb(0x181a16),
+                surface: rgb(0x23261f),
+                overlay: rgb(0x1f221c),
+                text: rgb(0xdcdfd2),
+                subtext: rgb(0xa3ab98),
+                faint: rgb(0x5f6857),
+                accent: rgb(0x6fbf73),
+                link: rgb(0x4cc2e0),
+                ok: rgb(0xb5cc5a),
+                warn: rgb(0xe0b155),
+                err: rgb(0xe57373),
+                literal: rgb(0xe0a06a),
+            },
             Flavor::Latte => {
                 let c = &PALETTE.latte.colors;
                 Self {
@@ -606,6 +709,35 @@ impl Theme {
         }
     }
 
+    /// Readable foreground for text sitting on the accent colour.
+    ///
+    /// The page background is the right answer whenever the palette has one —
+    /// it is by construction the furthest thing from the accent. The
+    /// `Terminal` flavour inherits its background and has none, so it falls
+    /// back to the terminal's own.
+    pub fn on_accent(&self) -> Color {
+        match self.bg {
+            Color::Reset => Color::Black,
+            other => other,
+        }
+    }
+
+    /// Colour for a file-type chip in the tree.
+    ///
+    /// Deliberately drawn from the neutral end of the palette rather than
+    /// `ok`/`warn`/`err`: a PDF badge painted in the error colour reads as a
+    /// broken PDF. The three letters already say which type it is, so the
+    /// colour only has to group them — documents warm, data cool, images grey.
+    pub fn file_badge(&self, ext: &str) -> Option<(&'static str, Color)> {
+        match ext {
+            "pdf" => Some(("PDF", self.literal)),
+            "csv" => Some(("CSV", self.link)),
+            "png" => Some(("PNG", self.subtext)),
+            "jpg" | "jpeg" => Some(("JPG", self.subtext)),
+            _ => None,
+        }
+    }
+
     pub fn status_of(&self, status: &str) -> Color {
         match status {
             "verified" | "stable" | "done" | "ok" => self.ok,
@@ -634,6 +766,14 @@ mod tests {
     }
 
     #[test]
+    fn house_flavours_ship_herdr_custom_tokens_and_borrowed_ones_do_not() {
+        assert!(Flavor::Podarcis.herdr_custom_tokens().is_some());
+        assert!(Flavor::PodarcisDark.herdr_custom_tokens().is_some());
+        assert!(Flavor::Latte.herdr_custom_tokens().is_none());
+        assert!(Flavor::Nord.herdr_custom_tokens().is_none());
+    }
+
+    #[test]
     fn herdr_name_parses_back() {
         for f in Flavor::ALL {
             assert!(
@@ -653,8 +793,90 @@ mod tests {
     }
 
     #[test]
-    fn default_is_latte_to_match_podarcisnest() {
-        assert_eq!(Theme::default().flavor, Flavor::Latte);
+    fn default_is_the_house_palette_not_a_borrowed_one() {
+        assert_eq!(Theme::default().flavor, Flavor::Podarcis);
+    }
+
+    /// The accent carries focus and the `ok` token carries state, and both are
+    /// green in the house palette. If they ever collapse onto the same value a
+    /// selected row becomes indistinguishable from a clean one.
+    #[test]
+    fn the_house_accent_and_ok_are_distinct_greens() {
+        for flavor in [Flavor::Podarcis, Flavor::PodarcisDark] {
+            let t = Theme::new(flavor);
+            assert_ne!(t.accent, t.ok, "{flavor:?}");
+            let (Color::Rgb(ar, ag, ab), Color::Rgb(orr, og, ob)) = (t.accent, t.ok) else {
+                panic!("the house palette is defined in rgb");
+            };
+            let lum = |r: u8, g: u8, b: u8| 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+            assert!(
+                (lum(ar, ag, ab) - lum(orr, og, ob)).abs() > 12.0,
+                "{flavor:?}: accent and ok must differ in lightness, not only hue"
+            );
+        }
+    }
+
+    /// `subtext` carries the status bar, which sits on `surface` — the ground
+    /// where it has the least contrast to spare. Both house flavours must
+    /// clear WCAG AA for normal text there, not only against the page.
+    #[test]
+    fn house_subtext_clears_aa_on_the_raised_surface() {
+        fn luminance(c: Color) -> f64 {
+            let Color::Rgb(r, g, b) = c else { panic!("the house palette is rgb") };
+            let channel = |v: u8| {
+                let v = v as f64 / 255.0;
+                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+        }
+        for flavor in [Flavor::Podarcis, Flavor::PodarcisDark] {
+            let t = Theme::new(flavor);
+            for (name, ground) in [("surface", t.surface), ("bg", t.bg)] {
+                let (a, b) = (luminance(t.subtext), luminance(ground));
+                let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+                assert!(ratio >= 4.5, "{flavor:?}: subtext on {name} is only {ratio:.2}:1");
+            }
+        }
+    }
+
+    /// The two house flavours are one palette in two grounds: same roles, and
+    /// the light one reads light while the dark one reads dark.
+    #[test]
+    fn the_house_flavours_are_a_light_and_a_dark_of_the_same_palette() {
+        let lum = |c: Color| match c {
+            Color::Rgb(r, g, b) => 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32,
+            other => panic!("the house palette is defined in rgb, got {other:?}"),
+        };
+        let (light, dark) = (Theme::new(Flavor::Podarcis), Theme::new(Flavor::PodarcisDark));
+        assert!(lum(light.bg) > 200.0, "the light ground is light");
+        assert!(lum(dark.bg) < 60.0, "the dark ground is dark");
+        // Body text has to carry on its own ground in both.
+        assert!(lum(light.text) < 100.0 && lum(dark.text) > 180.0);
+        // And the accent has to be legible against its ground either way.
+        assert!((lum(light.accent) - lum(light.bg)).abs() > 80.0, "light accent has contrast");
+        assert!((lum(dark.accent) - lum(dark.bg)).abs() > 80.0, "dark accent has contrast");
+    }
+
+    /// File-type chips must never be painted in an alert colour: a PDF badge
+    /// in the error red reads as a broken PDF.
+    ///
+    /// `ok` is deliberately not in the forbidden set. It is not an alarm, and
+    /// some flavours here — rose pine, for one — define `link` and `ok` as the
+    /// same value, so excluding it would forbid a colour the flavour's own
+    /// author chose to share.
+    #[test]
+    fn file_badges_stay_out_of_the_alert_range() {
+        for flavor in Flavor::ALL {
+            let t = Theme::new(flavor);
+            for ext in ["pdf", "csv", "png", "jpg"] {
+                let (_, colour) = t.file_badge(ext).expect("known extension has a badge");
+                assert!(
+                    colour != t.err && colour != t.warn,
+                    "{flavor:?} paints a {ext} chip in an alert colour"
+                );
+            }
+            assert!(t.file_badge("md").is_none());
+        }
     }
 
     #[test]

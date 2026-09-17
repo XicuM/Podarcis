@@ -3,6 +3,7 @@
 
 pub mod actions;
 pub mod app;
+pub mod brand;
 pub mod clipboard;
 pub mod config;
 pub mod control;

@@ -157,8 +157,16 @@ def load_version_info(root_dir: Path) -> tuple[str, str]:
 
 
 def load_one_liners(root_dir: Path) -> list[str]:
-    '''Load punchy splash lines from .podarcis/config.yaml.'''
+    '''Load punchy splash lines from .podarcis/config.yaml.
+
+    Entries that are not plain strings are dropped rather than coerced. An
+    unquoted line containing `: ` is a YAML mapping, not a sentence, and
+    `str()` on it put a literal `{'Podarcis': '...'}` in the banner where the
+    tagline should have been.
+    '''
     lines = load_config(root_dir).get('oneliners', [])
-    if isinstance(lines, list) and lines:
-        return [str(l).strip() for l in lines if str(l).strip()]
+    if isinstance(lines, list):
+        kept = [l.strip() for l in lines if isinstance(l, str) and l.strip()]
+        if kept:
+            return kept
     return ['Welcome to the Podarcis TUI!']
