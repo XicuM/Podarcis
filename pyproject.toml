@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "podarcis"
-version = "11.11.0"
+version = "11.12.0"
 description = "Podarcis Open Knowledge Format (OKF v0.2) research agent engine and CLI"
 readme = "README.md"
 license = "GPL-3.0-or-later"

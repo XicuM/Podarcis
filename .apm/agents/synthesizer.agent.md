@@ -43,6 +43,7 @@ Read `.podarcis/config.yaml` `sources_backend` and follow that skill — it is t
 - Only verified extracted sources (no stubs, no abstract-as-evidence).
 - Frontmatter, named footnotes, and relative links follow AGENTS.md §3 exactly.
 - Provenance *is* the `[^source_id]` footnote — nothing else to enqueue.
+- Privacy boundary: Reject or strip any task briefs containing user-specific data or `workspace/` paths. Wiki pages must remain strictly objective and anonymous.
 
 ## Output
 

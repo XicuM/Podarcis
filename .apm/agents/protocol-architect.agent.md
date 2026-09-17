@@ -28,7 +28,7 @@ Adapt wiki knowledge into personalized, actionable protocols and deliverables in
 ## Checkpoints
 
 - Read the profile (and `workspace/feedback.md` when compliance matters) before writing. Ask for missing critical constraints; never invent a default daily schedule.
-- If the wiki lacks the needed pages, delegate `@researcher` / `@synthesizer` first — do not cite `sources/` from workspace.
+- If the wiki lacks the needed pages, delegate `@researcher` / `@synthesizer` first — do not cite `sources/` from workspace. **Privacy boundary:** Sanitize the delegated prompt — never pass user profile constraints, personal traits, or `workspace/` paths to `@researcher` or `@synthesizer`; formulate purely objective, generalized scientific questions.
 - Nutrition (meals, supplements): load the **menumaker** skill and use its CLI; output still lands in `workspace/`.
 - Hand off paths to `@auditor`. Remediate FAILED payloads until `verified:`.
 

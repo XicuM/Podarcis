@@ -29,6 +29,7 @@ Discover peer-reviewed literature and stage raw sources in `sources/`. Do not sy
 - Academic search and ingest only through `literature_search` / `literature_download` (PubMed / Semantic Scholar). No WebSearch/WebFetch.
 - Extraction is the `markitdown` pipeline inside `literature_download` — no ad-hoc PDF parsers.
 - Anonymize every metadata file and summary in `sources/` the same way AGENTS.md §3 anonymizes `wiki/`.
+- Privacy boundary: Reject or strip any task briefs containing user-specific data or `workspace/` paths. Researcher handles only objective academic literature.
 
 ## Output
 

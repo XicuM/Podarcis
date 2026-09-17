@@ -106,6 +106,7 @@ The surface is deliberately **exactly what a Bash-less agent job can reach** (`.
   - **Workspace (`workspace/`)**: May cite public web sources (e.g. government reports, financial filings, corporate press releases) ONLY when filling temporal gaps where peer-reviewed literature is not available.
 * **Wiki (Objective)**: Must remain anonymous and objective. Present competing hypotheses with confidence markers (`> ⚠️`). Never include user-specific data in `wiki/`.
 * **User Profile**: Persist only structural, recurring traits (goals, constraints, physiology). Never save anecdotal one-off events.
+* **Subagent Prompt Contextual Integrity**: Task briefs passed to subagents are an internal communication channel. Never pass raw `workspace/` content, personal profile facts, financial records, or health metrics into subagent prompts unless the subagent's task is explicitly scoped to `workspace/`. When research is needed for a personal protocol, generalize the query (e.g. "mechanisms of dietary sodium on endothelial function" instead of "user has blood pressure 135/85 and needs diet advice").
 
 ### Research Tool Usage: Mandatory Prohibitions
 > **🚫 PROHIBITED**: `WebSearch` and `WebFetch` for academic research. Breaks citation hierarchy and contaminates wiki with unsourced URLs.
