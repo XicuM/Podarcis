@@ -8,11 +8,10 @@ from podarcis.banner import display_project_banner
 from podarcis.common import get_config_value
 from podarcis.console import console, QSTYLE
 from podarcis.config_wizard import (
-    configure_mcp_servers, configure_jobs,
-    configure_repositories, configure_frontend,
+    configure_mcp_servers, configure_jobs, configure_repositories,
 )
 
-_MENU = ['Tools', 'Jobs', 'Repositories', 'Frontend', 'Exit']
+_MENU = ['Tools', 'Jobs', 'Repositories', 'Exit']
 
 
 def interactive_config(root: Path) -> None:
@@ -40,4 +39,3 @@ def interactive_config(root: Path) -> None:
             case 'Tools':          configure_mcp_servers(root, style=style)
             case 'Jobs':           configure_jobs(root, style=style)
             case 'Repositories':   configure_repositories(root, style=style)
-            case 'Frontend':       configure_frontend(root, style=style)

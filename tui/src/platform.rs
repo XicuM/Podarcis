@@ -92,14 +92,6 @@ fn write_block(root: &Path, key: &str, block: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn frontend(root: &Path) -> String {
-    get_str(root, "none", &["frontend"])
-}
-
-pub fn set_frontend(root: &Path, name: &str) -> Result<()> {
-    write_block(root, "frontend", &format!("frontend: {name}\n"))
-}
-
 /// Enable or disable an MCP tool module under the `mcp_modules:` override
 /// section. Mirrors `components.set_mcp_server_status`.
 pub fn set_mcp_enabled(root: &Path, name: &str, enabled: bool) -> Result<()> {
@@ -595,7 +587,6 @@ pub fn status(root: &Path) -> Value {
 
     json!({
         "frontend": {
-            "name": frontend(root),
             "binary": binary.as_ref().map(|b| b.to_string_lossy().into_owned()).unwrap_or_default(),
             "version": binary.as_ref().and_then(|b| frontend_version(b)).unwrap_or_default(),
             "built": binary.is_some(),
@@ -683,28 +674,27 @@ mod tests {
         let root = root("migrate");
         std::fs::write(
             root.join(".podarcis").join("config.yaml"),
-            "sources_backend: local\napis:\n  k: v\nfrontend: none\n",
+            "sources_backend: local\napis:\n  k: v\n",
         )
         .unwrap();
-        std::fs::write(root.join(".podarcis").join("state.yaml"), "frontend: tui\n").unwrap();
-        assert_eq!(get_str(&root, "", &["frontend"]), "tui");
+        std::fs::write(root.join(".podarcis").join("state.yaml"), "sources_backend: gdrive\n").unwrap();
+        assert_eq!(get_str(&root, "", &["sources_backend"]), "gdrive");
         assert!(!root.join(".podarcis").join("state.yaml").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn set_frontend_rewrites_one_block_only() {
-        let root = root("frontend");
+    fn write_block_rewrites_one_block_only() {
+        let root = root("write_block");
         std::fs::write(
             root.join(".podarcis").join("config.yaml"),
-            "sources_backend: local\nfrontend: none\nrepositories:\n  wiki: https://example.com\n",
+            "sources_backend: local\nrepositories:\n  wiki: https://example.com\n",
         )
         .unwrap();
-        set_frontend(&root, "obsidian").unwrap();
+        write_block(&root, "sources_backend", "sources_backend: gdrive\n").unwrap();
         let raw = std::fs::read_to_string(root.join(".podarcis").join("config.yaml")).unwrap();
-        assert!(raw.contains("frontend: obsidian"));
+        assert!(raw.contains("sources_backend: gdrive"));
         assert!(raw.contains("repositories:\n  wiki: https://example.com"), "{raw}");
-        assert!(raw.contains("sources_backend: local"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

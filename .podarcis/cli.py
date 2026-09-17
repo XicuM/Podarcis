@@ -2,7 +2,7 @@
 '''Python surface of the Podarcis CLI.
 
 The Rust `podarcis` binary owns the command tree; the core subcommands
-(status, config, repo, lint, diagnose, test, wiki, frontend, clean) run
+(status, config, repo, lint, diagnose, test, build, tui, clean) run
 natively on the shared library. What remains here is the engine-bound work
 with no Rust home yet — install/uninstall lifecycle, research/ingest HTTP and
 pdf service, systemd job timers, and the interactive menu — reachable through

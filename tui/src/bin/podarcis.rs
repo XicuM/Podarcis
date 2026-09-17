@@ -6,10 +6,11 @@
 //! uninstall venv lifecycle) dispatch to the engine's remaining Python CLI
 //! (`python -m podarcis.cli`) until ported.
 //!
-//! Bare `podarcis [PATH]` opens the configured frontend (the `podarcis-tui`
-//! Ratatui app by default), optionally landing on `PATH`. There is no `wiki`
-//! or `frontend` subcommand: the bare command already means "open it", and a
-//! named subcommand for the same action was a redundant alias.
+//! Bare `podarcis [PATH]` opens the front-end — the `podarcis-tui` Ratatui
+//! app, the only one there is — optionally landing on `PATH`. There is no
+//! `wiki` or `frontend` subcommand and no configurable frontend: the bare
+//! command already means "open it", and a choice between editors that only
+//! ever had one supported answer was a setting that could be set wrong.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,7 +44,7 @@ struct Cli {
     /// Podarcis checkout root (AGENTS.md + .podarcis/config.yaml or podarcis.yaml).
     #[arg(long)]
     root: Option<PathBuf>,
-    /// Page or file to open in the frontend (bare invocation only).
+    /// Page or file to open in the front-end (bare invocation only).
     path: Option<String>,
     #[command(subcommand)]
     command: Option<Cmd>,
@@ -62,7 +63,7 @@ enum Cmd {
         #[arg(short, long)]
         json: bool,
     },
-    /// Configure components, frontend, and repositories.
+    /// Configure components and repositories.
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
@@ -169,8 +170,6 @@ enum ConfigAction {
     /// Configure repository remotes or local paths.
     #[command(name = "repo")]
     ConfigureRepo(RepoCfgArgs),
-    /// Set the frontend tool (tui, vscode, obsidian, none).
-    Frontend { frontend_name: String },
     /// Launch the interactive configuration menu.
     Interactive,
 }
@@ -361,7 +360,7 @@ fn run(cli: Cli) -> Result<i32> {
     }
 
     match cli.command {
-        None => open_frontend(&root, cli.path.as_deref()),
+        None => run_frontend_tui(&root, cli.path.as_deref()),
         Some(Cmd::Project { action }) => match action {
             None | Some(ProjectAction::List { json: false }) => cmd_project_list(false),
             Some(ProjectAction::List { json: true }) => cmd_project_list(true),
@@ -380,7 +379,6 @@ fn run(cli: Cli) -> Result<i32> {
             Some(ConfigAction::Enable { name }) => cmd_config_set_status(&root, &name, true),
             Some(ConfigAction::Disable { name }) => cmd_config_set_status(&root, &name, false),
             Some(ConfigAction::ConfigureRepo(args)) => cmd_config_repo(&root, args),
-            Some(ConfigAction::Frontend { frontend_name }) => cmd_config_frontend(&root, &frontend_name),
         },
         Some(Cmd::Repo { action }) => match action {
             None | Some(RepoAction::Status { json: false }) => cmd_repo_status(&root, false),
@@ -844,11 +842,10 @@ fn cmd_status(root: &Path, as_json: bool) -> Result<i32> {
     }
     println!("\nFrontend:");
     let fe = &payload["frontend"];
-    let name = fe["name"].as_str().unwrap_or("none");
     if fe["built"].as_bool().unwrap_or(false) {
-        println!("  • {name:<20} ✓ {}  {}", fe["version"].as_str().unwrap_or(""), fe["binary"].as_str().unwrap_or(""));
+        println!("  • {:<20} ✓ {}  {}", "podarcis-tui", fe["version"].as_str().unwrap_or(""), fe["binary"].as_str().unwrap_or(""));
     } else {
-        println!("  • {name:<20} not built  (run `podarcis build`)");
+        println!("  • {:<20} not built  (run `podarcis build`)", "podarcis-tui");
     }
     println!("\nRepositories:");
     for (k, v) in payload["repositories"].as_object().unwrap_or(&Map::new()) {
@@ -919,33 +916,6 @@ fn cmd_config_repo(root: &Path, args: RepoCfgArgs) -> Result<i32> {
         println!("Repository \"{repo_name}\": {}", if url.is_empty() { "local-only" } else { url.as_str() });
     }
     Ok(0)
-}
-
-fn cmd_config_frontend(root: &Path, name: &str) -> Result<i32> {
-    let name = name.to_lowercase();
-    platform::set_frontend(root, &name)?;
-    if name == "vscode" {
-        ensure_vscode_config(root);
-    }
-    println!("✓ Frontend set to {name}.");
-    Ok(0)
-}
-
-/// Copy `.podarcis/templates/vscode/*` into `.vscode/` when missing.
-fn ensure_vscode_config(root: &Path) {
-    let template = root.join(".podarcis").join("templates").join("vscode");
-    if !template.is_dir() {
-        return;
-    }
-    let target = root.join(".vscode");
-    let _ = std::fs::create_dir_all(&target);
-    for entry in std::fs::read_dir(&template).into_iter().flatten().flatten() {
-        let src = entry.path();
-        let dst = target.join(entry.file_name());
-        if !dst.exists() {
-            let _ = std::fs::copy(&src, &dst);
-        }
-    }
 }
 
 // ------------------------------------------------------------------- repo
@@ -1354,33 +1324,6 @@ fn run_frontend_tui(root: &Path, path: Option<&str>) -> Result<i32> {
     }
     let status = cmd.status()?;
     Ok(status.code().unwrap_or(1))
-}
-
-// ---------------------------------------------------------------- frontend
-
-fn open_frontend(root: &Path, path: Option<&str>) -> Result<i32> {
-    let name = platform::frontend(root);
-    match name.as_str() {
-        "tui" => run_frontend_tui(root, path),
-        "none" => {
-            println!("Frontend set to none — nothing to open.");
-            Ok(0)
-        }
-        "obsidian" => {
-            let uri = format!("obsidian://open?path={}", root.display());
-            let status = Command::new("obsidian").arg(uri).status()?;
-            Ok(status.code().unwrap_or(0))
-        }
-        "vscode" => {
-            ensure_vscode_config(root);
-            let status = Command::new("code").arg(root).status()?;
-            Ok(status.code().unwrap_or(0))
-        }
-        other => {
-            let status = Command::new(other).arg(root).status()?;
-            Ok(status.code().unwrap_or(0))
-        }
-    }
 }
 
 // ------------------------------------------------------------------- clean

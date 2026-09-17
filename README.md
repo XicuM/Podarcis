@@ -106,9 +106,9 @@ First `podarcis` run after install downloads the GGUF models (EmbeddingGemma-300
 | `podarcis config interactive` | Launch interactive TUI configuration menu |
 | `podarcis test` | Run test suite across all MCP servers and skills |
 | `podarcis lint` | Link, footnote, frontmatter and YAML audit (`--json` for structured findings, `--fix` to quote colons) |
-| `podarcis [path]` | Open the frontend (`podarcis-tui`), optionally at a page |
-| `podarcis build` | Compile the frontend binary |
-| `podarcis tui open\|highlight\|ask` | Drive a running frontend over its control socket |
+| `podarcis [path]` | Open the front-end (`podarcis-tui`), optionally at a page |
+| `podarcis build` | Compile the front-end binary |
+| `podarcis tui open\|highlight\|ask` | Drive a running front-end over its control socket |
 | `podarcis repo commit` | Lint-gated per-repo commit of dirty workspace repositories |
 
 ### 5. Subagent Quick Reference

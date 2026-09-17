@@ -1,21 +1,17 @@
 '''Shared configuration wizard — called by both install (sequential) and interactive (menu loop).'''
 
-from argparse import Namespace
 from pathlib import Path
 
 import questionary
 from rich.panel import Panel
 
-from podarcis.common import get_config_value, set_config_value
+from podarcis.common import set_config_value
 from podarcis.components import (
     discover_components, get_enabled_mcp_servers,
     build_job_choices, run_mcp_setup, set_mcp_server_status,
 )
 from podarcis.console import console, QSTYLE
 from podarcis.repos import get_repo_names, get_repo_url, prompt_configure_repo
-
-_FRONTEND_CHOICES = ['tui', 'vscode', 'obsidian', 'none']
-
 
 def _style(style):
     return style or questionary.Style(QSTYLE)
@@ -89,20 +85,3 @@ def configure_repositories(root: Path, style=None, title=None, description=None)
         if sub in (None, 'Done'):
             break
         prompt_configure_repo(root, sub.split(' (', 1)[0].strip(), style=st)
-
-
-def configure_frontend(root: Path, style=None, title=None, description=None) -> None:
-    _header(title, description)
-    current = get_config_value(root, 'frontend', default='none')
-    frontend = questionary.select(
-        'Select Frontend Tool:', choices=_FRONTEND_CHOICES,
-        default=current if current in _FRONTEND_CHOICES else 'none', style=_style(style),
-    ).ask()
-    if not frontend:
-        return
-    from podarcis.cli import cmd_config_frontend
-    from podarcis.root import is_wiki_root
-    cmd_config_frontend(Namespace(
-        frontend_name=frontend,
-        root=str(root) if is_wiki_root(root) else None,
-    ))

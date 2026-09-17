@@ -128,7 +128,6 @@ def _create_podarcis_yaml() -> None:
                 'Filesystem traversal at gecko speed.',
                 'Podarcis: endemic to knowledge graphs everywhere.',
             ],
-            'frontend': 'none',
             'engines': {'qmd': False},
             'gdrive_sync': {'last_sync': ''},
         })
@@ -176,6 +175,15 @@ def _configure_global_command() -> None:
         target.unlink(missing_ok=True)
         target.symlink_to(source)
         _say(f'[bold green]✓ Symlinked {target} → {source}[/bold green]')
+        # The front-end binary too: bare `podarcis` run against *another*
+        # checkout finds it on $PATH or not at all — that root has no `tui/`
+        # crate to build from.
+        tui_bin = root / 'tui' / 'target' / 'release' / 'podarcis-tui'
+        if tui_bin.is_file():
+            tui_target = local_bin / 'podarcis-tui'
+            tui_target.unlink(missing_ok=True)
+            tui_target.symlink_to(tui_bin)
+            _say(f'[bold green]✓ Symlinked {tui_target} → {tui_bin}[/bold green]')
         if str(local_bin) not in os.environ.get('PATH', '').split(os.pathsep):
             _say(f'[bold yellow]⚠️ Note: {local_bin} is not currently in your PATH.[/bold yellow]')
             _say('[dim]Add `export PATH="$HOME/.local/bin:$PATH"` to your ~/.bashrc or ~/.zshrc.[/dim]')
@@ -196,15 +204,11 @@ def main() -> None:
     _hr()
 
     from podarcis.config_wizard import (
-        configure_mcp_servers, configure_jobs,
-        configure_frontend, configure_repositories,
+        configure_mcp_servers, configure_jobs, configure_repositories,
     )
 
     configure_mcp_servers(root, title='MCP Tool Modules',
         description='The podarcis-mcp gateway binds these tool modules into every session. Their schemas cost context up front whether or not you use them, so disable what you will not need.\nSkills and personas need no setup: the harness loads only their one-line description until something invokes them.')
-    _hr()
-    configure_frontend(root, title='Frontend Tool',
-        description='The frontend is the editor or knowledge-base viewer for wiki and workspace files.\nObsidian: markdown vault viewer. VSCode: full IDE.')
     _hr()
     configure_repositories(root, title='Workspace Repositories',
         description='Podarcis manages knowledge across Open Knowledge Format (OKF v0.2) repositories:\n  • wiki: Objective knowledge base (anonymized concepts & references)\n  • workspace: Actionable deliverables (user profiles, protocols, reviews)')
@@ -212,9 +216,9 @@ def main() -> None:
     configure_jobs(root, title='Scheduled Jobs',
         description='Jobs automate periodic tasks like GDrive sync and wiki audits. Enable them to schedule automatic background execution via systemd user timers.')
     _hr()
-    _configure_global_command()
-    _hr()
     _build_frontend()
+    _hr()
+    _configure_global_command()
     _hr()
 
     if _select('Sync workspace repos now?', ['no', 'yes'], default='yes') == 'yes':
