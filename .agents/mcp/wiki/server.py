@@ -228,6 +228,28 @@ async def _qmd(
     return stdout.decode()
 
 
+def _rel(path: Path) -> str:
+    """Root-relative path, the way every other message here names a file."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _conflict_path(target: Path) -> Path:
+    """First free `<stem>.conflict-<n><ext>` beside `target`.
+
+    Same name the front-end's editor uses, so a conflict looks the same
+    whichever side produced it, and the page lands in the collection where the
+    linter and the index will both see it rather than somewhere it can be
+    forgotten.
+    """
+    n = 1
+    while (candidate := target.with_name(f"{target.stem}.conflict-{n}{target.suffix}")).exists():
+        n += 1
+    return candidate
+
+
 async def _run_lint(*args: str) -> str:
     """Run `podarcis lint` and return its output.
 
@@ -450,8 +472,22 @@ async def wiki_publish(
         )
         content = frontmatter + content
 
-    # 3. Write content to the target file
+    # 3. Write content to the target file, keeping whatever was there.
+    #
+    #    This used to be a bare write_text onto the path, which made the tool a
+    #    silent replace: a page a human had just edited, or one another agent
+    #    wrote a minute earlier, was gone with nothing to recover it from. The
+    #    front-end's editor refuses that write and parks the other version as
+    #    `<name>.conflict-<n>.md`; this does the same, from the other side of
+    #    the same file. Publishing is allowed to win — it just is not allowed
+    #    to destroy.
+    kept = None
     try:
+        if target_file.is_file():
+            existing = target_file.read_text(encoding="utf-8")
+            if existing != content:
+                kept = _conflict_path(target_file)
+                kept.write_text(existing, encoding="utf-8")
         target_file.write_text(content, encoding="utf-8")
     except Exception as e:
         return f"Error writing wiki file: {e}"
@@ -487,8 +523,18 @@ async def wiki_publish(
         f"⚠️ WARNING: content has no '[^{queue_id}]:' footnote — "
         f"literature_status will still report '{queue_id}' as 'pending'."
     )
+    # A preserved copy nobody is told about is no better than a lost one: this
+    # has to be an instruction, because the page now has a duplicate that the
+    # linter counts and the index will serve.
+    conflict_note = (
+        f"\n⚠️ '{wiki_path}' already existed with different content. It was NOT discarded — "
+        f"the previous version is now {_rel(kept)}. Read both, merge them into {wiki_path}, "
+        f"and delete the copy. Leaving it is a duplicate page in the collection.\n"
+        if kept else ""
+    )
     res_summary = (
         f"✓ Successfully wrote wiki page to: {wiki_path}\n"
+        f"{conflict_note}"
         f"{queue_note}\n"
         f"--- Index Update Output ---\n{index_res}\n"
         f"--- Link Auditor Output ---\n{audit_res}"

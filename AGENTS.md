@@ -77,7 +77,7 @@ The surface is deliberately **exactly what a Bash-less agent job can reach** (`.
 |---|---|
 | `wiki_search(query, method, …)` | Search `wiki/`, `workspace/protocols/`, `sources/literature/`. `method="semantic"`/`"hybrid"` (or `hyde=True`) is the reason this tool exists — it finds pages by meaning, which `Grep` cannot. For literal strings, use `Grep` instead. |
 | `wiki_fetch(…)` | Batch-retrieve content snippets from many matching files in one call. |
-| `wiki_publish(queue_id, wiki_path, content, …)` | **Preferred way to write a wiki page.** Atomic: writes the file with OKF frontmatter, rebuilds the semantic index, and runs the link audit in one transaction. Use this instead of `Write` + `wiki_reindex` + `wiki_lint`. |
+| `wiki_publish(queue_id, wiki_path, content, …)` | **Preferred way to write a wiki page.** Atomic: writes the file with OKF frontmatter, rebuilds the semantic index, and runs the link audit in one transaction. Use this instead of `Write` + `wiki_reindex` + `wiki_lint`. Publishing over a page that already holds different content keeps the previous version as `<name>.conflict-<n>.md` and says so — merge the two and delete the copy, because until you do the collection has a duplicate page that the linter counts and search will serve. |
 | `wiki_reindex()` | Rebuild the qmd semantic index. Only needed after edits made *outside* `wiki_publish`. |
 | `wiki_lint(scope_path, fix)` | Broken links, missing/unused footnotes, frontmatter schema errors, directory bloat. Same engine as `podarcis lint`. |
 | `literature_search(query, …)` | Discover peer-reviewed papers. The only sanctioned academic search path. |
